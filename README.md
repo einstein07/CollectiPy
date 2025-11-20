@@ -165,7 +165,24 @@ To run the simulations a run.sh file is provided.
 }
 ```
 
- Raw traces saved under `environment.results.base_path` now obey the spec lists declared in `results.agent_specs` / `results.group_specs`. When an arena hierarchy is configured, each base row also includes the hierarchy node where the agent currently sits so downstream analysis can group by partition. Per-agent pickles (`<group>_<idx>.pkl`) are emitted only when `"base"` is present (sampled `[tick, x, y, z]` rows) and can optionally append `"spin_model"` dumps (`<group>_<idx>_spins.pkl`). Snapshots are taken once per simulated second by default (after the last tick in that second); setting `snapshots_per_second: 2` adds a mid-second capture. Tick `0` is always stored so consumers see the initial pose, and the very last tick is forced even if it does not align with the cadence. Group specs apply to global outputs: `"graph_messages"` / `"graph_detection"` write one pickle per tick under `graphs/<mode>/step_<tick>.pkl`, and the helper spec `"graphs"` enables both. Message edges require that the transmitter has range and a non-zero TX budget **and** the receiver advertises a non-zero RX budget; detection edges only appear when the sensing agent has a non-zero acquisition rate in addition to range. All per-step graph pickles are zipped into `{mode}_graphs.zip` at the end of the run, and finally the whole `run_<n>` folder is compressed so analysis scripts can ingest the pickles while storage stays compact.
+Raw traces saved under `environment.results.base_path` now obey the spec lists declared in `results.agent_specs` / `results.group_specs`. When an arena hierarchy is configured, each base row also includes the hierarchy node where the agent currently sits so downstream analysis can group by partition. Per-agent pickles (`<group>_<idx>.pkl`) are emitted only when `"base"` is present (sampled `[tick, pos x, pos y, pos z]` rows) and can optionally append `"spin_model"` dumps (`<group>_<idx>_spins.pkl`). Snapshots are taken once per simulated second by default (after the last tick in that second); setting `snapshots_per_second: 2` adds a mid-second capture. Tick `0` is always stored so consumers see the initial pose, and the very last tick is forced even if it does not align with the cadence. Group specs apply to global outputs: `"graph_messages"` / `"graph_detection"` write one pickle per tick under `graphs/<mode>/step_<tick>.pkl`, and the helper spec `"graphs"` enables both. Message edges require that the transmitter has range and a non-zero TX budget **and** the receiver advertises a non-zero RX budget; detection edges only appear when the sensing agent has a non-zero acquisition rate in addition to range. All per-step graph pickles are zipped into `{mode}_graphs.zip` at the end of the run, and finally the whole `run_<n>` folder is compressed so analysis scripts can ingest the pickles while storage stays compact.
+
+Each pickle is structured for quick DataFrame ingestion: the first record is a header carrying a `columns` list, and all subsequent `{"type": "row"}` entries are dictionaries keyed by those columns. Base traces expose `tick`, `pos x`, `pos y`, `pos z` (plus `hierarchy_node` when enabled). Spin dumps include `tick` and the spin-model fields (`states`, `angles`, `external_field`, `avg_direction_of_activity`). Graph pickles ship `columns: ["source", "target"]` with rows using those keys. Example loader:
+
+```python
+import pickle, pandas as pd
+
+rows = []
+with open("run_0/agent_0.pkl", "rb") as fh:
+    while True:
+        try:
+            entry = pickle.load(fh)
+        except EOFError:
+            break
+        if entry.get("type") == "row":
+            rows.append(entry["value"])
+df = pd.DataFrame(rows)
+```
 
 ### Plugin example: heading sampler
 

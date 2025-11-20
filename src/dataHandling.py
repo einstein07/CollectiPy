@@ -23,6 +23,8 @@ class DataHandlingFactory():
 
 class DataHandling():
     """Data handling."""
+    SPIN_FIELD_ORDER = ("states", "angles", "external_field", "avg_direction_of_activity")
+
     def __init__(self, config_elem: Config):
         """Initialize the instance."""
         results_cfg = config_elem.results or {}
@@ -234,19 +236,25 @@ class SpaceDataHandling(DataHandling):
                             raise Exception(f"Error: file {file_path} already exists")
                         file_handle = open(file_path, "wb")
                         pickler = pickle.Pickler(file_handle, protocol=pickle.HIGHEST_PROTOCOL)
-                        header = ["tick", "x", "y", "z"]
+                        header = ["tick", "pos x", "pos y", "pos z"]
                         if self.hierarchy_enabled:
                             header.append("hierarchy_node")
-                        pickler.dump({"type": "header", "value": header})
-                        self.agents_files[(key, idx)] = {"handle": file_handle, "pickler": pickler}
+                        pickler.dump({"type": "header", "value": header, "columns": header})
+                        self.agents_files[(key, idx)] = {"handle": file_handle, "pickler": pickler, "columns": header}
                     if self.spin_dump_enabled:
                         spin_path = os.path.join(self.run_folder, f"{agent_id}_spins.pkl")
                         if os.path.exists(spin_path):
                             raise Exception(f"Error: file {spin_path} already exists")
                         spin_handle = open(spin_path, "wb")
                         spin_pickler = pickle.Pickler(spin_handle, protocol=pickle.HIGHEST_PROTOCOL)
-                        spin_pickler.dump({"type": "header", "value": ["tick", "spins"]})
-                        self.agent_spin_files[(key, idx)] = {"handle": spin_handle, "pickler": spin_pickler}
+                        spin_payload = self._resolve_spin_entry((spins or {}).get(key), idx)
+                        spin_columns = ["tick"]
+                        if spin_payload:
+                            spin_columns.extend(list(spin_payload.keys()))
+                        else:
+                            spin_columns.extend(self.SPIN_FIELD_ORDER)
+                        spin_pickler.dump({"type": "header", "value": spin_columns, "columns": spin_columns})
+                        self.agent_spin_files[(key, idx)] = {"handle": spin_handle, "pickler": spin_pickler, "columns": spin_columns}
         self.agents_metadata = metadata or {}
         # Capture the bootstrap snapshot (tick 0) right away.
         if self.base_dump_enabled or self.spin_dump_enabled or self.graph_messages_enabled or self.graph_detection_enabled:
@@ -276,14 +284,22 @@ class SpaceDataHandling(DataHandling):
                     if not entry:
                         continue
                     com = entity.center_of_mass()
-                    row = [tick, com.x, com.y, com.z]
+                    row = {
+                        "tick": tick,
+                        "pos x": com.x,
+                        "pos y": com.y,
+                        "pos z": com.z
+                    }
                     if self.hierarchy_enabled:
-                        row.append(self._resolve_hierarchy_node(entity))
+                        row["hierarchy_node"] = self._resolve_hierarchy_node(entity)
                     entry["pickler"].dump({"type": "row", "value": row})
         if self.spin_dump_enabled and self.agent_spin_files:
             for (key, idx), spin_entry in self.agent_spin_files.items():
                 spin_values = self._resolve_spin_entry(spin_data.get(key), idx)
-                spin_entry["pickler"].dump({"type": "row", "value": {"tick": tick, "spins": spin_values}})
+                row = {"tick": tick}
+                if spin_values is not None:
+                    row.update(spin_values)
+                spin_entry["pickler"].dump({"type": "row", "value": row})
         self._write_graph_snapshot(shapes, tick)
         self._last_snapshot_tick = tick
 
@@ -313,11 +329,21 @@ class SpaceDataHandling(DataHandling):
         return f"{key}_{idx}"
 
     def _resolve_spin_entry(self, spin_group, idx):
-        """Return the spin payload for the given agent."""
+        """Return the spin payload for the given agent, normalized as a dict."""
         if not spin_group or idx >= len(spin_group):
             return None
-        value = spin_group[idx][0]
-        return value
+        payload = spin_group[idx]
+        if payload is None:
+            return None
+        if isinstance(payload, dict):
+            return {str(k): payload.get(k) for k in payload.keys()}
+        if isinstance(payload, (list, tuple)):
+            normalized = {}
+            for pos, key in enumerate(self.SPIN_FIELD_ORDER):
+                if pos < len(payload):
+                    normalized[key] = payload[pos]
+            return normalized if normalized else None
+        return {"states": payload}
 
     def _resolve_hierarchy_node(self, entity):
         """Return the hierarchy node identifier for the provided entity, if any."""
@@ -362,11 +388,12 @@ class SpaceDataHandling(DataHandling):
             edges = self._compute_graph_edges(mode, agents)
             filename = os.path.join(dir_path, f"step_{tick:09d}.pkl")
             with open(filename, "wb") as fh:
-                rows = [(name, name) for name in self.agent_name_order]
-                rows.extend(edges)
+                rows = [{"source": name, "target": name} for name in self.agent_name_order]
+                rows.extend({"source": src, "target": dst} for src, dst in edges)
                 payload = {
                     "mode": mode,
                     "tick": tick,
+                    "columns": ["source", "target"],
                     "rows": rows,
                     "description": "Two-column edge list (self loops + directed edges)."
                 }
