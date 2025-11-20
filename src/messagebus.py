@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from geometry_utils.spatialgrid import SpatialGrid
 from plugin_registry import (
@@ -22,6 +22,47 @@ from plugin_registry import (
 )
 
 logger = logging.getLogger("sim.messagebus")
+
+
+class MessageDeleteTrigger:
+    """
+    Callable trigger that deletes pending messages from the bus mailboxes.
+
+    Implementations are registered via :func:`register_message_delete_trigger`
+    and instantiated on-demand based on the name provided in the messages
+    configuration (field ``delete_trigger``).
+    """
+
+    def __call__(self, target_ids: Optional[Iterable[Any]] = None) -> None:  # pragma: no cover - interface only
+        raise NotImplementedError
+
+
+_delete_triggers: Dict[str, Callable[["BaseMessageBus"], MessageDeleteTrigger]] = {}
+
+
+def _normalize_trigger_name(name: str) -> str:
+    """Return a normalised trigger name."""
+    return (name or "").strip().lower()
+
+
+def register_message_delete_trigger(name: str, factory: Callable[["BaseMessageBus"], MessageDeleteTrigger]) -> None:
+    """Register a deletion trigger implementation."""
+    _delete_triggers[_normalize_trigger_name(name)] = factory
+
+
+def get_message_delete_trigger(name: Optional[str], bus: "BaseMessageBus") -> Optional[MessageDeleteTrigger]:
+    """Instantiate a registered deletion trigger if available."""
+    if not name:
+        return None
+    factory = _delete_triggers.get(_normalize_trigger_name(name))
+    if factory is None:
+        return None
+    return factory(bus)
+
+
+def available_message_delete_triggers() -> Dict[str, Callable[["BaseMessageBus"], MessageDeleteTrigger]]:
+    """Return the registered delete trigger factories."""
+    return dict(_delete_triggers)
 
 
 class BaseMessageBus:
@@ -51,6 +92,8 @@ class BaseMessageBus:
         self._allowed_names = {agent.get_name() for agent in participants}
         self.participants: Dict[str, Any] = {agent.get_name(): agent for agent in participants}
         self.mailboxes: Dict[str, List[dict]] = {name: [] for name in self._allowed_names}
+        trigger_name = self.global_config.get("delete_trigger")
+        self._delete_trigger = get_message_delete_trigger(trigger_name, self)
 
     def reset_mailboxes(self) -> None:
         """Reset the mailboxes."""
@@ -164,6 +207,18 @@ class BaseMessageBus:
                 return False
         return True
 
+    def trigger_delete(self, target_ids: Optional[Iterable[Any]] = None) -> bool:
+        """Invoke the configured delete trigger, if any."""
+        if not self._delete_trigger:
+            logger.debug("Delete trigger requested but not configured; ignoring")
+            return False
+        try:
+            self._delete_trigger(target_ids)
+            return True
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Delete trigger failed: %s", exc)
+            return False
+
 
 class SpatialMessageBus(BaseMessageBus):
     """
@@ -214,6 +269,33 @@ class GlobalMessageBus(BaseMessageBus):
             yield agent
 
 
+class MailboxDeleteTrigger(MessageDeleteTrigger):
+    """Default trigger that wipes pending bus mailboxes."""
+
+    def __init__(self, bus: BaseMessageBus) -> None:
+        self.bus = bus
+
+    def __call__(self, target_ids: Optional[Iterable[Any]] = None) -> None:
+        if target_ids is None:
+            for name in list(self.bus.mailboxes.keys()):
+                self.bus.mailboxes[name] = []
+            return
+        targets = set()
+        for item in target_ids:
+            if item is None:
+                continue
+            if hasattr(item, "get_name"):
+                try:
+                    targets.add(item.get_name())
+                    continue
+                except Exception:
+                    pass
+            targets.add(str(item))
+        for name in targets:
+            if name in self.bus.mailboxes:
+                self.bus.mailboxes[name] = []
+
+
 class MessageBusFactory:
     """Helper responsible for instantiating the appropriate bus."""
 
@@ -261,4 +343,11 @@ def _register_builtin_buses() -> None:
     register_message_bus("abstract", lambda agents, config, context: GlobalMessageBus(agents, config, context))
 
 
+def _register_builtin_triggers() -> None:
+    """Register builtin delete triggers."""
+    register_message_delete_trigger("mailbox_clear", lambda bus: MailboxDeleteTrigger(bus))
+    register_message_delete_trigger("clear", lambda bus: MailboxDeleteTrigger(bus))
+
+
 _register_builtin_buses()
+_register_builtin_triggers()

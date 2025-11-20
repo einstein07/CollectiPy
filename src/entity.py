@@ -149,6 +149,7 @@ class Agent(Entity):
         self.msg_type = self._resolve_message_type(self.messages_config.get("type", "broadcast"), self.msg_channel_mode)
         self.msg_kind = str(self.messages_config.get("kind", "anonymous")).strip().lower()
         self.msg_bus_kind = self.messages_config.get("bus", "auto")
+        self.msg_delete_trigger = self.messages_config.get("delete_trigger")
         self.msgs_per_sec = self._resolve_message_rate("tx_per_second", "messages_per_seconds", 1.0)
         self.msg_receive_per_sec = self._resolve_message_rate("rx_per_second", "receive_per_seconds", DEFAULT_RX_RATE)
         if self.msg_type in {"hand_shake", "rebroadcast"} and self.msg_kind == "anonymous":
@@ -272,6 +273,12 @@ class Agent(Entity):
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("%s received %d messages", self.get_name(), len(messages))
         return messages
+
+    def clear_message_buffers(self) -> None:
+        """Drop buffered messages and archives for this agent."""
+        self.messages = []
+        self.message_archive.clear()
+        self.anonymous_message_buffer = []
 
     def set_outgoing_message_fields(self, fields: Optional[dict]) -> None:
         """Register custom payload data to be merged into the next transmission."""
@@ -1064,7 +1071,7 @@ class StaticAgent(Agent):
         if config_elem.get("shape") in ("sphere","cube","cuboid","cylinder"):
             self.shape_type = "dense"
         self.shape = Shape3DFactory.create_shape("agent",config_elem.get("shape","point"), {key:val for key,val in config_elem.items()})
-        self.shape.add_attachment(Shape3DFactory.create_shape("mark","circle", {"_id":"idle", "color":"red", "diameter":0.01}))
+        self.shape.add_attachment(Shape3DFactory.create_shape("mark","circle", {"_id":"led", "color":"red", "diameter":0.01}))
         self._level_attachment = None
         self._sync_shape_hierarchy_metadata()
         self.position = Vector3D()
