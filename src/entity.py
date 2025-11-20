@@ -156,7 +156,9 @@ class Agent(Entity):
             raise ValueError(f"{self.entity()} cannot use kind='anonymous' with message type '{self.msg_type}'.")
         self.message_bus = None
         self.own_message = {}
-        self.messages = []
+        self.messages: list[dict] = []
+        self._messages_by_sender: dict[str, list[dict]] | None = None
+        self._messages_by_entity: dict[str, list[dict]] | None = None
         self._message_custom_fields = {}
         self._msg_send_budget = 0.0
         self._msg_receive_budget = 0.0
@@ -180,8 +182,6 @@ class Agent(Entity):
             self.messages_config.get("handshake_timeout")
         )
         self.msg_timer_config = self._normalize_message_timer(self.messages_config.get("timer"))
-        self.message_archive = {}
-        self.anonymous_message_buffer = []
         # --- detection ---
         self.detection_config = self._normalize_detection_config(config_elem.get("detection"))
         self.detection = self.detection_config.get("type", "GPS")
@@ -269,7 +269,7 @@ class Agent(Entity):
             self._handle_handshake_messages(messages, tick)
         self._msg_receive_budget = max(0.0, self._msg_receive_budget - len(messages))
         self.messages.extend(messages)
-        self._store_received_messages(messages)
+        self._invalidate_message_indexes()
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("%s received %d messages", self.get_name(), len(messages))
         return messages
@@ -277,8 +277,7 @@ class Agent(Entity):
     def clear_message_buffers(self) -> None:
         """Drop buffered messages and archives for this agent."""
         self.messages = []
-        self.message_archive.clear()
-        self.anonymous_message_buffer = []
+        self._invalidate_message_indexes()
 
     def set_outgoing_message_fields(self, fields: Optional[dict]) -> None:
         """Register custom payload data to be merged into the next transmission."""
@@ -504,20 +503,42 @@ class Agent(Entity):
                 eligible.append(msg)
         return eligible
 
-    def _store_received_messages(self, messages: list[dict]):
-        """Populate the per-agent archive for received messages."""
-        for msg in messages:
+    def get_messages_by_sender(self) -> dict:
+        """Return messages grouped by sender identifier (lazy-built)."""
+        if self._messages_by_sender is None:
+            self._build_message_indexes()
+        return self._messages_by_sender
+
+    def get_messages_by_entity(self) -> dict:
+        """Return messages grouped by entity/class (lazy-built)."""
+        if self._messages_by_entity is None:
+            self._build_message_indexes()
+        return self._messages_by_entity
+
+    def _invalidate_message_indexes(self) -> None:
+        """Reset cached message groupings to keep a single authoritative list."""
+        self._messages_by_sender = None
+        self._messages_by_entity = None
+
+    def _build_message_indexes(self) -> None:
+        """Rebuild grouping maps using the unified message list."""
+        by_sender: dict[str, list[dict]] = {}
+        by_entity: dict[str, list[dict]] = {}
+        for msg in self.messages:
             if not isinstance(msg, dict):
                 continue
-            identity = (
+            sender = (
                 msg.get("source_agent")
                 or msg.get("agent_id")
                 or msg.get("from")
             )
-            if identity:
-                self.message_archive.setdefault(identity, []).append(msg)
-            else:
-                self.anonymous_message_buffer.append(msg)
+            if sender:
+                by_sender.setdefault(str(sender), []).append(msg)
+            entity = msg.get("entity")
+            if entity:
+                by_entity.setdefault(str(entity), []).append(msg)
+        self._messages_by_sender = by_sender
+        self._messages_by_entity = by_entity
 
     def _compute_rate_quanta(self, rate_per_second: float) -> float:
         """Convert a messages-per-second value into the tokens added per tick."""
@@ -686,38 +707,23 @@ class Agent(Entity):
         if not self.msg_timer_config:
             return
         if self.msg_timer_config.get("reset_each_cycle"):
-            self.messages = []
-            self.message_archive = {}
-            self.anonymous_message_buffer = []
+            if self.messages:
+                self.messages = []
+                self._invalidate_message_indexes()
             return
-        processed = set()
-        expired = set()
-        self.messages = self._tick_message_collection(self.messages, processed, expired)
-        for key in list(self.message_archive.keys()):
-            updated = self._tick_message_collection(self.message_archive[key], processed, expired)
-            if updated:
-                self.message_archive[key] = updated
-            else:
-                del self.message_archive[key]
-        self.anonymous_message_buffer = self._tick_message_collection(
-            self.anonymous_message_buffer,
-            processed,
-            expired
-        )
+        before = len(self.messages)
+        self.messages = self._tick_message_collection(self.messages)
+        if len(self.messages) != before:
+            self._invalidate_message_indexes()
 
-    def _tick_message_collection(self, collection, processed, expired):
+    def _tick_message_collection(self, collection):
         """Return a filtered list after decrementing TTLs."""
         if not collection:
             return []
         filtered = []
         for msg in collection:
-            identity = id(msg)
-            if identity in expired:
+            if not isinstance(msg, dict):
                 continue
-            if identity in processed:
-                filtered.append(msg)
-                continue
-            processed.add(identity)
             ttl = msg.get("_ttl_ticks")
             if ttl is None or math.isinf(ttl):
                 filtered.append(msg)
@@ -728,7 +734,6 @@ class Agent(Entity):
                 filtered.append(msg)
             else:
                 msg.pop("_ttl_ticks", None)
-                expired.add(identity)
         return filtered
 
     def _parse_information_restrictions(self, config):
@@ -1253,8 +1258,7 @@ class MovableAgent(StaticAgent):
         self.goal_position = None
         self.prev_goal_distance = 0
         self._reset_detection_scheduler()
-        self.message_archive.clear()
-        self.anonymous_message_buffer.clear()
+        self.clear_message_buffers()
         logger.info("%s reset with behavior %s", self.get_name(), self.moving_behavior)
 
     def get_spin_system_data(self):
