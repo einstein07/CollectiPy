@@ -593,28 +593,42 @@ class Agent(Entity):
         if not isinstance(value, dict):
             logger.warning("%s invalid timer config '%s'; expected object", self.get_name(), value)
             return None
-        distribution = str(value.get("distribution", "fixed")).strip().lower()
-        if distribution not in {"fixed", "uniform", "exponential"}:
+        if not value:
+            return None
+        raw_distribution = value.get("distribution", None)
+        distribution = None if raw_distribution is None else str(raw_distribution).strip().lower()
+        if distribution == "normal":
+            distribution = "gaussian"
+        if distribution in {"", "none"}:
+            distribution = None
+        supported = {"gaussian", "uniform", "exponential", "fixed"}
+        if distribution and distribution not in supported:
             logger.warning(
-                "%s timer distribution '%s' unsupported; using 'fixed'",
+                "%s timer distribution '%s' unsupported; using fixed delay",
                 self.get_name(),
                 distribution
             )
-            distribution = "fixed"
-        average = value.get("average", 0)
+            distribution = None
+        average = value.get("average", None)
+        if average is None:
+            return None
         try:
             average = float(average)
         except (TypeError, ValueError):
             logger.warning("%s timer average '%s' invalid; timer disabled", self.get_name(), average)
             return None
-        if average <= 0:
-            logger.warning("%s timer average must be >0, got %s; timer disabled", self.get_name(), average)
-            return None
-        return {"distribution": distribution, "average": average}
+        if average < 0:
+            logger.warning("%s timer average must be >=0, got %s; clamping to 0", self.get_name(), average)
+            average = 0.0
+        return {"distribution": distribution, "average": average, "reset_each_cycle": average == 0.0}
 
     def _apply_message_timers(self, messages):
         """Attach TTL metadata to newly received messages."""
         if not self.msg_timer_config or not messages:
+            return
+        if self.msg_timer_config.get("reset_each_cycle"):
+            for msg in messages:
+                msg.pop("_ttl_ticks", None)
             return
         for msg in messages:
             ttl = self._next_message_timer_ticks()
@@ -626,6 +640,8 @@ class Agent(Entity):
     def _next_message_timer_ticks(self):
         """Return the timer duration in ticks."""
         if not self.msg_timer_config:
+            return None
+        if self.msg_timer_config.get("reset_each_cycle"):
             return None
         seconds = self._sample_message_timer_seconds()
         if seconds is None:
@@ -640,8 +656,10 @@ class Agent(Entity):
         cfg = self.msg_timer_config
         if not cfg:
             return None
+        if cfg.get("reset_each_cycle"):
+            return None
         average = cfg["average"]
-        dist = cfg["distribution"]
+        dist = cfg["distribution"] or "fixed"
         rng = self.random_generator
         if dist == "exponential":
             try:
@@ -649,15 +667,21 @@ class Agent(Entity):
             except ZeroDivisionError:
                 return average
         if dist == "uniform":
-            low = max(average * 0.5, 1e-3)
-            high = max(low, average * 1.5)
-            return rng.uniform(low, high)
+            return rng.uniform(0.0, average)
+        if dist == "gaussian":
+            stddev = max(average / 3.0, 1e-6)
+            return max(0.0, rng.gauss(average, stddev))
         # fixed/default
         return average
 
     def _refresh_message_timers(self):
         """Decrement TTL metadata and purge expired messages."""
         if not self.msg_timer_config:
+            return
+        if self.msg_timer_config.get("reset_each_cycle"):
+            self.messages = []
+            self.message_archive = {}
+            self.anonymous_message_buffer = []
             return
         processed = set()
         expired = set()
