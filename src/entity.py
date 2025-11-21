@@ -13,7 +13,7 @@ This module has been extended with a minimal plugin
 system for movement models. The original behaviour is
 preserved when no plugins are registered.
 """
-import json, hashlib, logging, math
+import hashlib, logging, math
 from typing import Optional
 import numpy as np
 from random import Random
@@ -31,6 +31,20 @@ CHANNEL_TYPE_MATRIX = {
     "dual": {"broadcast", "rebroadcast", "hand_shake"}
 }
 DEFAULT_RX_RATE = 4.0
+
+def splitmix32(x):
+    x = (x + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9 & 0xFFFFFFFFFFFFFFFF
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EB & 0xFFFFFFFFFFFFFFFF
+    x = x ^ (x >> 31)
+    return x & 0xFFFFFFFF
+
+def make_agent_seed(global_seed, entity_type, entity_id):
+    base = f"{global_seed}|{entity_type}|{entity_id}"
+    h1 = hashlib.sha256(base.encode()).digest()
+    h2 = hashlib.blake2s(h1).digest()
+    x = int.from_bytes(h2[:8], "little")
+    return splitmix32(x)
 
 class EntityFactory:
     
@@ -1003,8 +1017,7 @@ class Agent(Entity):
     
     def set_random_generator(self,config,random_seed):
         """Set the random generator."""
-        seed_input = f"{random_seed}_{self.entity_type}_{int(self._id)}"
-        seed = int(hashlib.sha256(seed_input.encode()).hexdigest(), 16) % (2**32)
+        seed = make_agent_seed(random_seed, self.entity_type, int(self._id))
         self.random_generator.seed(seed)
         logger.debug("%s seeded RNG with %s", self.get_name(), seed)
 
