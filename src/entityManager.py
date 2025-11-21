@@ -75,7 +75,7 @@ class EntityManager:
                 entity.set_position(Vector3D(999, 0, 0), False)
         for (config, entities) in self.agents.values():
             for entity in entities:
-                entity.set_random_generator(config, random_seed)
+                entity.set_random_generator(random_seed)
                 entity.reset()
                 if not entity.get_orientation_from_dict():
                     rand_angle = Random.uniform(entity.get_random_generator(), 0.0, 360.0)

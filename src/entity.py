@@ -1015,7 +1015,7 @@ class Agent(Entity):
         """Return the configured tick rate."""
         return self.ticks_per_second
     
-    def set_random_generator(self,config,random_seed):
+    def set_random_generator(self,random_seed):
         """Set the random generator."""
         seed = make_agent_seed(random_seed, self.entity_type, int(self._id))
         self.random_generator.seed(seed)
