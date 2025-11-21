@@ -5,12 +5,12 @@
     ],
     "environment": {
         "collisions": true,
-        "time_limit": 200,
+        "time_limit": 0,
         "num_runs": 1,
         "gui": {
             "_id": "2D",
             "view": "messages",
-            "on_click": "show_spins"
+            "on_click": "messages"
         },
         "arenas": {
             "arena_0": {
@@ -25,9 +25,7 @@
         "objects": {},
         "agents": {
             "movable_handshake": {
-                "number": [
-                    8
-                ],
+                "number": [8],
                 "shape": "cylinder",
                 "height": 0.03,
                 "diameter": 0.05,
@@ -45,17 +43,10 @@
                     "channels": "dual",
                     "handshake_auto": false,
                     "handshake_timeout": 5
-                },
-                "detection": {
-                    "type": "GPS",
-                    "range": 0.4,
-                    "acquisition_per_second": 4
                 }
             },
             "movable_sampler": {
-                "number": [
-                    6
-                ],
+                "number": [6],
                 "shape": "cylinder",
                 "height": 0.03,
                 "diameter": 0.05,
@@ -70,11 +61,6 @@
                     "comm_range": 0.22,
                     "type": "broadcast",
                     "kind": "id"
-                },
-                "detection": {
-                    "type": "GPS",
-                    "range": "inf",
-                    "acquisition_per_second": 6
                 }
             }
         }

@@ -6,13 +6,13 @@
         "num_runs": 1,
         "gui":{
             "_id": "2D",
-            "on_click": ["messages","detection"],
-            "view": ["messages","detection"]
+            "on_click": ["messages"],
+            "view": ["messages"]
         },
         "arenas":{
             "arena_0":{
                 "random_seed": 0,
-                "diameter": 0.5,
+                "diameter": 1,
                 "_id": "sphere",
                 "color": "gray"
             }
@@ -31,20 +31,13 @@
                 "ticks_per_second": 5,
                 "number": [20],
                 "shape": "cylinder",
-                "linear_velocity": 0.03,
+                "linear_velocity": 0.01,
                 "angular_velocity": 45,
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
-                "detection": {
-                    "type": "GPS",
-                    "range": 0.3,
-                    "acquisition_per_second": "inf"
-                },
                 "moving_behavior":"random_way_point",
                 "messages": {
-                    "tx_per_second": 2,
-                    "rx_per_second": 4,
                     "comm_range": 0.1,
                     "type": "broadcast",
                     "kind": "anonymous",

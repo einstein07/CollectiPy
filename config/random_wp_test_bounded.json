@@ -1,10 +1,10 @@
 {
     "environment":{
         "collisions": true,
-        "time_limit": 200,
+        "time_limit": 0,
         "num_runs": 1,
         "results":{
-            "group_specs": ["graphs"],
+            "group_specs": ["messages"],
             "snapshots_per_second": 1
         },
         "gui":{
@@ -38,11 +38,6 @@
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
-                "detection": {
-                    "type": "GPS",
-                    "range": "inf",
-                    "acquisition_per_second": "inf"
-                },
                 "moving_behavior":"random_way_point",
                 "messages": {
                     "tx_per_second": 2,

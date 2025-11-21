@@ -6,7 +6,7 @@
         "num_runs": 1,
         "results":{
             "agent_specs": ["base", "spin_model"],
-            "group_specs": ["graphs"],
+            "group_specs": ["detection"],
             "snapshots_per_second": 1
         },
         "gui":{

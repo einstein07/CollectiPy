@@ -40,11 +40,6 @@
                     "type": "broadcast",
                     "kind": "anonymous",
                     "delete_trigger": "mailbox_clear"
-                },
-                "detection": {
-                    "type": "GPS",
-                    "range": 0.2,
-                    "acquisition_per_second": 2
                 }
             }
         }

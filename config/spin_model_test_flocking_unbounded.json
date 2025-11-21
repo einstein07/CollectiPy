@@ -6,13 +6,13 @@
         "num_runs": 1,
         "results":{
             "agent_specs": ["base", "spin_model"],
-            "group_specs": ["graphs"],
+            "group_specs": ["detection"],
             "snapshots_per_second": 1
         },
         "gui":{
             "_id": "2D",
-            "on_click": ["show_spins","messages","detection"],
-            "view": ["messages","detection"]
+            "on_click": ["show_spins","detection"],
+            "view": ["detection"]
         },
         "arenas":{
             "arena_0":{

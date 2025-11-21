@@ -1,7 +1,7 @@
 {
     "environment": {
         "collisions": false,
-        "time_limit": 200,
+        "time_limit": 0,
         "num_runs": 1,
         "results": {},
         "gui": {
@@ -26,11 +26,6 @@
                 "color": "blue",
                 "linear_velocity": 0.03,
                 "angular_velocity": 60,
-                "detection": {
-                    "type": "GPS",
-                    "range": "inf",
-                    "acquisition_per_second": "inf"
-                },
                 "moving_behavior": "random_way_point"
             }
         }
