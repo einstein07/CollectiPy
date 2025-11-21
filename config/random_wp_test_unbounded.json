@@ -29,7 +29,7 @@
         "agents":{
             "movable_0":{
                 "ticks_per_second": 5,
-                "number": [20],
+                "number": [150],
                 "shape": "cylinder",
                 "linear_velocity": 0.01,
                 "angular_velocity": 45,

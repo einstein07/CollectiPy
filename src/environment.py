@@ -16,74 +16,48 @@ from arena import ArenaFactory
 from gui import GuiFactory
 from entityManager import EntityManager
 from collision_detector import CollisionDetector
+used_cores = set()
 
-def set_affinity_safely(proc, cores):
-    """Set CPU affinity without breaking simulation."""
+def pick_least_used_free_cores(num):
+    """
+    Ritorna 'num' core meno usati che NON sono in used_cores.
+    """
+    # Snapshot del carico CPU
+    usage = psutil.cpu_percent(interval=0.1, percpu=True)
+
+    # Ordina i core dal meno usato
+    ordered = sorted(range(len(usage)), key=lambda c: usage[c])
+
+    # Filtra quelli non ancora assegnati
+    free = [c for c in ordered if c not in used_cores]
+
+    return free[:num]
+
+
+def set_affinity_safely(proc, num_cores):
+    """
+    Assigns less used cores wo repetition
+    """
+    global used_cores
     try:
+        selected = pick_least_used_free_cores(num_cores)
+        if not selected:
+            logging.warning("[WARNING] No free cores: fallback to all cores")
+            selected = list(range(psutil.cpu_count(logical=True)))
         p = psutil.Process(proc.pid)
-        p.cpu_affinity(cores)
-        print(f"Affinity set for PID {proc.pid}: {cores}")
+        p.cpu_affinity(selected)
+        used_cores.update(selected)
+        # print(f"[AFFINITY] PID {proc.pid} -> {selected}")
     except Exception as e:
-        print(f"Failed to set CPU affinity for PID {proc.pid}: {e}")
-
-def allocate_cores(total_cores, pattern):
-    """
-    Resize the partition defined in pattern based on the number of available CPU cores.
-
-    pattern = {
-        'arena': 2,
-        'agents': 3,
-        'detector': 3,
-        'gui': 2
-    }
-    """
-    ideal_total = sum(pattern.values())
-    if total_cores < ideal_total:
-        scale = total_cores / ideal_total
-        scaled = {k: max(1, int(round(v * scale))) for k, v in pattern.items()}
-        scaled_total = sum(scaled.values())
-        while scaled_total > total_cores:
-            biggest = max(scaled, key=lambda x: scaled[x])
-            if scaled[biggest] > 1:
-                scaled[biggest] -= 1
-                scaled_total -= 1
-            else:
-                break
-        while scaled_total < total_cores:
-            smallest = min(scaled, key=lambda x: scaled[x])
-            scaled[smallest] += 1
-            scaled_total += 1
-        assigned = {}
-        start = 0
-        for name, count in scaled.items():
-            assigned[name] = list(range(start, start + count))
-            start += count
-        return assigned
-    elif total_cores == ideal_total:
-        assigned = {}
-        start = 0
-        for name, count in pattern.items():
-            assigned[name] = list(range(start, start + count))
-            start += count
-        return assigned
-    else:
-        assigned = {}
-        start = 0
-        for name, count in pattern.items():
-            assigned[name] = list(range(start, start + count))
-            start += count
-        return assigned
-
+        logging.error(f"[AFFINITY ERROR] PID {proc.pid}: {e}")
 
 class EnvironmentFactory():
     """Environment factory."""
     @staticmethod
     def create_environment(config_elem:Config):
         """Create environment."""
-        if not config_elem.environment.get("parallel_experiments",False) or config_elem.environment["render"]:
-            return SingleProcessEnvironment(config_elem)
-        elif config_elem.environment.get("parallel_experiments",False) and not config_elem.environment["render"]:
-            return MultiProcessEnvironment(config_elem)
+        if config_elem.environment:
+            return Environment(config_elem)
         else:
             raise ValueError(f"Invalid environment configuration: {config_elem.environment['parallel_experiments']} {config_elem.environment['render']}")
 
@@ -99,17 +73,7 @@ class Environment():
         self.collisions = config_elem.environment.get("collisions",False)
         if not self.render[0] and self.time_limit==0:
             raise Exception("Invalid configuration: infinite experiment with no GUI.")
-
-    def start(self):
-        """Start the process."""
-        pass
-
-class SingleProcessEnvironment(Environment):
-    """Single process environment."""
-    def __init__(self,config_elem:Config):
-        """Initialize the instance."""
-        super().__init__(config_elem)
-        logging.info("Single process environment created successfully")
+        logging.info("Environment created successfully")
 
     def arena_init(self,exp:Config):
         """Arena init."""
@@ -191,12 +155,11 @@ class SingleProcessEnvironment(Environment):
                     detector_process.start()
                 agents_process.start()
                 arena_process.start()
-                total_cores = psutil.cpu_count(logical=True)
-                allocation = allocate_cores(total_cores, pattern)
-                set_affinity_safely(detector_process, allocation.get("detector", []))
-                set_affinity_safely(agents_process, allocation.get("agents", []))
-                set_affinity_safely(arena_process, allocation.get("arena", []))
-                set_affinity_safely(gui_process, allocation.get("gui", []))
+                set_affinity_safely(arena_process,   pattern["arena"])
+                set_affinity_safely(agents_process,  pattern["agents"])
+                set_affinity_safely(detector_process, pattern["detector"])
+                set_affinity_safely(gui_process, pattern["gui"])
+
                 while True:
                     arena_alive = arena_process.is_alive()
                     agents_alive = agents_process.is_alive()
@@ -273,11 +236,9 @@ class SingleProcessEnvironment(Environment):
                     detector_process.start()
                 agents_process.start()
                 arena_process.start()
-                total_cores = psutil.cpu_count(logical=True)
-                allocation = allocate_cores(total_cores, pattern)
-                set_affinity_safely(detector_process, allocation.get("detector", []))
-                set_affinity_safely(agents_process, allocation.get("agents", []))
-                set_affinity_safely(arena_process, allocation.get("arena", []))
+                set_affinity_safely(arena_process,   pattern["arena"])
+                set_affinity_safely(agents_process,  pattern["agents"])
+                set_affinity_safely(detector_process, pattern["detector"])
                 while arena_process.is_alive() and agents_process.is_alive():
                     arena_process.join(timeout=0.1)
                     agents_process.join(timeout=0.1)
@@ -302,14 +263,3 @@ class SingleProcessEnvironment(Environment):
                     raise RuntimeError("A subprocess exited unexpectedly.")
             gc.collect()
         logging.info("All experiments completed successfully")
-
-class MultiProcessEnvironment(Environment):
-    """Multi process environment."""
-    def __init__(self,config_elem:Config):
-        """Initialize the instance."""
-        super().__init__(config_elem)
-        logging.info("Multi process environment created successfully")
-
-    def start(self):
-        """Start the process."""
-        pass
