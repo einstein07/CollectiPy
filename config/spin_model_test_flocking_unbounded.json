@@ -18,7 +18,7 @@
             "arena_0":{
                 "random_seed": 0,
                 "diameter": 0.3,
-                "_id": "sphere",
+                "_id": "unbounded",
                 "color": "gray"
             }
         },

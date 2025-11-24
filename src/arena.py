@@ -32,10 +32,10 @@ class ArenaFactory():
             return RectangularArena(config_elem)
         elif config_elem.arena.get("_id") == "square":
             return SquareArena(config_elem)
-        elif config_elem.arena.get("_id") == "sphere":
-            return SolidSphereArena(config_elem)
+        elif config_elem.arena.get("_id") == "unbounded":
+            return UnboundedArena(config_elem)
         else:
-            raise ValueError(f"Invalid shape type: {config_elem.arena['_id']} valid types are: none, abstract, circle, rectangle, square")
+            raise ValueError(f"Invalid shape type: {config_elem.arena['_id']} valid types are: none, abstract, circle, rectangle, square, unbounded")
 
 class Arena():
     
@@ -188,10 +188,24 @@ class SolidArena(Arena):
     def __init__(self, config_elem:Config):
         """Initialize the instance."""
         super().__init__(config_elem)
-        self.shape = Shape3DFactory.create_shape("arena",self._id, {key:val for key,val in config_elem.arena.items()})
         self._grid_origin = None
         self._grid_cell_size = None
+        self.shape = self._build_arena_shape(config_elem)
         self._update_hierarchy_from_shape()
+
+    def _build_arena_shape(self, config_elem:Config):
+        """Return the collision shape based on the arena configuration."""
+        shape_type = self._arena_shape_type()
+        shape_cfg = self._arena_shape_config(config_elem)
+        return Shape3DFactory.create_shape("arena", shape_type, shape_cfg)
+
+    def _arena_shape_type(self):
+        """Return the default shape id used for the arena."""
+        return self._id
+
+    def _arena_shape_config(self, config_elem:Config):
+        """Return the arena configuration passed to the shape factory."""
+        return {key:val for key,val in config_elem.arena.items()}
 
     def get_shape(self):
         """Return the shape."""
@@ -612,30 +626,42 @@ class SolidArena(Arena):
                     node_id: node.order for node_id, node in self._hierarchy.nodes.items()
                 }
 
-class SolidSphereArena(SolidArena):
+class UnboundedArena(SolidArena):
     
-    """Solid sphere arena."""
+    """Unbounded arena with wrap-around projection."""
     def __init__(self, config_elem:Config):
         """Initialize the instance."""
-        super().__init__(config_elem)
-        if self._id != "sphere":
-            raise ValueError("SolidSphereArena requires arena _id 'sphere'")
-        self.sphere_shape = self.shape
         self.diameter = float(config_elem.arena.get("diameter", 0))
         if self.diameter <= 0:
-            raise ValueError("SolidSphereArena requires a positive 'diameter'")
+            raise ValueError("UnboundedArena requires a positive 'diameter'")
         self.radius = self.diameter * 0.5
         self.map_width = 2 * math.pi * self.radius
         self.map_height = math.pi * self.radius
-        ellipse_config = {
+        super().__init__(config_elem)
+        self._setup_wrap_config()
+        logging.info(
+            "Unbounded arena created (diameter=%.3f, ellipse_major=%.3f, ellipse_minor=%.3f)",
+            self.diameter,
+            self.wrap_config["width"],
+            self.wrap_config["height"]
+        )
+
+    def _arena_shape_type(self):
+        """Use an ellipse for the flattened collision area."""
+        return "ellipse"
+
+    def _arena_shape_config(self, config_elem:Config):
+        """Adapt the configuration parameters for the ellipse factory."""
+        return {
             "width": self.map_width,
             "depth": self.map_height,
             "height": 1.0,
             "segments": int(config_elem.arena.get("segments", 96)),
             "color": config_elem.arena.get("color", "gray")
         }
-        # Replace the collision shape with the flattened ellipse used for simulation.
-        self.shape = Shape3DFactory.create_shape("arena","ellipse", ellipse_config)
+
+    def _setup_wrap_config(self):
+        """Define the wrap-around metadata used by other components."""
         min_v = self.shape.min_vert()
         max_v = self.shape.max_vert()
         self.wrap_config = {
@@ -646,17 +672,10 @@ class SolidSphereArena(SolidArena):
             "semi_minor": self.map_height * 0.5,
             "projection": "ellipse"
         }
-        logging.info(
-            "SolidSphereArena created (diameter=%.3f, ellipse_major=%.3f, ellipse_minor=%.3f)",
-            self.diameter,
-            self.wrap_config["width"],
-            self.wrap_config["height"]
-        )
-        self._update_hierarchy_from_shape()
 
     def get_wrap_config(self):
         """Return the wrap config."""
-        return self.wrap_config
+        return getattr(self, "wrap_config", None)
 
 class CircularArena(SolidArena):
     

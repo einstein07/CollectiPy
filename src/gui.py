@@ -36,6 +36,23 @@ class GuiFactory():
         else:
             raise ValueError(f"Invalid gui type: {config_elem.get('_id')} valid types are '2D' or 'abstract'")
 
+
+class DetachedPanelWindow(QWidget):
+    """Window container for detached auxiliary panels."""
+
+    def __init__(self, title: str, close_callback=None):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.setWindowFlag(Qt.Window, True)
+        self._close_callback = close_callback
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+
+    def closeEvent(self, event):
+        if self._close_callback:
+            self._close_callback()
+        event.ignore()
+        self.hide()
+
 class GUI_2D(QWidget):
     """2 d."""
     def __init__(self, config_elem: Config,arena_vertices,arena_color,gui_in_queue,gui_control_queue, wrap_config=None, hierarchy_overlay=None):
@@ -120,9 +137,7 @@ class GUI_2D(QWidget):
         self._layout_change_in_progress = False
         self._last_viewport_width = None
         self._panel_extra_padding = {
-            "graph": 200,
-            "legend": 80,
-            "side": 220
+            "legend": 80
         }
         self.scene = QGraphicsScene()
         self.scene.setSceneRect(0, 0, 800, 800)
@@ -134,7 +149,7 @@ class GUI_2D(QWidget):
         self.perception_bars = None
         self.arrow = None
         self.angle_labels = []
-        self.spin_panel = None
+        self.spin_window = None
         self.spin_panel_visible = False
         self.abstract_dot_items = []
         markers_cfg = config_elem.get("abstract_markers", {})
@@ -147,12 +162,12 @@ class GUI_2D(QWidget):
             self.canvas = FigureCanvas(self.figure)
             self.canvas.setMinimumSize(320, 320)
             self.canvas.setMaximumWidth(360)
-            self.spin_panel = QWidget()
+            self.spin_window = DetachedPanelWindow("Spin Model", close_callback=self._on_spin_window_closed)
             spin_layout = QVBoxLayout()
             spin_layout.setContentsMargins(0, 0, 0, 0)
             spin_layout.addWidget(self.canvas)
-            self.spin_panel.setLayout(spin_layout)
-            self.spin_panel.setVisible(False)
+            self.spin_window.setLayout(spin_layout)
+            self.spin_window.setVisible(False)
         if self.wrap_config:
             hint = QLabel("Wrap-around active (sphere projection)")
             hint.setStyleSheet("color: gray; font-size: 10pt;")
@@ -160,7 +175,7 @@ class GUI_2D(QWidget):
         arena_row = QHBoxLayout()
         arena_row.setContentsMargins(0, 0, 0, 0)
         arena_row.setSpacing(8)
-        self.graph_container = None
+        self.graph_window = None
         self.graph_layout = None
         self.graph_views = {}
         self.graph_view_active = False
@@ -173,16 +188,16 @@ class GUI_2D(QWidget):
             "extended": "II - Extended"
         }
         if self.viewable_modes:
-            self.graph_container = QWidget()
-            self.graph_container.setMinimumWidth(520)
-            self.graph_container.setMaximumWidth(640)
-            self.graph_container.setVisible(False)
-            self.graph_container.setAutoFillBackground(True)
-            self.graph_container.setStyleSheet("background-color: #2f2f2f; border-radius: 6px;")
+            self.graph_window = DetachedPanelWindow("Connection Graphs", close_callback=self._on_graph_window_closed)
+            self.graph_window.setMinimumWidth(520)
+            self.graph_window.setMaximumWidth(640)
+            self.graph_window.setAutoFillBackground(True)
+            self.graph_window.setStyleSheet("background-color: #2f2f2f; border-radius: 6px;")
             self.graph_layout = QVBoxLayout()
             self.graph_layout.setContentsMargins(16, 16, 16, 16)
             self.graph_layout.setSpacing(16)
-            self.graph_container.setLayout(self.graph_layout)
+            self.graph_window.setLayout(self.graph_layout)
+            self.graph_window.setVisible(False)
             for mode in self.viewable_modes:
                 title = "Messages graph" if mode == "messages" else "Detection graph"
                 graph_widget = NetworkGraphWidget(title, self.connection_colors[mode], title_color="#f5f5f5")
@@ -217,9 +232,8 @@ class GUI_2D(QWidget):
             )
             self.graph_filter_widget.setVisible(False)
             self.graph_layout.addWidget(self.graph_filter_widget)
-            arena_row.addWidget(self.graph_container)
         else:
-            self.graph_container = None
+            self.graph_window = None
             self.graph_layout = None
             self.graph_filter_widget = None
             self.graph_filter_selector = None
@@ -239,24 +253,10 @@ class GUI_2D(QWidget):
             self.legend_column.setVisible(False)
             arena_row.addWidget(self.legend_column)
         self._left_layout.addLayout(arena_row)
-        self.side_container = None
-        self.side_layout = None
-        if self.spin_panel is not None:
-            self.side_container = QWidget()
-            self.side_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-            self.side_container.setMinimumWidth(260)
-            self.side_layout = QVBoxLayout()
-            self.side_layout.setContentsMargins(0, 0, 0, 0)
-            self.side_container.setLayout(self.side_layout)
-            self.side_container.setVisible(False)
-            self.side_layout.addWidget(self.spin_panel)
-            self.side_layout.addStretch()
         self._main_layout.addLayout(self._left_layout)
-        if self.side_container is not None:
-            self._main_layout.addWidget(self.side_container)
         self.setLayout(self._main_layout)
         self._update_legend_column_visibility()
-        if self.view_mode_selector and self.graph_container is not None:
+        if self.view_mode_selector and self.graph_window is not None:
             self.view_mode_selector.setEnabled(True)
             self._initialize_graph_view_selection()
         elif self.view_mode_selector:
@@ -322,19 +322,16 @@ class GUI_2D(QWidget):
 
     def _show_spin_canvas(self):
         """Ensure the spin plot canvas is visible."""
-        if not self.show_spins_enabled or self.spin_panel is None or self.spin_panel_visible:
+        if not self.show_spins_enabled or self.spin_window is None or self.spin_panel_visible:
             return
         self.spin_panel_visible = True
-        self.spin_panel.setVisible(True)
         self._update_side_container_visibility()
-        self.adjustSize()
 
     def _hide_spin_canvas(self):
         """Hide the spin plot canvas if it is visible."""
-        if not self.show_spins_enabled or not self.spin_panel_visible or self.spin_panel is None:
+        if not self.show_spins_enabled or not self.spin_panel_visible or self.spin_window is None:
             return
         self.spin_panel_visible = False
-        self.spin_panel.setVisible(False)
         self._update_side_container_visibility()
 
     def _update_connection_legend(self):
@@ -427,17 +424,31 @@ class GUI_2D(QWidget):
 
     def _update_side_container_visibility(self):
         """Update the visibility of the auxiliary side container."""
-        if not self.side_container:
+        if not self.spin_window:
             return
-        needs_side_panel = bool(self.spin_panel_visible)
-        previous = self.side_container.isVisible()
-        previous_width = self._capture_viewport_width()
-        self.side_container.setVisible(needs_side_panel)
-        if previous != needs_side_panel:
-            self._main_layout.activate()
-            padding = self._panel_extra_padding.get("side", 0) if needs_side_panel else 0
-            self._preserve_arena_view_width(previous_width, padding)
-            self.adjustSize()
+        if self.spin_panel_visible:
+            if not self.spin_window.isVisible():
+                self.spin_window.show()
+            self.spin_window.raise_()
+            self.spin_window.activateWindow()
+        else:
+            if self.spin_window.isVisible():
+                self.spin_window.hide()
+
+    def _on_spin_window_closed(self):
+        """React when the spin window is manually closed."""
+        if not self.spin_panel_visible:
+            return
+        self.spin_panel_visible = False
+        self._update_side_container_visibility()
+
+    def _on_graph_window_closed(self):
+        """React when the graph window is manually closed."""
+        if self.view_mode_selector:
+            self.view_mode_selector.blockSignals(True)
+            self.view_mode_selector.setCurrentIndex(0)
+            self.view_mode_selector.blockSignals(False)
+        self._apply_graph_view_mode(0)
 
     def _update_legend_column_visibility(self):
         """Ensure the legend column mirrors the legend widget visibility."""
@@ -470,31 +481,23 @@ class GUI_2D(QWidget):
 
     def _apply_graph_view_mode(self, index, initial=False):
         """Show/hide the graph column and update the layout strategy."""
-        if not self.graph_views:
+        if not self.graph_views or not self.graph_window:
             return
-        previous_width = self._capture_viewport_width()
-        previous_visibility = self.graph_container.isVisible() if self.graph_container else False
         if index <= 0:
             self.graph_view_active = False
-            if self.graph_container:
-                self.graph_container.setVisible(False)
+            if self.graph_window:
+                self.graph_window.hide()
         else:
             self.graph_view_active = True
             self.view_mode = "static" if index == 1 else "dynamic"
-            if self.graph_container:
-                self.graph_container.setVisible(True)
+            if self.graph_window:
+                self.graph_window.show()
+                self.graph_window.raise_()
+                self.graph_window.activateWindow()
             self._recompute_graph_layout()
-        if self.graph_container:
-            current_visibility = self.graph_container.isVisible()
-        else:
-            current_visibility = False
         self._update_graph_filter_controls()
         if self.graph_view_active:
             self._update_graph_views()
-        if previous_visibility != current_visibility:
-            self._main_layout.activate()
-            padding = self._panel_extra_padding.get("graph", 0) if current_visibility else 0
-            self._preserve_arena_view_width(previous_width, padding)
         if not initial:
             self._update_side_container_visibility()
         self.update_scene()

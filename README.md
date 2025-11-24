@@ -1,26 +1,24 @@
 # Decision Making Simulation Framework
 
-**CollectiPy** is not designed to offer physically realistic simulations. It does not include a physics engine, nor does it attempt to model complex physical dynamics. The environment is intentionally simplified to enable rapid experimentation with ideas, algorithms, and theoretical models, serving as an initial validation layer before moving to more accurate tools.
-
-This framework is designed to implement simulations for both single and multi-agent systems. It includes base classes to create a working arena where physical agents and/or objects can be deployed. Custom arenas can be built. Additionally, there are base classes to provide a GUI, which can be switched off if not needed. Entities, which can be agents, objects, or highlighted areas in the arena. A data handling class is provided to store data in a predefined format.
+CollectiPy is a minimal sandbox for decision-making experiments. It keeps the physics simple and focuses on agent reasoning, arenas, GUI helpers, and data exports. You can disable the GUI, extend movement/detection logic with plugins, or add custom arenas.
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/tuo-utente/CollectiPy.git
 cd CollectiPy
-chmod +x ./compile.sh
+chmod +x compile.sh run.sh
 ./compile.sh
 ./run.sh
 ```
 
-Uncomment the test you want to run in the bash file.
+Edit `run.sh` to point to the config you want to run; the default is one of the demos in `config/`.
 
 ## Project Structure
 
 - **config/**: Provides the methods to handle the json configuration file.
 - **environment/**: Manages the parallel processing of the siumulations.
-- **arena/**: Contains custom arenas where simulations take place. Users can create their own arenas by extending the base classes provided (including the new spherical arena projection).
+- **arena/**: Contains custom arenas where simulations take place. Users can create their own arenas by extending the base classes provided (rectangle/circle/square and the unbounded wrap-around projection).
 - **entityManager/**: Manages the simulation of agents deployed in the arena.
 - **entity/**: Houses the definitions for various entities such as agents, objects, and highlighted areas within the arena.
 - **gui/**: Includes base classes for the graphical user interface. The GUI can be enabled or disabled based on user preference.
@@ -34,10 +32,7 @@ Uncomment the test you want to run in the bash file.
 
 ## Usage
 
-After the first download the compile.sh file must be invoked. To give permissions open the terminal at the base folder level and type: sudo chmod +x *.sh. Then type ./compile.sh.
-Now required packages from the requirements.txt file are installed in the virtual environment.
-
-To run the simulations a run.sh file is provided.
+Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.sh run.sh`). Run `./compile.sh` to install the requirements and `./run.sh` to launch the selected config.
 
 ## Config.json Example
 
@@ -70,13 +65,13 @@ To run the simulations a run.sh file is provided.
         "view": list(str) DEFAULT:None default shows nothing in the side column
         "view_mode": str DEFAULT:"dynamic" - SUPPORTED:"static","dynamic" (initial state for the View dropdown)
     },
-    "arenas":{ Required can define multiple arena to simulate sequentially
+        "arenas":{ Required can define multiple arena to simulate sequentially
         "arena_0":{
             "random_seed": int, DEFAULT:random
             "width": int, DEFAULT:1
             "depth": int, DEFAULT:1
-            "_id": str, Required - SUPPORTED:"rectangle","square","circle","abstract","sphere"
-            "diameter": float, Required only for "_id":"sphere" (defines the spherical surface)
+            "_id": str, Required - SUPPORTED:"rectangle","square","circle","abstract","unbounded"
+            "diameter": float, Required only for "_id":"unbounded" (defines the wrap-around diameter that becomes an ellipse)
             "color": "gray" DEFAULT:white
             "hierarchy": { OPTIONAL - define the reversed-tree partition applied to this arena
                 "depth": int, DEFAULT:0 - number of additional levels (root is level 0)
@@ -84,13 +79,13 @@ To run the simulations a run.sh file is provided.
             }
         }
     },
-    "objects":{ Required can define multiple objects to simulate in the same arena
+        "objects":{ Required can define multiple objects to simulate in the same arena
         "static_0":{
             "number": list(int), DEFAULT:[1] each list's entry will define a different simulation
             "position": list(3Dvec), DEFAULT:None default assings random not-overlapping initial positions
             "orientation": list(3Dvec), DEFAULT:None default assings random initial orientations
             "_id": "str", Required - SUPPORTED:"idle","interactive"
-            "shape": "str", Required - SUPPORTED:"circle","square","rectangle","sphere","cube","cylinder","none" flat geometry can be used to define walkable areas in the arena
+            "shape": "str", Required - SUPPORTED:"circle","square","rectangle","ellipse","sphere","cube","cylinder","none" flat geometry can be used to define walkable areas in the arena
             "height": float, DEFAULT:1 width and depth used for not-round objects
             "diameter": float, DEFAULT:1 used for round objects
             "color": "str", DEFAULT:"black"
@@ -99,13 +94,13 @@ To run the simulations a run.sh file is provided.
             "hierarchy_node": str, OPTIONAL - bind the object to a specific hierarchy node (e.g. "0.1.0")
         }
     },
-    "agents":{ Required can define multiple agents to simulate in the same arena
+        "agents":{ Required can define multiple agents to simulate in the same arena
         "movable_0":{
             "ticks_per_second": int, DEFAULT:5
             "number": list(int), DEFAULT:[1] each list's entry will define a different simulation
             "position": list(3Dvec), DEFAULT:None default assings random not-overlapping initial positions
             "orientation": list(3Dvec), DEFAULT:None default assings random initial orientations
-            "shape": str, - SUPPORTED:"sphere","cube","cylinder","none"
+            "shape": str, - SUPPORTED:"sphere","cube","cylinder","ellipse","none"
             "linear_velocity": float, DEFAULT:0.01 m/s
             "angular_velocity": float, DEFAULT:10 deg/s
             "height": float,
@@ -165,7 +160,7 @@ To run the simulations a run.sh file is provided.
 }
 ```
 
-Raw traces saved under `environment.results.base_path` now obey the spec lists declared in `results.agent_specs` / `results.group_specs`. When an arena hierarchy is configured, each base row also includes the hierarchy node where the agent currently sits so downstream analysis can group by partition. Per-agent pickles (`<group>_<idx>.pkl`) are emitted only when `"base"` is present (sampled `[tick, pos x, pos y, pos z]` rows) and can optionally append `"spin_model"` dumps (`<group>_<idx>_spins.pkl`). Snapshots are taken once per simulated second by default (after the last tick in that second); setting `snapshots_per_second: 2` adds a mid-second capture. Tick `0` is always stored so consumers see the initial pose, and the very last tick is forced even if it does not align with the cadence. Group specs apply to global outputs: `"graph_messages"` / `"graph_detection"` write one pickle per tick under `graphs/<mode>/step_<tick>.pkl`, and the helper spec `"graphs"` enables both. Message edges require that the transmitter has range and a non-zero TX budget **and** the receiver advertises a non-zero RX budget; detection edges only appear when the sensing agent has a non-zero acquisition rate in addition to range. All per-step graph pickles are zipped into `{mode}_graphs.zip` at the end of the run, and finally the whole `run_<n>` folder is compressed so analysis scripts can ingest the pickles while storage stays compact.
+Raw traces saved under `environment.results.base_path` obey the spec lists declared in `results.agent_specs` / `results.group_specs`. When an arena hierarchy is configured, each base row also includes the hierarchy node where the agent currently sits so downstream analysis can group by partition. Per-agent pickles (`<group>_<idx>.pkl`) are emitted only when `"base"` is present (sampled `[tick, pos x, pos y, pos z]` rows) and can optionally append `"spin_model"` dumps (`<group>_<idx>_spins.pkl`). Snapshots are taken once per simulated second by default (after the last tick in that second); setting `snapshots_per_second: 2` adds a mid-second capture. Tick `0` is always stored so consumers see the initial pose, and the very last tick is forced even if it does not align with the cadence. Group specs apply to global outputs: `"graph_messages"` / `"graph_detection"` write one pickle per tick under `graphs/<mode>/step_<tick>.pkl`, and the helper spec `"graphs"` enables both. Message edges require that the transmitter has range and a non-zero TX budget **and** the receiver advertises a non-zero RX budget; detection edges only appear when the sensing agent has a non-zero acquisition rate in addition to range. All per-step graph pickles are zipped into `{mode}_graphs.zip` at the end of the run, and finally the whole `run_<n>` folder is compressed so analysis scripts can ingest the pickles while storage stays compact.
 
 Each pickle is structured for quick DataFrame ingestion: the first record is a header carrying a `columns` list, and all subsequent `{"type": "row"}` entries are dictionaries keyed by those columns. Base traces expose `tick`, `pos x`, `pos y`, `pos z` (plus `hierarchy_node` when enabled). Spin dumps include `tick` and the spin-model fields (`states`, `angles`, `external_field`, `avg_direction_of_activity`). Graph pickles ship `columns: ["source", "target"]` with rows using those keys. Example loader:
 
@@ -288,17 +283,17 @@ When enabled, the simulator records detailed traces through Python’s `logging`
 
 ## Unbounded arena
 
-Set `_id: "sphere"` inside the `environment.arenas` entry to simulate agents inside an unbounded wrap-around arena (internally represented with a spherical projection). Provide the sphere `diameter` and the engine will:
+Setting `_id: "unbounded"` inside the `environment.arenas` block creates an unbounded wrap-around arena. The `diameter` describes the virtual wrap-around surface that is flattened into an ellipse: the width equals the circumference and the height equals half the circumference. After the conversion the arena behaves like the others while keeping wrap-around motion consistent with the surface.
 
-- create a spherical geometry for reference and flatten it into an elliptical map (major axis = circumference, minor axis = half-circumference) using an equirectangular-style projection
-- enable seamless wrap-around movement: entities exiting one edge immediately reappear on the opposite edge, preserving adjacency as on the sphere
-- keep collision handling, perception and messaging identical to other arenas while avoiding hard borders
+- the simulator builds an ellipse that serves as the arena shape (used for collision handling and rendering)
+- wrap-around motion reconnects edges so entities that leave one side reappear on the opposite side without changing their adjacency
+- object/agent movement, detection, and messaging see the same rules as in bounded arenas while the hard borders are removed
 
 Example:
 
 ```json
 "arena_0": {
-  "_id": "sphere",
+  "_id": "unbounded",
   "diameter": 2.0,
   "segments": 120,
   "random_seed": 13,
@@ -306,11 +301,11 @@ Example:
 }
 ```
 
-The optional `segments` field controls how finely the ellipse is tessellated for rendering/collision checks (defaults to 96).
+The `segments` field controls how finely the ellipse is tessellated for rendering and collision checks (defaults to 96).
 
 ## Hierarchical arenas and confinement plugin
 
-Every solid arena can now be partitioned into a reversed tree via the optional
+Every solid arena can be partitioned into a reversed tree via the optional
 `arena.hierarchy` block. Level 0 always represents the whole arena and each
 additional level subdivides every node using either 2 or 4 adjacent branches.
 When the GUI detects more than one level it renders the resulting grid to make
