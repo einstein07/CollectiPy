@@ -3,15 +3,12 @@ set -e
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_BIN_POSIX="$ROOT_DIR/.venv/bin"
-VENV_BIN_WIN="$ROOT_DIR/.venv/Scripts"  # Windows venv layout
 PYTHON_BIN=""
 
 # Prefer the virtualenv interpreter, then fall back to system Python.
 for candidate in \
     "$VENV_BIN_POSIX/python3.10" \
     "$VENV_BIN_POSIX/python3" \
-    "$VENV_BIN_WIN/python.exe" \
-    "$VENV_BIN_WIN/python3.exe" \
     python3.10 \
     python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
