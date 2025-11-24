@@ -18,8 +18,8 @@ class Shape3DFactory:
         """Create shape."""
         if shape_type == "sphere":
             return Sphere(_object, shape_type, config_elem)
-        elif shape_type == "ellipse":
-            return Ellipse(_object, shape_type, config_elem)
+        elif shape_type == "unbounded":
+            return UnboundedShape(_object, shape_type, config_elem)
         elif shape_type in ("square", "cube", "rectangle", "cuboid"):
             return Cuboid(_object, shape_type, config_elem)
         elif shape_type in ("circle", "cylinder"):
@@ -32,7 +32,7 @@ class Shape3DFactory:
 class Shape:
     """Shape."""
     dense_shapes = ["sphere", "cube", "cuboid", "cylinder"]
-    flat_shapes = ["circle", "square", "rectangle", "ellipse"]
+    flat_shapes = ["circle", "square", "rectangle"]
     no_shapes = ["point", "none"]
 
     def __init__(self, config_elem:dict, center: Vector3D = Vector3D()):
@@ -128,13 +128,6 @@ class Shape:
             y = arena_shape.center.y + r * math.sin(angle)
             z = arena_shape.center.z
             return Vector3D(x, y, z)
-        elif isinstance(arena_shape, Ellipse):
-            angle = random_generator.uniform(0, 2 * _PI)
-            r = math.sqrt(random_generator.uniform(0, 1))
-            x = arena_shape.center.x + arena_shape.semi_major * r * math.cos(angle)
-            y = arena_shape.center.y + arena_shape.semi_minor * r * math.sin(angle)
-            z = arena_shape.center.z
-            return Vector3D(x, y, z)
         else:
             min_v = arena_shape.min_vert()
             max_v = arena_shape.max_vert()
@@ -160,17 +153,6 @@ class Shape:
             dz = point.z - shape.center.z
             distance = math.sqrt(dx * dx + dy * dy + dz * dz)
             return distance <= shape.radius
-        if isinstance(shape, Ellipse):
-            dx = point.x - shape.center.x
-            dy = point.y - shape.center.y
-            if shape.semi_major <= 0 or shape.semi_minor <= 0:
-                return False
-            normalized = (dx * dx) / (shape.semi_major ** 2) + (dy * dy) / (shape.semi_minor ** 2)
-            if normalized > 1.0:
-                return False
-            min_z = shape.center.z - shape.height * 0.5
-            max_z = shape.center.z + shape.height * 0.5
-            return min_z <= point.z <= max_z
         else:
             min_v = shape.min_vert()
             max_v = shape.max_vert()
@@ -381,47 +363,29 @@ class Cylinder(Shape):
                     x = cx + self.radius * cos_a
                     y = cy + self.radius * sin_a
                     self.vertices_list.append(Vector3D(x, y, cz - half_height))
-                    self.vertices_list.append(Vector3D(x, y, cz + half_height))
+                self.vertices_list.append(Vector3D(x, y, cz + half_height))
 
-class Ellipse(Shape):
-    """Ellipse."""
+
+class UnboundedShape(Shape):
+    """Shape representing an unbounded arena (large placeholder square)."""
+    BOUND = 1e9
+
     def __init__(self, _object: str, shape_type: str, config_elem: dict, center: Vector3D = Vector3D()):
-        """Initialize the instance."""
         super().__init__(config_elem=config_elem, center=center)
         self._object = _object
         self._id = shape_type
-        width = float(config_elem.get("width", config_elem.get("major_axis", 1.0)))
-        depth = float(config_elem.get("depth", config_elem.get("minor_axis", width)))
-        self.height = float(config_elem.get("height", 1.0))
-        self._segments = max(24, int(config_elem.get("segments", 72)))
-        if width <= 0 or depth <= 0:
-            raise ValueError("Ellipse requires positive width and depth")
-        self.major_axis = width
-        self.minor_axis = depth
         self.set_vertices()
 
-    @property
-    def semi_major(self) -> float:
-        """Semi major."""
-        return self.major_axis * 0.5
-
-    @property
-    def semi_minor(self) -> float:
-        """Semi minor."""
-        return self.minor_axis * 0.5
+    def set_vertices(self):
+        """Set four extreme vertices to approximate infinity."""
+        b = self.BOUND
+        self.vertices_list = [
+            Vector3D(-b, -b, 0),
+            Vector3D(b, -b, 0),
+            Vector3D(b, b, 0),
+            Vector3D(-b, b, 0)
+        ]
 
     def get_radius(self) -> float:
-        """Return the radius."""
-        return max(self.semi_major, self.semi_minor)
-
-    def set_vertices(self):
-        """Set the vertices."""
-        self.vertices_list = []
-        half_h = self.height * 0.5
-        cx, cy, cz = self.center.x, self.center.y, self.center.z
-        for z in (-half_h, half_h):
-            for i in range(self._segments):
-                theta = 2 * _PI * (i / self._segments)
-                x = cx + self.semi_major * math.cos(theta)
-                y = cy + self.semi_minor * math.sin(theta)
-                self.vertices_list.append(Vector3D(x, y, cz + z))
+        """Return an effective radius."""
+        return self.BOUND

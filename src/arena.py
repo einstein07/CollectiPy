@@ -44,7 +44,7 @@ class Arena():
         """Initialize the instance."""
         self.random_generator = Random()
         self._seed_random = random.SystemRandom()
-        self.ticks_per_second = int(config_elem.environment.get("ticks_per_second", 1))
+        self.ticks_per_second = int(config_elem.environment.get("ticks_per_second", 3))
         configured_seed = config_elem.arena.get("random_seed")
         if configured_seed is None:
             configured_seed = 0
@@ -628,54 +628,30 @@ class SolidArena(Arena):
 
 class UnboundedArena(SolidArena):
     
-    """Unbounded arena with wrap-around projection."""
+    """Unbounded arena rendered as a large square without wrap-around."""
     def __init__(self, config_elem:Config):
         """Initialize the instance."""
         self.diameter = float(config_elem.arena.get("diameter", 0))
         if self.diameter <= 0:
             raise ValueError("UnboundedArena requires a positive 'diameter'")
-        self.radius = self.diameter * 0.5
-        self.map_width = 2 * math.pi * self.radius
-        self.map_height = math.pi * self.radius
         super().__init__(config_elem)
-        self._setup_wrap_config()
         logging.info(
-            "Unbounded arena created (diameter=%.3f, ellipse_major=%.3f, ellipse_minor=%.3f)",
+            "Unbounded arena created (diameter=%.3f, square side=%.3f)",
             self.diameter,
-            self.wrap_config["width"],
-            self.wrap_config["height"]
+            self.diameter
         )
 
     def _arena_shape_type(self):
-        """Use an ellipse for the flattened collision area."""
-        return "ellipse"
+        """Use a special unbounded footprint."""
+        return "unbounded"
 
     def _arena_shape_config(self, config_elem:Config):
-        """Adapt the configuration parameters for the ellipse factory."""
-        return {
-            "width": self.map_width,
-            "depth": self.map_height,
-            "height": 1.0,
-            "segments": int(config_elem.arena.get("segments", 96)),
-            "color": config_elem.arena.get("color", "gray")
-        }
-
-    def _setup_wrap_config(self):
-        """Define the wrap-around metadata used by other components."""
-        min_v = self.shape.min_vert()
-        max_v = self.shape.max_vert()
-        self.wrap_config = {
-            "origin": Vector3D(min_v.x, min_v.y, 0),
-            "width": max_v.x - min_v.x,
-            "height": max_v.y - min_v.y,
-            "semi_major": self.map_width * 0.5,
-            "semi_minor": self.map_height * 0.5,
-            "projection": "ellipse"
-        }
+        """Adapt the configuration parameters for the unbounded factory."""
+        return {"color": config_elem.arena.get("color", "gray")}
 
     def get_wrap_config(self):
         """Return the wrap config."""
-        return getattr(self, "wrap_config", None)
+        return {"unbounded": True}
 
 class CircularArena(SolidArena):
     

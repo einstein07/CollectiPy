@@ -18,7 +18,7 @@ Edit `run.sh` to point to the config you want to run; the default is one of the 
 
 - **config/**: Provides the methods to handle the json configuration file.
 - **environment/**: Manages the parallel processing of the siumulations.
-- **arena/**: Contains custom arenas where simulations take place. Users can create their own arenas by extending the base classes provided (rectangle/circle/square and the unbounded wrap-around projection).
+- **arena/**: Contains custom arenas where simulations take place. Users can create their own arenas by extending the base classes provided (rectangle/circle/square and the unbounded square preview).
 - **entityManager/**: Manages the simulation of agents deployed in the arena.
 - **entity/**: Houses the definitions for various entities such as agents, objects, and highlighted areas within the arena.
 - **gui/**: Includes base classes for the graphical user interface. The GUI can be enabled or disabled based on user preference.
@@ -52,7 +52,7 @@ Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.
 {
 "environment":{
     "collisions": bool, DEFAULT:false
-    "ticks_per_second": int, DEFAULT:1
+    "ticks_per_second": int, DEFAULT:3
     "time_limit": int, DEFAULT:0(inf)
     "num_runs": int, DEFAULT:1
     "results":{ DEFAULT:{} empty dict -> no saving. If rendering is enabled -> no saving
@@ -83,7 +83,7 @@ Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.
             "width": int, DEFAULT:1
             "depth": int, DEFAULT:1
             "_id": str, Required - SUPPORTED:"rectangle","square","circle","abstract","unbounded"
-            "diameter": float, Required only for "_id":"unbounded" (defines the wrap-around diameter that becomes an ellipse)
+            "diameter": float, Required only for "_id":"unbounded" (defines the side of the unbounded preview square)
             "color": "gray" DEFAULT:white
             "hierarchy": { OPTIONAL - define the reversed-tree partition applied to this arena
                 "depth": int, DEFAULT:0 - number of additional levels (root is level 0)
@@ -97,7 +97,7 @@ Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.
             "position": list(3Dvec), DEFAULT:None default assings random not-overlapping initial positions
             "orientation": list(3Dvec), DEFAULT:None default assings random initial orientations
             "_id": "str", Required - SUPPORTED:"idle","interactive"
-            "shape": "str", Required - SUPPORTED:"circle","square","rectangle","ellipse","sphere","cube","cylinder","none" flat geometry can be used to define walkable areas in the arena
+            "shape": "str", Required - SUPPORTED:"circle","square","rectangle","sphere","cube","cylinder","none" flat geometry can be used to define walkable areas in the arena
             "height": float, DEFAULT:1 width and depth used for not-round objects
             "diameter": float, DEFAULT:1 used for round objects
             "color": "str", DEFAULT:"black"
@@ -112,7 +112,7 @@ Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.
             "number": list(int), DEFAULT:[1] each list's entry will define a different simulation
             "position": list(3Dvec), DEFAULT:None default assings random not-overlapping initial positions
             "orientation": list(3Dvec), DEFAULT:None default assings random initial orientations
-            "shape": str, - SUPPORTED:"sphere","cube","cylinder","ellipse","none"
+            "shape": str, - SUPPORTED:"sphere","cube","cylinder","none"
             "linear_velocity": float, DEFAULT:0.01 m/s
             "angular_velocity": float, DEFAULT:10 deg/s
             "height": float,

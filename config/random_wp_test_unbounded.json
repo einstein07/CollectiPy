@@ -40,11 +40,7 @@
                 "messages": {
                     "comm_range": 0.1,
                     "type": "broadcast",
-                    "kind": "anonymous",
-                    "timer": {
-                        "distribution": "exponential",
-                        "average": 0
-                    }
+                    "kind": "anonymous"
                 }      
             }
         }   

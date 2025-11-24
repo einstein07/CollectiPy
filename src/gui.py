@@ -91,6 +91,7 @@ class GUI_2D(QWidget):
         self.gui_in_queue = gui_in_queue
         self.gui_control_queue = gui_control_queue
         self.wrap_config = wrap_config
+        self.unbounded_mode = bool(wrap_config and wrap_config.get("unbounded"))
         self.hierarchy_overlay = hierarchy_overlay or []
         self.setWindowTitle("Arena GUI")
         self.setFocusPolicy(Qt.StrongFocus)
@@ -205,10 +206,6 @@ class GUI_2D(QWidget):
             hint = self.spin_window.sizeHint()
             if hint.isValid():
                 self.spin_window.setFixedSize(hint)
-        if self.wrap_config:
-            hint = QLabel("Wrap-around active (sphere projection)")
-            hint.setStyleSheet("color: gray; font-size: 10pt;")
-            self._left_layout.addWidget(hint)
         arena_row = QHBoxLayout()
         arena_row.setContentsMargins(0, 0, 0, 0)
         arena_row.setSpacing(8)
@@ -774,6 +771,8 @@ class GUI_2D(QWidget):
 
     def _compute_arena_rect(self):
         """Return the bounding rectangle of the arena vertices."""
+        if self.unbounded_mode:
+            return self._compute_dynamic_unbounded_rect()
         if not self.arena_vertices:
             return None
         min_x = min(v.x for v in self.arena_vertices)
@@ -840,7 +839,7 @@ class GUI_2D(QWidget):
         agents_rect = self._compute_agents_rect()
         base_rect = None
         # Prefer arena bounds when bounded; otherwise use agents.
-        if self.wrap_config is None and arena_rect is not None:
+        if (self.wrap_config is None or not self.unbounded_mode) and arena_rect is not None:
             base_rect = arena_rect
         elif agents_rect is not None:
             base_rect = agents_rect
@@ -850,6 +849,51 @@ class GUI_2D(QWidget):
             base_rect = QRectF(-5, -5, 10, 10)
         padded = self._pad_rect(base_rect)
         return self._fit_rect_to_aspect(padded)
+
+    def _compute_dynamic_unbounded_rect(self):
+        """Compute a bounded preview rect for unbounded arenas."""
+        centers = self._agent_centers or {}
+        if centers:
+            xs = [c.x for c in centers.values()]
+            ys = [c.y for c in centers.values()]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            span = max(max_x - min_x, max_y - min_y, 1.0)
+            pad = max(span * 0.5, 2.0)
+            rect = QRectF(min_x - pad, min_y - pad, (max_x - min_x) + 2 * pad, (max_y - min_y) + 2 * pad)
+        else:
+            rect = QRectF(-5, -5, 10, 10)
+        return rect
+
+    def _update_unbounded_vertices(self):
+        """Resize the preview square so all agents stay away from edges."""
+        rect = self._compute_dynamic_unbounded_rect()
+        pad = max(rect.width(), rect.height()) * 0.05
+        rect = QRectF(
+            rect.left() - pad,
+            rect.top() - pad,
+            rect.width() + 2 * pad,
+            rect.height() + 2 * pad
+        )
+        # Clamp to current view so the preview stays within the window.
+        vw = max(1, self.view.viewport().width()) if self.view else 1
+        vh = max(1, self.view.viewport().height()) if self.view else 1
+        max_span_x = vw / max(self.scale, 1e-9)
+        max_span_y = vh / max(self.scale, 1e-9)
+        if rect.width() > max_span_x:
+            cx = rect.center().x()
+            rect.setLeft(cx - max_span_x * 0.5)
+            rect.setWidth(max_span_x)
+        if rect.height() > max_span_y:
+            cy = rect.center().y()
+            rect.setTop(cy - max_span_y * 0.5)
+            rect.setHeight(max_span_y)
+        self.arena_vertices = [
+            Vector3D(rect.left(), rect.top(), 0),
+            Vector3D(rect.right(), rect.top(), 0),
+            Vector3D(rect.right(), rect.bottom(), 0),
+            Vector3D(rect.left(), rect.bottom(), 0)
+        ]
 
     def _ensure_view_initialized(self):
         """Initialize the camera view rectangle if missing."""
@@ -866,6 +910,8 @@ class GUI_2D(QWidget):
         self._ensure_view_initialized()
         if self._view_rect is None:
             return
+        if self.unbounded_mode:
+            self._update_unbounded_vertices()
         aspect_fitted = self._fit_rect_to_aspect(self._view_rect)
         if aspect_fitted is not None:
             self._view_rect = aspect_fitted
@@ -1054,6 +1100,8 @@ class GUI_2D(QWidget):
             self._focus_on_agent(target, force=True, lock=True, apply_scene=False)
         elif mode == "centroid":
             self._focus_on_centroid(lock=True, apply_scene=False)
+        if self.unbounded_mode:
+            self._update_unbounded_vertices()
 
     def _update_centroid_button_label(self):
         """Reflect lock state on centroid button label."""
@@ -1329,6 +1377,8 @@ class GUI_2D(QWidget):
         """Draw arena."""
         if not self.arena_vertices:
             return
+        if self.unbounded_mode:
+            self._update_unbounded_vertices()
         scale = self.scale
         offset_x = self.offset_x
         offset_y = self.offset_y
@@ -1341,15 +1391,11 @@ class GUI_2D(QWidget):
         ]
         polygon = QPolygonF(transformed_vertices)
         pen = QPen(Qt.black, 2)
-        if self.wrap_config:
+        if self.wrap_config and not self.unbounded_mode:
             pen.setStyle(Qt.DashLine)
         brush = QBrush(QColor(self.arena_color))
-        if self.wrap_config and self.wrap_config.get("projection") == "ellipse":
-            rect = polygon.boundingRect()
-            self.scene.addEllipse(rect, pen, brush)
-        else:
-            self.scene.addPolygon(polygon, pen, brush)
-        if self.wrap_config:
+        self.scene.addPolygon(polygon, pen, brush)
+        if self.wrap_config and not self.unbounded_mode:
             self._draw_axes_and_wrap_indicators(polygon)
         self._draw_hierarchy_overlay()
 
@@ -1448,8 +1494,10 @@ class GUI_2D(QWidget):
         self._update_camera_lock()
         self._recompute_transform()
         self.scene.clear()
-        if self.is_abstract or not self.arena_vertices:
+        if self.is_abstract:
             self._draw_abstract_dots()
+            return
+        if not self.arena_vertices:
             return
         self.draw_arena()
         scale = self.scale
