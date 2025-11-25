@@ -13,6 +13,55 @@ from geometry_utils.vector3D import Vector3D
 _PI = math.pi
 class Shape3DFactory:
     """Shape 3 d factory."""
+
+    @staticmethod
+    def _normalize_cuboid_config(shape_type: str, config_elem: dict) -> dict:
+        """
+        Ensure consistent dimension fields for cuboid-derived shapes.
+        - square: width = depth = (side|depth|width|height|1), height defaults to the same if missing
+        - cube:   width = depth = height = (side|depth|width|height|1)
+        - cuboid: fill any missing width/depth/height with the first available numeric dimension
+        """
+        cfg = dict(config_elem) if config_elem else {}
+        def _to_float(val):
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return None
+
+        width = _to_float(cfg.get("width"))
+        depth = _to_float(cfg.get("depth"))
+        height = _to_float(cfg.get("height"))
+        side = _to_float(cfg.get("side"))
+
+        base = next((v for v in (side, depth, width, height) if v is not None), 1.0)
+
+        if shape_type == "cube":
+            width = depth = height = base
+        elif shape_type == "square":
+            side_val = side if side is not None else base
+            width = depth = side_val
+            if height is None:
+                height = side_val
+        else:  # cuboid or rectangle
+            if width is None and depth is not None:
+                width = depth
+            if depth is None and width is not None:
+                depth = width
+            if width is None:
+                width = base
+            if depth is None:
+                depth = base
+            if height is None:
+                height = base
+
+        cfg["width"] = width
+        cfg["depth"] = depth
+        cfg["height"] = height
+        if side is not None:
+            cfg["side"] = side
+        return cfg
+
     @staticmethod
     def create_shape(_object:str, shape_type:str, config_elem:dict):
         """Create shape."""
@@ -21,7 +70,8 @@ class Shape3DFactory:
         elif shape_type == "unbounded":
             return UnboundedShape(_object, shape_type, config_elem)
         elif shape_type in ("square", "cube", "rectangle", "cuboid"):
-            return Cuboid(_object, shape_type, config_elem)
+            normalized_cfg = Shape3DFactory._normalize_cuboid_config(shape_type, config_elem)
+            return Cuboid(_object, shape_type, normalized_cfg)
         elif shape_type in ("circle", "cylinder"):
             return Cylinder(_object, shape_type, config_elem)
         elif shape_type == "point" or shape_type == "none":

@@ -4,7 +4,6 @@
         "plugins.examples.collision_handshake_plugin"
     ],
     "environment": {
-        "collisions": false,
         "time_limit": 0,
         "num_runs": 1,
         "gui": {
@@ -28,8 +27,8 @@
                 "height": 0.03,
                 "diameter": 0.05,
                 "color": "cornflowerblue",
-                "linear_velocity": 0.06,
-                "angular_velocity": 75,
+                "linear_velocity": 0.03,
+                "angular_velocity": 30,
                 "moving_behavior": "random_way_point",
                 "logic_behavior": "collision_handshake",
                 "messages": {
@@ -49,8 +48,8 @@
                 "height": 0.03,
                 "diameter": 0.05,
                 "color": "blue",
-                "linear_velocity": 0.05,
-                "angular_velocity": 70,
+                "linear_velocity": 0.03,
+                "angular_velocity": 30,
                 "moving_behavior": "random_way_point",
                 "logic_behavior": "heading_sampler",
                 "messages": {
