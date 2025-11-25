@@ -142,9 +142,12 @@ class SpinSystem:
         if len(active_angles) > 1:
             unit_vectors = np.exp(1j * active_angles)
             R = abs(np.mean(unit_vectors))
-            if R > 0:
-                circ_std = math.sqrt(-2 * math.log(R))
-                return circ_std
+            # Guard against numerical edge cases and clamp into (0, 1).
+            if not math.isfinite(R) or R <= 0.0:
+                return None
+            R_clamped = max(min(R, 1.0 - 1e-12), 1e-12)
+            circ_std = math.sqrt(max(0.0, -2.0 * math.log(R_clamped)))
+            return circ_std
         return None
 
     def reset_spins(self):

@@ -8,6 +8,7 @@
 # ------------------------------------------------------------------------------
 
 """Graphical user interface for the simulator."""
+# pyright: reportAttributeAccessIssue=false
 import logging, math, time
 from typing import Any, Optional, cast
 import matplotlib.pyplot as plt
@@ -686,7 +687,7 @@ class GUI_2D(QWidget):
 
     def _build_graph_highlight(self, mode):
         """Return highlight information for the given mode."""
-        if not self._graph_filter_active():
+        if not self.clicked_spin:
             return None
         index_map = self._graph_index_map.get(mode) or {}
         adjacency = self.connection_lookup.get(mode) or {}
@@ -698,7 +699,7 @@ class GUI_2D(QWidget):
             "edges": set(),
             "selected": selected_idx
         }
-        if self.graph_filter_mode == "direct":
+        if self.graph_filter_mode == "direct" or not self._graph_filter_active():
             neighbors = adjacency.get(self.clicked_spin, set())
             for neighbor in neighbors:
                 idx = index_map.get(neighbor)
@@ -1842,6 +1843,12 @@ class GUI_2D(QWidget):
         for mode, widget in self.graph_views.items():
             graph_data = self.connection_graphs.get(mode, {"nodes": [], "edges": []})
             highlight = self._build_graph_highlight(mode)
+            if highlight is None and self.clicked_spin:
+                # Fallback: dim others even when no adjacency was built.
+                index_map = self._graph_index_map.get(mode) or {}
+                selected_idx = index_map.get(self.clicked_spin)
+                if selected_idx is not None:
+                    highlight = {"nodes": {selected_idx}, "edges": set(), "selected": selected_idx}
             widget.update_graph(graph_data["nodes"], graph_data["edges"], layout, highlight)
 
     @staticmethod
@@ -1953,15 +1960,22 @@ class NetworkGraphWidget(QWidget):
         selected_index = None
         if highlight:
             highlight_edges = highlight.get("edges", set()) or set()
-            highlight_nodes = highlight.get("nodes", set()) or set()
             selected_index = highlight.get("selected")
-        highlight_active = bool(highlight_edges or highlight_nodes)
+            if selected_index is not None:
+                highlight_nodes = {selected_index}
+        highlight_active = selected_index is not None
         for idx, node in enumerate(nodes):
             if idx not in coords:
                 continue
             px, py = coords[idx]
             fill_color = QColor(node.get("color") or "#ffffff")
-            node_brush = QBrush(fill_color if (not highlight_active or idx in highlight_nodes) else self._dim_color(fill_color))
+            # Keep the selected node at full color; dim all others when a highlight is active.
+            if highlight_active and idx not in highlight_nodes:
+                dimmed = self._dim_color(fill_color)
+                dimmed.setAlpha(80)
+                node_brush = QBrush(dimmed)
+            else:
+                node_brush = QBrush(fill_color)
             ellipse = self._scene.addEllipse(
                 px - node_radius,
                 py - node_radius,
@@ -1982,10 +1996,10 @@ class NetworkGraphWidget(QWidget):
                 py - node_radius - label_rect.height() - 2
             )
             if highlight_active and idx not in highlight_nodes:
-                ellipse.setOpacity(0.35)
-                label.setOpacity(0.35)
+                ellipse.setOpacity(0.25)
+                label.setOpacity(0.25)
             if selected_index is not None and idx == selected_index:
-                halo_pen = QPen(Qt.black, 1.5)
+                halo_pen = QPen(Qt.black, 2.0)
                 halo_pen.setCosmetic(True)
                 self._scene.addEllipse(
                     px - node_radius - 4,

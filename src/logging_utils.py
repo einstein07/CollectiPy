@@ -84,8 +84,9 @@ def configure_logging(
     if "enabled" in settings:
         default_warnings.append("Logging 'enabled' is deprecated and ignored; logging is enabled when the 'logging' section is present.")
 
-    # Console logging (only if explicitly enabled via 'console': true).
-    console_enabled = bool(settings.get("console", False))
+    # Console logging (on by default when a logging section exists, unless explicitly disabled).
+    raw_console_flag = settings.get("console", None)
+    console_enabled = True if raw_console_flag is None else bool(raw_console_flag)
     console_level_value = settings.get("console_level")
     if console_level_value is None and "level" in settings:
         console_level_value = settings.get("level")

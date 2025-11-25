@@ -131,8 +131,8 @@ Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.
                 "spin_per_tick": int, DEFAULT:3
                 "spin_pre_run_steps": int, DEFAULT:0 default value avoid pre run steps
                 "perception_width": float, DEFAULT:0.5
-                "num_groups": int, DEFAULT:16
-                "num_spins_per_group": int, DEFAULT:8
+                "num_groups": int, DEFAULT:12
+                "num_spins_per_group": int, DEFAULT:7
                 "perception_global_inhibition": int, DEFAULT:0
                 "T": float, DEFAULT:0.5
                 "J": float, DEFAULT:1

@@ -30,9 +30,9 @@ class SpinMovementModel(MovementModel):
         self.spin_model_params = agent.config_elem.get("spin_model", {})
         self.spin_pre_run_steps = self.spin_model_params.get("spin_pre_run_steps", 0)
         self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 3)
-        self.perception_width = self.spin_model_params.get("perception_width", 0.5)
-        self.num_groups = self.spin_model_params.get("num_groups", 16)
-        self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 8)
+        self.perception_width = self.spin_model_params.get("perception_width", 0.3)
+        self.num_groups = self.spin_model_params.get("num_groups", 12)
+        self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 7)
         self.perception_global_inhibition = self.spin_model_params.get("perception_global_inhibition", 0)
         agent_task = agent.get_task() if hasattr(agent, "get_task") else None
         spin_task = self.spin_model_params.get("task")

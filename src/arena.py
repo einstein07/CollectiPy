@@ -467,16 +467,27 @@ class SolidArena(Arena):
         agents_queues = agents_queue if isinstance(agents_queue, list) else [agents_queue]
         n_managers = len(agents_queues)
 
-        def _combine_agent_snapshots(snapshots):
-            shapes = {}
-            spins = {}
-            metadata = {}
+        def _combine_agent_snapshots(snapshots, cached_shapes, cached_spins, cached_metadata):
+            """
+            Merge per-manager snapshots; when the same group key appears in multiple
+            managers (e.g., split of the same agent type), combine them for the
+            current tick. Shapes/spins are rebuilt every merge to avoid
+            duplicating entries across ticks; metadata is preserved from cache
+            unless a snapshot provides an update.
+            """
+            shapes: dict = {}
+            spins: dict = {}
+            metadata = {k: list(v) for k, v in cached_metadata.items()}
             for snap in snapshots:
                 if not snap:
                     continue
-                shapes.update(snap.get("agents_shapes", {}))
-                spins.update(snap.get("agents_spins", {}))
-                metadata.update(snap.get("agents_metadata", {}))
+                for grp, vals in snap.get("agents_shapes", {}).items():
+                    shapes.setdefault(grp, []).extend(vals)
+                for grp, vals in snap.get("agents_spins", {}).items():
+                    spins.setdefault(grp, []).extend(vals)
+                for grp, vals in snap.get("agents_metadata", {}).items():
+                    metadata[grp] = list(vals)
+            # If no metadata arrived in this batch, keep cached metadata.
             return shapes, spins, metadata
 
         ticks_limit = time_limit*self.ticks_per_second + 1 if time_limit > 0 else 0
@@ -498,7 +509,12 @@ class SolidArena(Arena):
                 latest_agent_data[idx] = self._maybe_get(q, timeout=1.0)
             if any(d is None for d in latest_agent_data):
                 break
-            self.agents_shapes, self.agents_spins, self.agents_metadata = _combine_agent_snapshots(latest_agent_data)
+            self.agents_shapes, self.agents_spins, self.agents_metadata = _combine_agent_snapshots(
+                latest_agent_data,
+                self.agents_shapes,
+                self.agents_spins,
+                self.agents_metadata
+            )
             initial_tick_rate = latest_agent_data[0].get("status", [0, self.ticks_per_second])[1]
             if self.data_handling is not None:
                 self.data_handling.new_run(
@@ -560,7 +576,12 @@ class SolidArena(Arena):
                         latest = self._maybe_get(q, timeout=0.0)
                         if latest is not None:
                             latest_agent_data[idx] = latest
-                    self.agents_shapes, self.agents_spins, self.agents_metadata = _combine_agent_snapshots(latest_agent_data)
+                    self.agents_shapes, self.agents_spins, self.agents_metadata = _combine_agent_snapshots(
+                        latest_agent_data,
+                        self.agents_shapes,
+                        self.agents_spins,
+                        self.agents_metadata
+                    )
                     if self.data_handling is not None:
                         tick_stamp = arena_data.get("status", [t, self.ticks_per_second])[0]
                         tick_rate = arena_data.get("status", [tick_stamp, self.ticks_per_second])[1]

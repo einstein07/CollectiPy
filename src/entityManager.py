@@ -128,12 +128,15 @@ class EntityManager:
     def initialize(self, random_seed:int, objects:dict):
         """Initialize the component state."""
         logger.info("Initializing agents with random seed %s", random_seed)
+        seed_counter = 0
         for (_, entities) in self.agents.values():
             for entity in entities:
                 entity.set_position(Vector3D(999, 0, 0), False)
         for (config, entities) in self.agents.values():
             for entity in entities:
-                entity.set_random_generator(random_seed)
+                entity_seed = random_seed + seed_counter if random_seed is not None else seed_counter
+                seed_counter += 1
+                entity.set_random_generator(entity_seed)
                 entity.reset()
                 if not entity.get_orientation_from_dict():
                     rand_angle = Random.uniform(entity.get_random_generator(), 0.0, 360.0)
@@ -220,6 +223,8 @@ class EntityManager:
         run = 1
         logger.info("EntityManager starting for %s runs (time_limit=%s)", num_runs, time_limit)
         while run < num_runs + 1:
+            metadata_sent = False
+            metadata_snapshot = self.get_agent_metadata()
             reset = False
             data_in = self._blocking_get(arena_queue)
             if data_in is None:
@@ -235,7 +240,7 @@ class EntityManager:
                 "status": [0, ticks_per_second],
                 "agents_shapes": self.get_agent_shapes(),
                 "agents_spins": self.get_agent_spins(),
-                "agents_metadata": self.get_agent_metadata()
+                "agents_metadata": metadata_snapshot
             }
             agents_queue.put(agents_data)
             t = 1
@@ -280,12 +285,15 @@ class EntityManager:
                             entity.receive_messages(t)
                         entity.run(t, self.arena_shape, data_in["objects"],self.get_agent_shapes())
                         self._apply_wrap(entity)
+                        self._clamp_to_arena(entity)
                 agents_data = {
                     "status": [t, ticks_per_second],
                     "agents_shapes": self.get_agent_shapes(),
-                    "agents_spins": self.get_agent_spins(),
-                    "agents_metadata": self.get_agent_metadata()
+                    "agents_spins": self.get_agent_spins()
                 }
+                if not metadata_sent:
+                    agents_data["agents_metadata"] = metadata_snapshot
+                    metadata_sent = True
                 detector_data = {
                     "manager_id": self.manager_id,
                     "agents": self.pack_detector_data()
@@ -301,10 +309,12 @@ class EntityManager:
                         for n, entity in enumerate(entities):
                             entity.post_step(pos[n])
                             self._apply_wrap(entity)
+                            self._clamp_to_arena(entity)
                     else:
                         for entity in entities:
                             entity.post_step(None)
                             self._apply_wrap(entity)
+                            self._clamp_to_arena(entity)
                 t += 1
             if t < ticks_limit and not reset:
                 break
@@ -355,6 +365,53 @@ class EntityManager:
         entity.set_position(wrapped)
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug("%s wrapped to %s", entity.get_name(), (wrapped.x, wrapped.y, wrapped.z))
+
+    def _clamp_to_arena(self, entity):
+        """Clamp entity position inside arena bounds when wrap-around is disabled."""
+        if self.wrap_config and self.wrap_config.get("unbounded"):
+            return
+        pos = entity.get_position()
+        radius = self._estimate_entity_radius(entity.get_shape())
+        min_v = self._global_min
+        max_v = self._global_max
+        cx = (min_v.x + max_v.x) * 0.5
+        cy = (min_v.y + max_v.y) * 0.5
+
+        # Try circle-aware clamp when arena exposes a radius.
+        arena_radius = None
+        getter = getattr(self.arena_shape, "get_radius", None)
+        if callable(getter):
+            try:
+                arena_radius = float(getter())
+            except Exception:
+                arena_radius = None
+
+        clamped_pos = None
+        if arena_radius is not None and arena_radius > 0:
+            limit = max(0.0, arena_radius - radius)
+            dx = pos.x - cx
+            dy = pos.y - cy
+            dist = math.hypot(dx, dy)
+            if dist > limit and dist > 0:
+                scale = limit / dist if dist > 0 else 0.0
+                clamped_pos = Vector3D(cx + dx * scale, cy + dy * scale, pos.z)
+        if clamped_pos is None:
+            min_x = min_v.x + radius
+            max_x = max_v.x - radius
+            min_y = min_v.y + radius
+            max_y = max_v.y - radius
+            if min_x > max_x or min_y > max_y:
+                clamped_pos = Vector3D(cx, cy, pos.z)
+            else:
+                clamped_x = min(max(pos.x, min_x), max_x)
+                clamped_y = min(max(pos.y, min_y), max_y)
+                if clamped_x == pos.x and clamped_y == pos.y:
+                    return
+                clamped_pos = Vector3D(clamped_x, clamped_y, pos.z)
+        if clamped_pos and (clamped_pos.x != pos.x or clamped_pos.y != pos.y):
+            entity.set_position(clamped_pos)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("%s clamped to arena bounds %s", entity.get_name(), (clamped_pos.x, clamped_pos.y, clamped_pos.z))
 
     def _get_entity_xy_bounds(self, entity, pad: float = 0.0):
         """Return the entity xy bounds padded inward by `pad` to keep placements inside walls."""

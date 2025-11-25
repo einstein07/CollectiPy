@@ -54,6 +54,26 @@ def set_affinity_safely(proc, num_cores):
     except Exception as e:
         logging.error(f"[AFFINITY ERROR] PID {proc.pid}: {e}")
 
+def set_shared_affinity(processes, num_cores):
+    """
+    Assign the same core set to a list of processes. It tries to reserve
+    num_cores distinct cores; if not available it falls back to all cores.
+    """
+    global used_cores
+    try:
+        selected = pick_least_used_free_cores(num_cores)
+        if not selected:
+            fallback_count = psutil.cpu_count(logical=True) or 1
+            selected = list(range(fallback_count))
+        for proc in processes:
+            if proc is None:
+                continue
+            p = psutil.Process(proc.pid)
+            p.cpu_affinity(selected)
+        used_cores.update(selected)
+    except Exception as e:
+        logging.error(f"[AFFINITY ERROR] shared for {[p.pid for p in processes if p]}: {e}")
+
 class _PipeQueue:
     """Single-producer/single-consumer queue backed by Pipe with poll()."""
     def __init__(self, ctx: BaseContext):
@@ -124,17 +144,20 @@ class Environment():
         agents: Dict[str, tuple[Dict[str, Any], list]] = {
             agent_type: (cfg, []) for agent_type, cfg in agents_cfg.items()
         }
-        for key,(config,entities) in agents.items():
+        for agent_type, (config,entities) in agents.items():
             if not isinstance(config, dict):
-                raise ValueError(f"Invalid agent configuration for {key}")
+                raise ValueError(f"Invalid agent configuration for {agent_type}")
             number_raw = config.get("number", 0)
             try:
                 number = int(number_raw)
             except (TypeError, ValueError):
-                raise ValueError(f"Invalid number of agents for {key}: {number_raw}")
+                raise ValueError(f"Invalid number of agents for {agent_type}: {number_raw}")
+            if number <= 0:
+                raise ValueError(f"Agent group {agent_type} must have a positive 'number' of agents")
             for n in range(number):
-                entities.append(EntityFactory.create_entity(entity_type="agent_"+key,config_elem=config,_id=n))
-        logging.info(f"Agents initialized: {list(agents.keys())}")
+                entities.append(EntityFactory.create_entity(entity_type="agent_"+agent_type,config_elem=config,_id=n))
+        totals = {name: len(ents) for name, (_, ents) in agents.items()}
+        logging.info("Agents initialized: total=%s groups=%s", sum(totals.values()), totals)
         return agents
 
     def _split_agents(self, agents: Dict[str, tuple[Dict[str, Any], list]], num_blocks: int) -> list[Dict[str, tuple[Dict[str, Any], list]]]:
@@ -153,6 +176,8 @@ class Environment():
             if agent_type not in blocks[target]:
                 blocks[target][agent_type] = (cfg, [])
             blocks[target][agent_type][1].append(entity)
+        # If the split produced fewer blocks than requested (e.g., low agent count), trim empties.
+        blocks = [b for b in blocks if any(len(v[1]) for v in b.values())]
         return blocks
 
     @staticmethod
@@ -162,6 +187,49 @@ class Environment():
         for _, (_, entities) in agents.items():
             total += len(entities)
         return total
+
+    def _estimate_agents_per_process(self, agents: Dict[str, tuple[Dict[str, Any], list]]) -> int:
+        """
+        Derive the desired number of agents per process based on workload.
+        Heavy (spin_model) -> tighter packing; light -> more agents per proc.
+        """
+        has_spin = False
+        has_messages = False
+        has_fast_detection = False
+        for cfg, entities in agents.values():
+            behavior = str(cfg.get("moving_behavior", "") or "").lower()
+            if behavior == "spin_model":
+                has_spin = True
+            if cfg.get("messages"):
+                has_messages = True
+            det_cfg = cfg.get("detection", {}) or {}
+            try:
+                acq_rate = float(det_cfg.get("acquisition_per_second", det_cfg.get("rx_per_second", 1)))
+                if acq_rate > 1:
+                    has_fast_detection = True
+            except Exception:
+                pass
+        if has_spin:
+            return 6  # ~5-10 agents per proc target for heavy runs
+        if has_messages or has_fast_detection:
+            return 10  # medium workloads
+        return 20  # light workloads; still below the 30 upper guidance
+
+    def _compute_agent_processes(self, agents: Dict[str, tuple[Dict[str, Any], list]]) -> int:
+        """
+        Compute number of agent manager processes with internal heuristics.
+        - Prefer ~10 agents/proc, allow up to 30 for light, down to ~5 for heavy.
+        - Cap at 8 processes.
+        """
+        total_agents = self._count_agents(agents)
+        if total_agents <= 0:
+            return 1
+        target = self._estimate_agents_per_process(agents)
+        # Clamp the target between 5 and 30 to respect the desired envelope.
+        target = max(5, min(30, target))
+        import math
+        n_procs = math.ceil(total_agents / target)
+        return max(1, min(8, n_procs))
 
     def run_gui(self, config:dict, arena_vertices:list, arena_color:str, gui_in_queue, gui_control_queue, wrap_config=None, hierarchy_overlay=None):
         """Run the gui."""
@@ -206,8 +274,9 @@ class Environment():
             except Exception:
                 pass
             agents = self.agents_init(exp)
-            processes_requested = max(1, int(exp.environment.get("per_agents_process", 1) or 1))
-            agent_blocks = self._split_agents(agents, processes_requested)
+            n_agent_procs = self._compute_agent_processes(agents)
+            logging.info("Agent process auto-split: total_agents=%d -> processes=%d", self._count_agents(agents), n_agent_procs)
+            agent_blocks = self._split_agents(agents, n_agent_procs)
             n_blocks = len(agent_blocks)
             # Detector input/output queues
             dec_agents_in_list = [_PipeQueue(ctx) for _ in range(n_blocks)]
@@ -293,8 +362,11 @@ class Environment():
                     proc.start()
                 arena_process.start()
                 set_affinity_safely(arena_process,   pattern["arena"])
-                for proc in manager_processes:
-                    set_affinity_safely(proc,  pattern["agents"])
+                # Agent processes share the same core set (2 cores per proc, max 8 procs)
+                agent_core_budget = psutil.cpu_count(logical=True) or (n_blocks * 2)
+                agent_core_budget = min(agent_core_budget, n_blocks * 2)
+                agent_core_budget = max(agent_core_budget, 2 if n_blocks > 0 else 1)
+                set_shared_affinity(manager_processes, agent_core_budget)
                 if detector_process:
                     set_affinity_safely(detector_process, pattern["detector"])
                 set_affinity_safely(gui_process, pattern["gui"])
@@ -352,8 +424,10 @@ class Environment():
                     proc.start()
                 arena_process.start()
                 set_affinity_safely(arena_process,   pattern["arena"])
-                for proc in manager_processes:
-                    set_affinity_safely(proc,  pattern["agents"])
+                agent_core_budget = psutil.cpu_count(logical=True) or (n_blocks * 2)
+                agent_core_budget = min(agent_core_budget, n_blocks * 2)
+                agent_core_budget = max(agent_core_budget, 2 if n_blocks > 0 else 1)
+                set_shared_affinity(manager_processes, agent_core_budget)
                 if detector_process:
                     set_affinity_safely(detector_process, pattern["detector"])
                 while arena_process.is_alive() and all(proc.is_alive() for proc in manager_processes):

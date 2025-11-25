@@ -20,7 +20,7 @@
         },
         "agents":{
             "movable_0":{
-                "number": [30],
+                "number": [50],
                 "shape": "cylinder",
                 "linear_velocity": 0.01,
                 "angular_velocity": 10,
