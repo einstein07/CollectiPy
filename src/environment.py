@@ -219,8 +219,9 @@ class Environment():
         """
         Compute number of agent manager processes with internal heuristics.
         - Prefer ~10 agents/proc, allow up to 30 for light, down to ~5 for heavy.
-        - Cap at 8 processes.
+        - Cap at 8 processes and at the available CPU budget.
         """
+        available_cores = psutil.cpu_count(logical=True) or 1
         total_agents = self._count_agents(agents)
         if total_agents <= 0:
             return 1
@@ -229,7 +230,10 @@ class Environment():
         target = max(5, min(30, target))
         import math
         n_procs = math.ceil(total_agents / target)
-        return max(1, min(8, n_procs))
+        # Leave headroom for env + arena + detector (+ GUI when enabled).
+        reserved = 3 + (1 if self.render and self.render[0] else 0)
+        max_for_agents = max(1, available_cores - reserved)
+        return max(1, min(8, n_procs, max_for_agents))
 
     def run_gui(self, config:dict, arena_vertices:list, arena_color:str, gui_in_queue, gui_control_queue, wrap_config=None, hierarchy_overlay=None):
         """Run the gui."""
@@ -248,6 +252,9 @@ class Environment():
     def start(self):
         """Start the process."""
         ctx = mp.get_context("fork")
+        # Reset affinity bookkeeping for each run to match the current machine state.
+        used_cores.clear()
+        total_cores = psutil.cpu_count(logical=True) or 1
         # Reserve a dedicated core for the environment/main process so workers use different ones.
         try:
             env_core = pick_least_used_free_cores(1)
@@ -274,6 +281,7 @@ class Environment():
             except Exception:
                 pass
             agents = self.agents_init(exp)
+            render_enabled = self.render[0]
             n_agent_procs = self._compute_agent_processes(agents)
             logging.info("Agent process auto-split: total_agents=%d -> processes=%d", self._count_agents(agents), n_agent_procs)
             agent_blocks = self._split_agents(agents, n_agent_procs)
@@ -288,7 +296,6 @@ class Environment():
             if arena_shape is None:
                 raise ValueError("Arena shape was not initialized; cannot start environment.")
             arena_id = arena.get_id()
-            render_enabled = self.render[0]
             wrap_config = arena.get_wrap_config()
             arena_hierarchy = arena.get_hierarchy()
             collision_detector = CollisionDetector(arena_shape, self.collisions, wrap_config=wrap_config)
@@ -333,9 +340,9 @@ class Environment():
             det_out_arg = dec_agents_out_list if n_blocks > 1 else dec_agents_out_list[0]
             detector_process = mp.Process(target=collision_detector.run, args=(det_in_arg, det_out_arg, dec_arena_in))
             pattern = {
-                "arena": 1,
+                "arena": 2,
                 "agents": 3,
-                "detector": 1,
+                "detector": 3,
                 "gui": 2
             }
             killed = 0
@@ -362,10 +369,10 @@ class Environment():
                     proc.start()
                 arena_process.start()
                 set_affinity_safely(arena_process,   pattern["arena"])
-                # Agent processes share the same core set (2 cores per proc, max 8 procs)
-                agent_core_budget = psutil.cpu_count(logical=True) or (n_blocks * 2)
-                agent_core_budget = min(agent_core_budget, n_blocks * 2)
-                agent_core_budget = max(agent_core_budget, 2 if n_blocks > 0 else 1)
+                # Agent processes share a capped core set (2 cores per proc) within remaining CPU budget.
+                available_remaining = max(1, total_cores - len(used_cores))
+                agent_core_budget = min(n_blocks * 2, available_remaining)
+                agent_core_budget = max(agent_core_budget, 1)
                 set_shared_affinity(manager_processes, agent_core_budget)
                 if detector_process:
                     set_affinity_safely(detector_process, pattern["detector"])
@@ -424,9 +431,9 @@ class Environment():
                     proc.start()
                 arena_process.start()
                 set_affinity_safely(arena_process,   pattern["arena"])
-                agent_core_budget = psutil.cpu_count(logical=True) or (n_blocks * 2)
-                agent_core_budget = min(agent_core_budget, n_blocks * 2)
-                agent_core_budget = max(agent_core_budget, 2 if n_blocks > 0 else 1)
+                available_remaining = max(1, total_cores - len(used_cores))
+                agent_core_budget = min(n_blocks * 2, available_remaining)
+                agent_core_budget = max(agent_core_budget, 1)
                 set_shared_affinity(manager_processes, agent_core_budget)
                 if detector_process:
                     set_affinity_safely(detector_process, pattern["detector"])

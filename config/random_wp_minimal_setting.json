@@ -14,7 +14,7 @@
         "objects": {},
         "agents": {
             "movable_0": {
-                "number": [100],
+                "number": [180],
                 "shape": "cylinder",
                 "height": 0.02,
                 "diameter": 0.03,
