@@ -93,6 +93,8 @@ class Environment():
         self.num_runs = int(config_elem.environment.get("num_runs",1))
         self.time_limit = int(config_elem.environment.get("time_limit",0))
         self.gui_id = config_elem.gui.get("_id","2D")
+        self.quiet = bool(config_elem.environment.get("quiet", False))
+        self.snapshot_stride = max(1, int(config_elem.environment.get("snapshot_stride", 1) or 1))
         base_gui_cfg = dict(config_elem.gui) if len(config_elem.gui) > 0 else {}
         self.render = [True, base_gui_cfg] if base_gui_cfg else [False, {}]
         self.collisions = config_elem.environment.get("collisions",False)
@@ -155,6 +157,10 @@ class Environment():
             gui_in_queue = _PipeQueue(ctx)
             gui_control_queue = _PipeQueue(ctx)
             arena = self.arena_init(exp)
+            try:
+                arena.quiet = self.quiet
+            except Exception:
+                pass
             agents = self.agents_init(exp)
             arena_shape = arena.get_shape()
             if arena_shape is None:
@@ -169,10 +175,10 @@ class Environment():
             agents_process = mp.Process(target=entity_manager.run, args=(self.num_runs, self.time_limit, arena_queue, agents_queue, dec_agents_in, dec_agents_out))
             detector_process = mp.Process(target=collision_detector.run, args=(dec_agents_in, dec_agents_out, dec_arena_in))
             pattern = {
-                "arena": 2,
-                "agents": 2,
-                "detector": 2,
-                "gui": 2
+                "arena": 3,
+                "agents": 9,
+                "detector": 3,
+                "gui": 3
             }
             killed = 0
             if render_enabled:

@@ -11,6 +11,7 @@
 import logging
 import math
 import multiprocessing as mp
+import time
 from typing import Optional
 from messagebus import MessageBusFactory
 from random import Random
@@ -25,12 +26,39 @@ class EntityManager:
     PLACEMENT_MAX_ATTEMPTS = 200
     PLACEMENT_MARGIN_FACTOR = 1.3
     PLACEMENT_MARGIN_EPS = 0.002
-    def __init__(self, agents:dict, arena_shape, wrap_config=None, hierarchy: Optional[ArenaHierarchy] = None):
+
+    @staticmethod
+    def _blocking_get(q, timeout: float = 0.01, sleep_s: float = 0.001):
+        """Get from a queue/Pipe with a tiny sleep to avoid busy-wait."""
+        while True:
+            if hasattr(q, "poll"):
+                if q.poll(timeout):
+                    return q.get()
+            else:
+                try:
+                    return q.get(timeout=timeout)
+                except Exception:
+                    pass
+            time.sleep(sleep_s)
+
+    @staticmethod
+    def _maybe_get(q, timeout: float = 0.0):
+        """Non-blocking get with optional timeout."""
+        if hasattr(q, "poll"):
+            if q.poll(timeout):
+                return q.get()
+            return None
+        try:
+            return q.get(timeout=timeout)
+        except Exception:
+            return None
+    def __init__(self, agents:dict, arena_shape, wrap_config=None, hierarchy: Optional[ArenaHierarchy] = None, snapshot_stride: int = 1):
         """Initialize the instance."""
         self.agents = agents
         self.arena_shape = arena_shape
         self.wrap_config = wrap_config
         self.hierarchy = hierarchy
+        self.snapshot_stride = max(1, snapshot_stride)
         self.message_buses = {}
         self._global_min = self.arena_shape.min_vert()
         self._global_max = self.arena_shape.max_vert()
@@ -163,9 +191,7 @@ class EntityManager:
         logger.info("EntityManager starting for %s runs (time_limit=%s)", num_runs, time_limit)
         while run < num_runs + 1:
             reset = False
-            while arena_queue.qsize() == 0:
-                pass
-            data_in = arena_queue.get()
+            data_in = self._blocking_get(arena_queue)
             if data_in["status"][0] == 0:
                 self.initialize(data_in["random_seed"], data_in["objects"])
             for agent_type, (_, entities) in self.agents.items():
@@ -188,11 +214,14 @@ class EntityManager:
                     reset = True
                     break
                 while data_in["status"][0] / data_in["status"][1] < t / ticks_per_second:
-                    if arena_queue.qsize() > 0:
-                        data_in = arena_queue.get()
+                    new_msg = self._maybe_get(arena_queue, timeout=0.01)
+                    if new_msg is not None:
+                        data_in = new_msg
                         if data_in["status"] == "reset":
                             reset = True
                             break
+                    else:
+                        time.sleep(0.001)
                     agents_data = {
                         "status": [t, ticks_per_second],
                         "agents_shapes": self.get_agent_shapes(),
@@ -202,8 +231,9 @@ class EntityManager:
                     if agents_queue.qsize() == 0:
                         agents_queue.put(agents_data)
                 if reset: break
-                if arena_queue.qsize() > 0:
-                    data_in = arena_queue.get()
+                latest = self._maybe_get(arena_queue, timeout=0.0)
+                if latest is not None:
+                    data_in = latest
                 for agent_type, (_, entities) in self.agents.items():
                     bus = self.message_buses.get(agent_type)
                     if bus:
@@ -228,8 +258,10 @@ class EntityManager:
                     "agents": self.pack_detector_data()
                 }
                 agents_queue.put(agents_data)
-                dec_agents_in.put(detector_data)
-                dec_data_in = dec_agents_out.get()
+                dec_data_in = {}
+                if t % self.snapshot_stride == 0:
+                    dec_agents_in.put(detector_data)
+                    dec_data_in = self._blocking_get(dec_agents_out)
                 for _, entities in self.agents.values():
                     pos = dec_data_in.get(entities[0].entity())
                     if pos is not None:
@@ -244,8 +276,11 @@ class EntityManager:
             if t < ticks_limit and not reset:
                 break
             if run < num_runs:
-                while arena_queue.qsize() > 1:
-                    data_in = arena_queue.get()
+                # Drain extra arena messages with gentle polling.
+                drained = self._maybe_get(arena_queue, timeout=0.01)
+                while drained is not None:
+                    data_in = drained
+                    drained = self._maybe_get(arena_queue, timeout=0.0)
             elif not reset:
                 self.close()
             if not reset:

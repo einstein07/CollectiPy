@@ -81,6 +81,33 @@ class Arena():
         self._gui_backpressure_enabled = bool(enabled_flag) if enabled_flag is not None else True
         self._gui_backpressure_interval = max(0.001, interval_ms / 1000.0)
         self._gui_backpressure_active = False
+        self.quiet = getattr(config_elem, "quiet", False) if config_elem else False
+
+    @staticmethod
+    def _blocking_get(q, timeout: float = 0.01, sleep_s: float = 0.001):
+        """Get from a queue/Pipe with tiny sleep to avoid busy-wait."""
+        while True:
+            if hasattr(q, "poll"):
+                if q.poll(timeout):
+                    return q.get()
+            else:
+                try:
+                    return q.get(timeout=timeout)
+                except Exception:
+                    pass
+            time.sleep(sleep_s)
+
+    @staticmethod
+    def _maybe_get(q, timeout: float = 0.0):
+        """Non-blocking get with optional timeout."""
+        if hasattr(q, "poll"):
+            if q.poll(timeout):
+                return q.get()
+            return None
+        try:
+            return q.get(timeout=timeout)
+        except Exception:
+            return None
 
     def get_id(self):
         """Return the id."""
@@ -439,8 +466,7 @@ class SolidArena(Arena):
                 self._apply_gui_backpressure(gui_in_queue)
             arena_queue.put({**arena_data, "random_seed": self.random_seed})
 
-            while agents_queue.qsize() == 0: pass
-            data_in = agents_queue.get()
+            data_in = self._blocking_get(agents_queue)
             self.agents_shapes = data_in["agents_shapes"]
             self.agents_spins = data_in["agents_spins"]
             self.agents_metadata = data_in.get("agents_metadata", {})
@@ -460,27 +486,32 @@ class SolidArena(Arena):
             last_snapshot_info = None
             while True:
                 if ticks_limit > 0 and t >= ticks_limit: break
-                if render and gui_control_queue.qsize()>0:
-                    cmd = gui_control_queue.get()
-                    if cmd == "start":
-                        running = True
-                    elif cmd == "stop":
-                        running = False
-                    elif cmd == "step":
-                        running = False
-                        step_mode = True
-                    elif cmd == "reset":
-                        running = False
-                        reset = True
+                if render:
+                    cmd = self._maybe_get(gui_control_queue, timeout=0.0)
+                    while cmd is not None:
+                        if cmd == "start":
+                            running = True
+                        elif cmd == "stop":
+                            running = False
+                        elif cmd == "step":
+                            running = False
+                            step_mode = True
+                        elif cmd == "reset":
+                            running = False
+                            reset = True
+                        cmd = self._maybe_get(gui_control_queue, timeout=0.0)
                 arena_data = {
                     "status": [t,self.ticks_per_second],
                     "objects": self.pack_objects_data()
                 }
                 if running or step_mode:
-                    if not render: print(f"\rarena_ticks {t}", end='', flush=True)
+                    if not render and not getattr(self, "quiet", False):
+                        print(f"\rarena_ticks {t}", end='', flush=True)
                     arena_queue.put(arena_data)
                     while data_in["status"][0]/data_in["status"][1] < t/self.ticks_per_second:
-                        if agents_queue.qsize()>0: data_in = agents_queue.get()
+                        latest = self._maybe_get(agents_queue, timeout=0.01)
+                        if latest is not None:
+                            data_in = latest
                         arena_data = {
                             "status": [t,self.ticks_per_second],
                             "objects": self.pack_objects_data()
@@ -491,8 +522,11 @@ class SolidArena(Arena):
                         if arena_queue.qsize()==0:
                             arena_queue.put(arena_data)
                             dec_arena_in.put(detector_data)
+                        time.sleep(0.001)
 
-                    if agents_queue.qsize()>0: data_in = agents_queue.get()
+                    latest = self._maybe_get(agents_queue, timeout=0.0)
+                    if latest is not None:
+                        data_in = latest
                     self.agents_shapes = data_in["agents_shapes"]
                     self.agents_spins = data_in["agents_spins"]
                     self.agents_metadata = data_in.get("agents_metadata", {})

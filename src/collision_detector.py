@@ -11,6 +11,7 @@
 from __future__ import annotations
 import logging
 import multiprocessing as mp
+import time
 from typing import Dict, List, Optional, Tuple
 from bodies.shapes3D import Shape
 from geometry_utils.vector3D import Vector3D
@@ -52,13 +53,16 @@ class CollisionDetector:
         logger.info("CollisionDetector started (collisions=%s)", self.collisions)
         while True:
             out: Dict[str, List[Optional[Vector3D]]] = {}
+            idle = True
             # Pull the latest objects description when available.
             if dec_arena_in.poll(0):
                 self.objects = dec_arena_in.get()["objects"]
+                idle = False
                 logger.debug("Objects updated (%d groups)", len(self.objects))
             # Pull agent data (shapes, velocities, names, ...).
             if dec_agents_in.poll(0):
                 self.agents = dec_agents_in.get()["agents"]
+                idle = False
                 logger.debug("Agent state received (%d groups)", len(self.agents))
                 for club, (shapes, velocities, vectors, positions, names) in self.agents.items():
                     n_shapes = len(shapes)
@@ -106,6 +110,8 @@ class CollisionDetector:
                             logger.debug("%s collision correction -> %s", name, correction)
                     out[club] = out_tmp
                 dec_agents_out.put(out)
+            if idle:
+                time.sleep(0.001)
 
     def _resolve_agent_collisions(
         self,

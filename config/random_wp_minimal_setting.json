@@ -1,13 +1,10 @@
 {
     "environment": {
         "collisions": false,
-        "time_limit": 0,
+        "time_limit": 500,
         "num_runs": 1,
-        "per_agents_process": 5,
-        "results": {},
-        "gui": {
-            "_id": "2D"
-        },
+        "per_agents_process": 1,
+        "snapshot_stride": 30,
         "arenas": {
             "arena_0": {
                 "_id": "square",
