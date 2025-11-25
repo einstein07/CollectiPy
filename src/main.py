@@ -26,6 +26,7 @@ def print_usage(errcode=None):
 def main(argv):
     """Parse arguments and start the simulator."""
     configfile = ""
+    opts = []
     try:
         opts, args = getopt.getopt(argv, "hc:", ["config="])
     except getopt.GetoptError:

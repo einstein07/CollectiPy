@@ -18,7 +18,8 @@ The aim is to keep backward compatibility with the original project:
 if no plugins are configured, the simulator behaves exactly as before.
 """
 
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Mapping, Protocol, Sequence
+import numpy as np
 
 class MovementModel(Protocol):
     """
@@ -54,7 +55,7 @@ class DetectionModel(Protocol):
         objects: dict,
         agents: dict,
         arena_shape = None
-    ):
+    ) -> Mapping[str, np.ndarray] | np.ndarray:
         """Return the perception produced for `agent`."""
 
 class MessageBusModel(Protocol):
@@ -79,7 +80,7 @@ class MessageBusModel(Protocol):
     def send_message(self, sender: Any, msg: dict) -> None:
         """Deliver a message produced by `sender`."""
 
-    def receive_messages(self, receiver: Any, limit: int | None = None):
+    def receive_messages(self, receiver: Any, limit: int | None = None) -> Sequence[dict]:
         """Return up to `limit` messages queued for `receiver`."""
 
     def close(self) -> None:

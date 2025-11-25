@@ -135,7 +135,10 @@ class GPSDetectionModel(DetectionModel):
         checker = getattr(self.agent, "allows_hierarchical_link", None)
         if not callable(checker):
             return True
-        return checker(target_node, "detection", hierarchy)
+        try:
+            return bool(checker(target_node, "detection", hierarchy))
+        except Exception:
+            return False
 
     @staticmethod
     def _resolve_hierarchy(agent, arena_shape):

@@ -132,7 +132,7 @@ def configure_logging(
 def _prepare_log_artifacts(
     config_path: Optional[str | Path],
     project_root: Optional[str | Path],
-) -> Dict[str, Optional[Path]]:
+) -> Dict[str, Path | str | bool | None]:
     """
     Compute log paths and metadata without touching the filesystem with files.
     Actual copying/writing is deferred until the first log entry is emitted.
@@ -171,21 +171,26 @@ def _prepare_log_artifacts(
         "finalized": False,
     }
 
-def _finalize_log_artifacts(context: Dict[str, Optional[Path]]) -> None:
+def _finalize_log_artifacts(context: Dict[str, Path | str | bool | None]) -> None:
     """
     Copy the config file (if any) and update the hash mapping.
     """
     if context.get("finalized"):
         return
     context["finalized"] = True
-    cfg_path_obj: Optional[Path] = context.get("config_path")  # type: ignore[assignment]
+    cfg_path_obj = context.get("config_path")
+    cfg_path_obj = cfg_path_obj if isinstance(cfg_path_obj, Path) else None
     cfg_hash = context.get("config_hash")
-    log_dir: Path = context["log_dir"]  # type: ignore[assignment]
-    log_path: Path = context["log_path"]  # type: ignore[assignment]
+    log_dir = context.get("log_dir")
+    log_path = context.get("log_path")
+    if not isinstance(log_dir, Path) or not isinstance(log_path, Path):
+        return
     timestamp = context.get("timestamp")
-    project_root: Path = context["project_root"]  # type: ignore[assignment]
+    project_root = context.get("project_root")
+    if not isinstance(project_root, Path):
+        return
 
-    if cfg_path_obj and cfg_hash:
+    if cfg_path_obj and isinstance(cfg_hash, str):
         configs_dir = log_dir / CONFIGS_SUBDIR
         configs_dir.mkdir(parents=True, exist_ok=True)
         cfg_copy_name = f"{timestamp}_{cfg_hash}_{cfg_path_obj.name}"
@@ -227,12 +232,12 @@ class _CompressedLogHandler(logging.Handler):
 
     terminator = "\n"
 
-    def __init__(self, context: Dict[str, Optional[Path]], level: int) -> None:
+    def __init__(self, context: Dict[str, Path | str | bool | None], level: int) -> None:
         super().__init__(level)
         self._context = context
         self._zip: Optional[zipfile.ZipFile] = None
         self._stream: Optional[io.TextIOWrapper] = None
-        self._inner_stream: Optional[zipfile.ZipExtFile] = None
+        self._inner_stream: Optional[io.BufferedIOBase] = None
 
     def emit(self, record: logging.LogRecord) -> None:
         try:

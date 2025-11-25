@@ -65,7 +65,7 @@ class DataHandling():
         self.agent_name_order = []
         self.agent_lookup = {}
         self.agents_metadata = {}
-        self.run_folder = None
+        self.run_folder: str | None = None
         self._ticks_per_second = 1
         self._snapshot_offsets = [1]
         self._last_snapshot_tick = None
@@ -114,6 +114,8 @@ class DataHandling():
 
     def _prepare_graph_dirs(self):
         """Initialize per-step graph folders if requested."""
+        if not self.run_folder:
+            return
         self._graph_step_dirs = {}
         self._graphs_root = None
         if not (self.graph_messages_enabled or self.graph_detection_enabled):
@@ -153,6 +155,8 @@ class DataHandling():
 
     def _finalize_graph_archives(self):
         """Zip per-step graph files (if any) and clean temporary folders."""
+        if not self.run_folder:
+            return
         for mode, dir_path in list(self._graph_step_dirs.items()):
             if not os.path.isdir(dir_path):
                 continue

@@ -38,17 +38,17 @@ class HierarchyConfinementLogic:
         self._radius = None
         self.node_level = None
 
-    def pre_run(self, _objects, _agents):
+    def pre_run(self, _objects: dict, _agents: dict) -> None:
         """Pre run."""
         self._ensure_inside(None)
 
-    def step(self, _agent, _tick, arena_shape, _objects, _agents):
+    def step(self, _agent, _tick: int, arena_shape, _objects: dict, _agents: dict) -> None:
         """Execute the simulation step."""
         if self._radius is None:
             self._radius = self._estimate_agent_radius()
         self._ensure_inside(arena_shape)
 
-    def after_movement(self, _agent, _tick, arena_shape, _objects, _agents):
+    def after_movement(self, _agent, _tick: int, arena_shape, _objects: dict, _agents: dict) -> None:
         """After movement."""
         if self._radius is None:
             self._radius = self._estimate_agent_radius()
