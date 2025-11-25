@@ -1006,6 +1006,7 @@ class GUI_2D(QWidget):
         if lock == "agent" and lock_target is not None:
             self._focus_on_agent(lock_target, force=True, lock=True, apply_scene=False)
         elif lock == "centroid":
+            # Re-center on centroid but keep user-driven zoom; do not enlarge span.
             self._focus_on_centroid(lock=True, apply_scene=False, preserve_view_size=True)
         self.update_scene()
 
@@ -1035,15 +1036,25 @@ class GUI_2D(QWidget):
         rect = self._view_rect or self._default_view_rect()
         if rect is None:
             return
+        count = len(self._agent_centers)
         span = max(
             math.hypot(c.x - centroid.x(), c.y - centroid.y())
             for c in self._agent_centers.values()
         )
         target_width = rect.width()
         target_height = rect.height()
-        if self.wrap_config is not None and not preserve_view_size:
-            target_width = max(span * 2.2, rect.width() * 0.8, self._zoom_min_span)
-            target_height = target_width / max(rect.width() / max(rect.height(), 1e-6), 1e-6)
+        if not preserve_view_size:
+            # Ensure we include at least two agents (bounding-box based).
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            bbox_span = max(max_x - min_x, max_y - min_y, self._zoom_min_span)
+            margin = max(bbox_span * 0.2, self._zoom_min_span * 2)
+            min_span = bbox_span + margin
+            target_width = max(target_width, min_span)
+            target_height = max(target_height, min_span / max(rect.width() / max(rect.height(), 1e-6), 1e-6))
+            if self.wrap_config is not None:
+                target_width = max(target_width, span * 2.2, rect.width() * 0.8, self._zoom_min_span)
+                target_height = target_width / max(rect.width() / max(rect.height(), 1e-6), 1e-6)
         new_rect = QRectF(
             centroid.x() - target_width / 2.0,
             centroid.y() - target_height / 2.0,

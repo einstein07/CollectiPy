@@ -44,7 +44,6 @@ Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.
 - Restore view: `V` or the Restore button (also clears selection/locks)
 - Centroid: `C` or the Centroid button; double-click to lock/unlock on the centroid
 - Agent selection: click agents in arena or graph; double-click locks the camera on that agent
-- Spin window: detached, does not steal focus; closing the main window closes all panels
 
 ## Config.json Example
 
@@ -170,6 +169,13 @@ Give execution permission to `compile.sh` and `run.sh` (e.g., `chmod +x compile.
 }
 }
 ```
+
+### Agent spawning (bounded vs unbounded)
+
+- Default spawn center `c = [0, 0]` and radius `r` can be overridden per agent group via `spawn.center` / `spawn.radius` / `spawn.distribution` (`uniform` | `gaussian` | `ring`, default `uniform`). Agents/sample logic can also mutate these at runtime.
+- Bounded arenas: if `r` is not provided, it defaults to the inradius of the arena footprint. The sampled area is clamped to the arena; if the requested circle exceeds the bounds it is truncated to fit. Placement still respects non-overlap with walls, objects, and other agents.
+- Unbounded arenas: if `r` is missing/invalid, a finite radius is inferred from agent count/size so that all requested agents fit in a reasonable square. Sampling uses the chosen distribution around `c` without wrap-around.
+- Multiple groups sharing the same spawn center: the second (and subsequent) groups are shifted away by at least `0.25 * r`, repeated until a non-overlapping placement is found or attempts are exhausted. If spawn disks do not touch and placement still fails, the init aborts with an error (attempt limit unchanged).
 
 Raw traces saved under `environment.results.base_path` obey the spec lists declared in `results.agent_specs` / `results.group_specs`. When an arena hierarchy is configured, each base row also includes the hierarchy node where the agent currently sits so downstream analysis can group by partition. Per-agent pickles (`<group>_<idx>.pkl`) are emitted only when `"base"` is present (sampled `[tick, pos x, pos y, pos z]` rows) and can optionally append `"spin_model"` dumps (`<group>_<idx>_spins.pkl`). Snapshots are taken once per simulated second by default (after the last tick in that second); setting `snapshots_per_second: 2` adds a mid-second capture. Tick `0` is always stored so consumers see the initial pose, and the very last tick is forced even if it does not align with the cadence. Group specs apply to global outputs: `"graph_messages"` / `"graph_detection"` write one pickle per tick under `graphs/<mode>/step_<tick>.pkl`, and the helper spec `"graphs"` enables both. Message edges require that the transmitter has range and a non-zero TX budget **and** the receiver advertises a non-zero RX budget; detection edges only appear when the sensing agent has a non-zero acquisition rate in addition to range. All per-step graph pickles are zipped into `{mode}_graphs.zip` at the end of the run, and finally the whole `run_<n>` folder is compressed so analysis scripts can ingest the pickles while storage stays compact.
 

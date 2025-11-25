@@ -328,7 +328,7 @@ class Cylinder(Shape):
         self.vertices_list = []
         if self._object == "arena":
             # Higher resolution keeps agents from spawning outside when density is high.
-            num_vertices = 64
+            num_vertices = 52
             angle_increment = 2 * _PI / num_vertices
             cx, cy = self.center.x, self.center.y
             for i in range(num_vertices):
@@ -342,7 +342,7 @@ class Cylinder(Shape):
                 self.vertices_list.append(Vector3D(x, y, z1))
                 self.vertices_list.append(Vector3D(x, y, z2))
         else:
-            num_vertices = 8 if self._object == "mark" else 16
+            num_vertices = 12 if self._object == "mark" else 20
             angle_increment = 2 * _PI / num_vertices
             cx, cy, cz = self.center.x, self.center.y, self.center.z
             if self._id in Shape.flat_shapes:
@@ -356,14 +356,17 @@ class Cylinder(Shape):
                     self.vertices_list.append(Vector3D(x, y, 0))
             else:
                 half_height = self.height * 0.5
+                last_x = cx + self.radius
+                last_y = cy
                 for i in range(num_vertices):
                     angle = i * angle_increment
                     cos_a = math.cos(angle)
                     sin_a = math.sin(angle)
-                    x = cx + self.radius * cos_a
-                    y = cy + self.radius * sin_a
-                    self.vertices_list.append(Vector3D(x, y, cz - half_height))
-                self.vertices_list.append(Vector3D(x, y, cz + half_height))
+                    last_x = cx + self.radius * cos_a
+                    last_y = cy + self.radius * sin_a
+                    self.vertices_list.append(Vector3D(last_x, last_y, cz - half_height))
+                # Add the last pair of vertices using the final loop values.
+                self.vertices_list.append(Vector3D(last_x, last_y, cz + half_height))
 
 
 class UnboundedShape(Shape):
