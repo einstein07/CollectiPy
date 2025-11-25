@@ -226,7 +226,7 @@ class Agent(Entity):
         self.random_generator = Random()
         self.ticks_per_second = config_elem.get("ticks_per_second", 5)
         self.color = config_elem.get("color", "blue")
-        self.detection_range = math.inf
+        self.detection_range = 0.1
         self.linear_velocity_cmd = 0.0
         self.angular_velocity_cmd = 0.0
         self.motion_model_name = config_elem.get("motion_model", "unicycle")
@@ -1028,7 +1028,7 @@ class Agent(Entity):
     
     def get_detection_range(self):
         """Return the configured detection range."""
-        return getattr(self, "detection_range", math.inf)
+        return getattr(self, "detection_range", 0.1)
 
     def allows_hierarchical_link(self, target_node: str | None, channel: str, hierarchy=None) -> bool:
         """Return True if hierarchy constraints allow interacting with `target_node`."""
@@ -1175,7 +1175,7 @@ class StaticAgent(Agent):
         self.start_position = Vector3D()
         self.start_orientation = Vector3D()
         temp_position = config_elem.get("position", None)
-        self.perception_distance = config_elem.get("perception_distance",np.inf)
+        self.perception_distance = config_elem.get("perception_distance",0.1)
         if temp_position != None:
             self.position_from_dict = True
             try:
@@ -1278,6 +1278,8 @@ class MovableAgent(StaticAgent):
         self.fallback_moving_behavior = config_elem.get("fallback_moving_behavior","none")
         self.logic_behavior = config_elem.get("logic_behavior")
         self.spin_model_params = config_elem.get("spin_model", {})
+        # Resolve detection range before movement plugin creation so it propagates into detection models.
+        self.detection_range = self._resolve_detection_range()
         self.wrap_config = None
         self.hierarchy_target = self.hierarchy_target or "0"
         self.hierarchy_node = "0"
@@ -1290,7 +1292,6 @@ class MovableAgent(StaticAgent):
         self.levy_exponent = config_elem.get("levy_exponent",1.75)
         self._movement_plugin = self._init_movement_model()
         self._logic_plugin = self._init_logic_model()
-        self.detection_range = self._resolve_detection_range()
 
     def _init_movement_model(self):
         """Init movement model."""
@@ -1319,7 +1320,7 @@ class MovableAgent(StaticAgent):
         if candidate is None:
             candidate = getattr(self, "perception_distance", None)
         if candidate is None:
-            return math.inf
+            return 0.1
         if isinstance(candidate, str):
             normalized = candidate.strip().lower()
             if normalized in ("inf", "infinite", "none", "max"):
@@ -1328,10 +1329,10 @@ class MovableAgent(StaticAgent):
         try:
             value = float(candidate)
         except (TypeError, ValueError):
-            logger.warning("%s invalid detection range '%s'; using infinity", self.get_name(), candidate)
-            return math.inf
+            logger.warning("%s invalid detection range '%s'; using default 0.1", self.get_name(), candidate)
+            return 0.1
         if value <= 0:
-            return math.inf
+            return 0.1
         return value
 
     def reset(self):

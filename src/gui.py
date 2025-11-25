@@ -694,6 +694,9 @@ class GUI_2D(QWidget):
         selected_idx = index_map.get(self.clicked_spin)
         if selected_idx is None:
             return None
+        center = self._agent_centers.get(self.clicked_spin)
+        selected_meta = self._get_metadata_for_agent(self.clicked_spin) or {}
+        selected_detection_range = float(selected_meta.get("detection_range", 0.1))
         highlight = {
             "nodes": set([selected_idx]),
             "edges": set(),
@@ -701,6 +704,18 @@ class GUI_2D(QWidget):
         }
         if self.graph_filter_mode == "direct" or not self._graph_filter_active():
             neighbors = adjacency.get(self.clicked_spin, set())
+            if mode == "detection" and center is not None:
+                filtered = set()
+                for neighbor in neighbors:
+                    other_center = self._agent_centers.get(neighbor)
+                    if other_center is None:
+                        continue
+                    if not math.isinf(selected_detection_range) and selected_detection_range <= 0:
+                        continue
+                    distance = math.hypot(center.x - other_center.x, center.y - other_center.y)
+                    if math.isinf(selected_detection_range) or distance <= selected_detection_range:
+                        filtered.add(neighbor)
+                neighbors = filtered
             for neighbor in neighbors:
                 idx = index_map.get(neighbor)
                 if idx is None:
@@ -715,6 +730,18 @@ class GUI_2D(QWidget):
             current = queue.pop(0)
             current_idx = index_map.get(current)
             neighbors = adjacency.get(current, set())
+            if mode == "detection" and center is not None and current == self.clicked_spin:
+                filtered = set()
+                for neighbor in neighbors:
+                    other_center = self._agent_centers.get(neighbor)
+                    if other_center is None:
+                        continue
+                    if not math.isinf(selected_detection_range) and selected_detection_range <= 0:
+                        continue
+                    distance = math.hypot(center.x - other_center.x, center.y - other_center.y)
+                    if math.isinf(selected_detection_range) or distance <= selected_detection_range:
+                        filtered.add(neighbor)
+                neighbors = filtered
             for neighbor in neighbors:
                 neighbor_idx = index_map.get(neighbor)
                 if current_idx is not None and neighbor_idx is not None:
@@ -1647,6 +1674,8 @@ class GUI_2D(QWidget):
         center = self._agent_centers.get(selected_id)
         if center is None:
             return
+        selected_meta = self._get_metadata_for_agent(selected_id) or {}
+        selected_detection_range = float(selected_meta.get("detection_range", 0.1))
         active_modes = self.on_click_modes | self.show_modes
         has_detection = bool(self.connection_lookup.get("detection"))
         start_x = center.x * scale + offset_x
@@ -1663,6 +1692,12 @@ class GUI_2D(QWidget):
                 other_center = self._agent_centers.get(neighbor)
                 if other_center is None:
                     continue
+                if mode == "detection":
+                    if not math.isinf(selected_detection_range) and selected_detection_range <= 0:
+                        continue
+                    distance = math.hypot(center.x - other_center.x, center.y - other_center.y)
+                    if not math.isinf(selected_detection_range) and distance > selected_detection_range:
+                        continue
                 end_x = other_center.x * scale + offset_x
                 end_y = other_center.y * scale + offset_y
                 line = self.scene.addLine(start_x, start_y, end_x, end_y, pen)
@@ -1829,8 +1864,8 @@ class GUI_2D(QWidget):
 
     def _should_link_detection(self, meta_a, meta_b, distance):
         """Return True if either agent can detect the other."""
-        range_a = float(meta_a.get("detection_range", math.inf))
-        range_b = float(meta_b.get("detection_range", math.inf))
+        range_a = float(meta_a.get("detection_range", 0.1))
+        range_b = float(meta_b.get("detection_range", 0.1))
         cond_a = range_a > 0 and (math.isinf(range_a) or distance <= range_a)
         cond_b = range_b > 0 and (math.isinf(range_b) or distance <= range_b)
         return cond_a or cond_b

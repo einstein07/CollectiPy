@@ -448,9 +448,9 @@ class SpaceDataHandling(DataHandling):
         if not meta:
             return False
         try:
-            rng = float(meta.get("detection_range", math.inf))
+            rng = float(meta.get("detection_range", 0.1))
         except (TypeError, ValueError):
-            rng = math.inf
+            rng = 0.1
         if rng <= 0:
             return False
         try:

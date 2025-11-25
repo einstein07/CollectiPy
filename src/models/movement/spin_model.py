@@ -31,8 +31,8 @@ class SpinMovementModel(MovementModel):
         self.spin_pre_run_steps = self.spin_model_params.get("spin_pre_run_steps", 0)
         self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 3)
         self.perception_width = self.spin_model_params.get("perception_width", 0.3)
-        self.num_groups = self.spin_model_params.get("num_groups", 12)
-        self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 7)
+        self.num_groups = self.spin_model_params.get("num_groups", 8)
+        self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 5)
         self.perception_global_inhibition = self.spin_model_params.get("perception_global_inhibition", 0)
         agent_task = agent.get_task() if hasattr(agent, "get_task") else None
         spin_task = self.spin_model_params.get("task")
@@ -223,12 +223,15 @@ class SpinMovementModel(MovementModel):
         if range_candidate is None and hasattr(self.agent, "perception_distance"):
             range_candidate = self.agent.perception_distance
         if range_candidate is None:
-            return math.inf
+            return 0.1
         try:
-            return float(range_candidate)
+            value = float(range_candidate)
         except (TypeError, ValueError):
-            logger.warning("%s invalid detection range '%s', using infinite distance", self.agent.get_name(), range_candidate)
-            return math.inf
+            logger.warning("%s invalid detection range '%s', using default 0.1", self.agent.get_name(), range_candidate)
+            return 0.1
+        if value <= 0:
+            return 0.1
+        return value
 
     def _run_fallback(self, tick: int, arena_shape, objects: dict, agents: dict) -> None:
         """Run the fallback."""

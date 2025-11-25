@@ -4,11 +4,7 @@
         "time_limit": 0,
         "num_runs": 1,
         "gui":{
-            "_id": "2D",
-            "throttle": {
-                "poll_interval_ms": 16,
-                "max_backlog": 3
-            }
+            "_id": "2D"
         },
         "arenas":{
             "arena_0":{

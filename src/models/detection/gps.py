@@ -28,12 +28,26 @@ class GPSDetectionModel(DetectionModel):
         self.group_angles = context.get("group_angles", np.linspace(0, 2 * math.pi, self.num_groups, endpoint=False))
         self.reference = context.get("reference", "egocentric")
         self.perception_global_inhibition = context.get("perception_global_inhibition", 0)
-        self.max_detection_distance = float(
-            context.get(
-                "max_detection_distance",
-                getattr(self.agent, "perception_distance", math.inf),
+        fallback_distance = 0.1
+        if hasattr(self.agent, "get_detection_range"):
+            try:
+                fallback_distance = float(self.agent.get_detection_range())
+            except Exception:
+                fallback_distance = 0.1
+        elif hasattr(self.agent, "perception_distance"):
+            try:
+                fallback_distance = float(self.agent.perception_distance)
+            except Exception:
+                fallback_distance = 0.1
+        try:
+            self.max_detection_distance = float(
+                context.get(
+                    "max_detection_distance",
+                    fallback_distance,
+                )
             )
-        )
+        except (TypeError, ValueError):
+            self.max_detection_distance = fallback_distance
 
     def sense(self, agent, objects: dict, agents: dict, arena_shape=None):
         """Sense the environment and expose all perception channels."""

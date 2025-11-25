@@ -29,16 +29,14 @@
                 "color": "blue",
                 "detection": {
                     "type": "GPS",
-                    "range": 0.2
+                    "range": 0.5
                 },
                 "moving_behavior":"spin_model",
                 "spin_model":{
                     "perception_width": 0.2,
-                    "num_groups": 8,
-                    "num_spins_per_group": 5,
                     "perception_global_inhibition": 0.2,
                     "T": 0.3,
-                    "J": 50,
+                    "J": 30,
                     "nu": 0.4,
                     "p_spin_up": 0.5,
                     "time_delay": 1,
