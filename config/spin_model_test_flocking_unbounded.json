@@ -35,8 +35,7 @@
                 "color": "blue",
                 "detection": {
                     "type": "GPS",
-                    "range": 3,
-                    "acquisition_per_second": 1
+                    "range": 0.5
                 },
                 "moving_behavior":"spin_model",
                 "spin_model":{
@@ -44,9 +43,9 @@
                     "perception_width": 0.2,
                     "num_groups": 16,
                     "num_spins_per_group": 8,
-                    "perception_global_inhibition": 0,
+                    "perception_global_inhibition": 0.4,
                     "T": 0.3,
-                    "J": 300,
+                    "J": 70,
                     "nu": 0.4,
                     "p_spin_up": 0.5,
                     "time_delay": 1,
