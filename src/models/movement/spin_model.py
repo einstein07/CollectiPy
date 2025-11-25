@@ -10,6 +10,7 @@
 import logging
 import math
 import numpy as np
+from typing import Optional
 from models.spinsystem import SpinSystem
 from plugin_base import MovementModel
 from plugin_registry import (
@@ -44,7 +45,7 @@ class SpinMovementModel(MovementModel):
         self.perception = None
         self._active_perception_channel = "objects"
         self.perception_range = self._resolve_detection_range()
-        self.spin_system = None
+        self.spin_system: Optional[SpinSystem] = None
         self._fallback_model = None
         self.detection_model = self._create_detection_model()
         self.reset()
@@ -88,14 +89,22 @@ class SpinMovementModel(MovementModel):
         self._update_perception(objects, agents, None, None)
         if self.perception is None:
             return
+        if self.spin_system is None:
+            self.reset()
+            if self.spin_system is None:
+                return
         for _ in range(self.spin_pre_run_steps):
             self.spin_system.step(timedelay=False)
-        self.spin_system.set_p_spin_up(np.mean(self.spin_system.get_states()))
+        self.spin_system.set_p_spin_up(float(np.mean(self.spin_system.get_states())))
         self.spin_system.reset_spins()
         logger.debug("%s spin pre-run completed (%d steps)", self.agent.get_name(), self.spin_pre_run_steps)
 
     def step(self, agent, tick: int, arena_shape, objects: dict, agents: dict) -> None:
         """Execute the simulation step."""
+        if self.spin_system is None:
+            self.reset()
+            if self.spin_system is None:
+                return
         self._update_perception(objects, agents, tick, arena_shape)
         if self.perception is None or not np.any(self.perception > 0):
             self._run_fallback(tick, arena_shape, objects, agents)

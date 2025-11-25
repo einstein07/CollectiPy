@@ -4,6 +4,7 @@
         "plugins.examples.collision_handshake_plugin"
     ],
     "environment": {
+        "collisions":true,
         "time_limit": 0,
         "num_runs": 1,
         "gui": {
@@ -21,27 +22,8 @@
         },
         "objects": {},
         "agents": {
-            "movable_handshake": {
-                "number": [10],
-                "shape": "cylinder",
-                "height": 0.03,
-                "diameter": 0.05,
-                "color": "cornflowerblue",
-                "linear_velocity": 0.03,
-                "angular_velocity": 30,
-                "moving_behavior": "random_way_point",
-                "logic_behavior": "collision_handshake",
-                "messages": {
-                    "comm_range": 0.18,
-                    "type": "hand_shake",
-                    "kind": "id",
-                    "channels": "dual",
-                    "handshake_auto": false,
-                    "handshake_timeout": 5
-                }
-            },
             "movable_sampler": {
-                "number": [10],
+                "number": [100],
                 "shape": "cylinder",
                 "height": 0.03,
                 "diameter": 0.05,

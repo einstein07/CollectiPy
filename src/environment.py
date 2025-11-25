@@ -95,8 +95,8 @@ class Environment():
         gui_id = config_elem.gui.get("_id","2D")
         self.gui_id = gui_id
         self.quiet = bool(config_elem.environment.get("quiet", False))
-        self.snapshot_stride = max(1, int(config_elem.environment.get("snapshot_stride", 1) or 1))
-        self.auto_agents_per_proc_target = max(1, int(config_elem.environment.get("auto_agents_per_proc_target", 30) or 30))
+        self.snapshot_stride = max(1, int(config_elem.environment.get("snapshot_stride", 1)))
+        self.auto_agents_per_proc_target = max(10, int(config_elem.environment.get("auto_agents_per_proc_target", 20)))
         base_gui_cfg = dict(config_elem.gui) if len(config_elem.gui) > 0 else {}
         if gui_id in ("none", "off", None) or not base_gui_cfg:
             self.render = [False, {}]
