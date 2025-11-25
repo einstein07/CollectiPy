@@ -32,8 +32,6 @@
                 "moving_behavior": "random_way_point",
                 "logic_behavior": "collision_handshake",
                 "messages": {
-                    "tx_per_second": 6,
-                    "rx_per_second": 8,
                     "comm_range": 0.18,
                     "type": "hand_shake",
                     "kind": "id",
@@ -53,8 +51,6 @@
                 "moving_behavior": "random_way_point",
                 "logic_behavior": "heading_sampler",
                 "messages": {
-                    "tx_per_second": 2,
-                    "rx_per_second": 4,
                     "comm_range": 0.22,
                     "type": "broadcast",
                     "kind": "id"

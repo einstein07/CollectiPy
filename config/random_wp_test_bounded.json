@@ -2,7 +2,6 @@
     "environment":{
         "collisions": true,
         "time_limit": 0,
-        "ticks_per_second": 3,
         "num_runs": 1,
         "gui":{
             "_id": "2D",
@@ -31,7 +30,6 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 10,
                 "number": [20],
                 "shape": "cylinder",
                 "linear_velocity": 0.03,
@@ -41,8 +39,6 @@
                 "color": "blue",
                 "moving_behavior":"random_way_point",
                 "messages": {
-                    "tx_per_second": 2,
-                    "rx_per_second": 4,
                     "comm_range": 0.1,
                     "type": "broadcast",
                     "kind": "anonymous"

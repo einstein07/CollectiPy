@@ -4,7 +4,6 @@
     ],
     "environment": {
         "collisions": true,
-        "ticks_per_second": 3,
         "time_limit": 0,
         "num_runs": 1,
         "gui": {
@@ -23,7 +22,6 @@
         "objects": {},
         "agents": {
             "movable_0": {
-                "ticks_per_second": 7,
                 "number": [20],
                 "shape": "cylinder",
                 "height": 0.02,
@@ -34,8 +32,6 @@
                 "moving_behavior": "random_way_point",
                 "logic_behavior": "waypoint_message_cleanup",
                 "messages": {
-                    "tx_per_second": 2,
-                    "rx_per_second": 4,
                     "comm_range": 0.1,
                     "type": "broadcast",
                     "kind": "anonymous",

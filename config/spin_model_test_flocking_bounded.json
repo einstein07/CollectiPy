@@ -1,9 +1,16 @@
 {
+
+    "pattern" : {
+        "arena": 1,
+        "agents": 2,
+        "detector": 2,
+        "gui": 2
+    },
     "environment":{
         "collisions": false,
-        "ticks_per_second": 1,
         "time_limit": 0,
         "num_runs": 1,
+        "per_agents_process": 5,
         "logging":{
             "file_level": "DEBUG"
         },
@@ -15,7 +22,7 @@
         "arenas":{
             "arena_0":{
                 "random_seed": 0,
-                "radius": 0.2,
+                "radius": 1,
                 "_id": "circle",
                 "color": "gray"
             }
@@ -24,8 +31,7 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 3,
-                "number": [7],
+                "number": [20],
                 "shape": "cylinder",
                 "linear_velocity": 0.01,
                 "angular_velocity": 10,
@@ -34,8 +40,7 @@
                 "color": "blue",
                 "detection": {
                     "type": "GPS",
-                    "range": "inf",
-                    "acquisition_per_second": 1
+                    "range": "inf"
                 },
                 "moving_behavior":"spin_model",
                 "spin_model":{

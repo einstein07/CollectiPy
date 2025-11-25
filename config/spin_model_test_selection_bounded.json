@@ -1,13 +1,11 @@
 {
     "environment":{
         "collisions": true,
-        "ticks_per_second": 1,
         "time_limit": 200,
         "num_runs": 1,
         "results":{
             "agent_specs": ["base", "spin_model"],
-            "group_specs": ["detection"],
-            "snapshots_per_second": 1
+            "group_specs": ["detection"]
         },
         "gui":{
             "_id": "2D",
@@ -37,7 +35,6 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 5,
                 "number": [2],
                 "shape": "cylinder",
                 "linear_velocity": 0.02,
@@ -47,8 +44,7 @@
                 "color": "blue",
                 "detection": {
                     "type": "GPS",
-                    "range": "inf",
-                    "acquisition_per_second": 1
+                    "range": "inf"
                 },
                 "moving_behavior":"spin_model",
                 "spin_model":{

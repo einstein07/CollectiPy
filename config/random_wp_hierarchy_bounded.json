@@ -5,8 +5,7 @@
         "time_limit": 0,
         "num_runs": 1,
         "results": {
-            "group_specs": ["messages"],
-            "snapshots_per_second": 1
+            "group_specs": ["messages"]
         },
         "gui": {
             "_id": "2D",
@@ -52,8 +51,6 @@
                 "logic_behavior": "hierarchy_confinement",
                 "hierarchy_node": "0",
                 "messages": {
-                    "tx_per_second": 2,
-                    "rx_per_second": 4,
                     "comm_range": 0.2,
                     "type": "broadcast",
                     "kind": "anonymous"
