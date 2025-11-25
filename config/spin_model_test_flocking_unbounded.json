@@ -46,7 +46,7 @@
                     "num_spins_per_group": 8,
                     "perception_global_inhibition": 0,
                     "T": 0.3,
-                    "J": 40,
+                    "J": 300,
                     "nu": 0.4,
                     "p_spin_up": 0.5,
                     "time_delay": 1,
