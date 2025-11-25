@@ -572,7 +572,6 @@ class GUI_2D(QWidget):
         now = time.time()
         double_click = (now - self._centroid_last_click_ts) < 0.4
         self._centroid_last_click_ts = now
-        self._clear_selection(update_view=False)
         self._focus_on_centroid(lock=double_click)
         self._update_centroid_button_label()
 
