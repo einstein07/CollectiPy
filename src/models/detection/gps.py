@@ -48,6 +48,10 @@ class GPSDetectionModel(DetectionModel):
             )
         except (TypeError, ValueError):
             self.max_detection_distance = fallback_distance
+        target_ids = context.get("mean_field_target_ids") or []
+        guard_ids = context.get("mean_field_guard_ids") or []
+        self._mean_field_target_ids = {str(i) for i in target_ids}
+        self._mean_field_guard_ids = {str(i) for i in guard_ids}
 
     def sense(self, agent, objects: dict, agents: dict, arena_shape=None):
         """Sense the environment and expose all perception channels."""
@@ -55,8 +59,10 @@ class GPSDetectionModel(DetectionModel):
         agent_channel = np.zeros(channel_size)
         object_channel = np.zeros(channel_size)
         hierarchy = self._resolve_hierarchy(agent, arena_shape)
-        self._collect_agent_targets(agent_channel, agents, hierarchy)
-        self._collect_object_targets(object_channel, objects)
+        mf_targets: list[dict] = []
+        mf_guards: list[dict] = []
+        self._collect_agent_targets(agent_channel, agents, hierarchy, mf_targets, mf_guards)
+        self._collect_object_targets(object_channel, objects, mf_targets, mf_guards)
         self._apply_global_inhibition(agent_channel)
         self._apply_global_inhibition(object_channel)
         combined_channel = agent_channel + object_channel
@@ -72,9 +78,13 @@ class GPSDetectionModel(DetectionModel):
             "objects": object_channel,
             "agents": agent_channel,
             "combined": combined_channel,
+            "mean_field_entities": {
+                "targets": mf_targets,
+                "guards": mf_guards,
+            },
         }
 
-    def _collect_agent_targets(self, perception, agents, hierarchy):
+    def _collect_agent_targets(self, perception, agents, hierarchy, mf_targets, mf_guards):
         """Accumulate perception contributed by neighbor agents."""
         for club, agent_shapes in agents.items():
             for n, shape in enumerate(agent_shapes):
@@ -92,15 +102,23 @@ class GPSDetectionModel(DetectionModel):
                 dx = agent_pos.x - self.agent.position.x
                 dy = agent_pos.y - self.agent.position.y
                 dz = agent_pos.z - self.agent.position.z
+                distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+                angle_rad = self._compute_relative_angle(dx, dy)
+                entity_id = target_name or f"{club}_{n}"
+                self._record_mean_field_entity(entity_id, angle_rad, distance, 5.0, mf_targets, mf_guards)
                 self._accumulate_target(perception, dx, dy, dz, self.perception_width, 5)
 
-    def _collect_object_targets(self, perception, objects):
+    def _collect_object_targets(self, perception, objects, mf_targets, mf_guards):
         """Accumulate perception contributed by configured objects."""
-        for _, (_, positions, strengths, uncertainties) in objects.items():
-            for position, strength, uncertainty in zip(positions, strengths, uncertainties):
+        for obj_key, (_, positions, strengths, uncertainties) in objects.items():
+            for idx, (position, strength, uncertainty) in enumerate(zip(positions, strengths, uncertainties)):
                 dx = position.x - self.agent.position.x
                 dy = position.y - self.agent.position.y
                 dz = position.z - self.agent.position.z
+                distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+                angle_rad = self._compute_relative_angle(dx, dy)
+                entity_id = f"{obj_key}[{idx}]"
+                self._record_mean_field_entity(entity_id, angle_rad, distance, strength, mf_targets, mf_guards)
                 effective_width = self.perception_width + uncertainty
                 self._accumulate_target(perception, dx, dy, dz, effective_width, strength)
 
@@ -150,5 +168,34 @@ class GPSDetectionModel(DetectionModel):
                 if hierarchy:
                     return hierarchy
         return getattr(agent, "hierarchy_context", None)
+
+    def _compute_relative_angle(self, dx: float, dy: float) -> float:
+        """Return the relative angle in radians to the target."""
+        angle_deg = math.degrees(math.atan2(-dy, dx))
+        if self.reference == "egocentric":
+            angle_deg -= self.agent.orientation.z
+        angle_deg = normalize_angle(angle_deg)
+        return math.radians(angle_deg)
+
+    def _record_mean_field_entity(self, entity_id, angle, distance, intensity, mf_targets, mf_guards):
+        """Record entity info for mean-field consumers if requested."""
+        if entity_id in self._mean_field_target_ids:
+            mf_targets.append(
+                {
+                    "id": entity_id,
+                    "angle": angle,
+                    "distance": distance,
+                    "intensity": intensity,
+                }
+            )
+        if entity_id in self._mean_field_guard_ids:
+            mf_guards.append(
+                {
+                    "id": entity_id,
+                    "angle": angle,
+                    "distance": distance,
+                    "intensity": intensity,
+                }
+            )
 
 register_detection_model("GPS", lambda agent, context=None: GPSDetectionModel(agent, context))
