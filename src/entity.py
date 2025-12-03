@@ -1297,6 +1297,8 @@ class MovableAgent(StaticAgent):
         """Init movement model."""
         model = get_movement_model(self.moving_behavior, self)
         if model is None and self.moving_behavior != "random_walk":
+            logger.warning("%s movement model '%s' not found; falling back to 'random_walk'",
+                           self.get_name(), self.moving_behavior)
             model = get_movement_model("random_walk", self)
         return model
 
