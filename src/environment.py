@@ -194,13 +194,13 @@ class Environment():
         Derive the desired number of agents per process based on workload.
         Heavy (spin_model) -> tighter packing; light -> more agents per proc.
         """
-        has_spin = False
+        has_ring_attractor = False
         has_messages = False
         has_fast_detection = False
         for cfg, entities in agents.values():
             behavior = str(cfg.get("moving_behavior", "") or "").lower()
-            if behavior == "spin_model":
-                has_spin = True
+            if behavior == "spin_model" or behavior == "mean_field_model":
+                has_ring_attractor = True
             if cfg.get("messages"):
                 has_messages = True
             det_cfg = cfg.get("detection", {}) or {}
@@ -210,7 +210,7 @@ class Environment():
                     has_fast_detection = True
             except Exception:
                 pass
-        if has_spin:
+        if has_ring_attractor:
             return 6  # ~5-10 agents per proc target for heavy runs
         if has_messages or has_fast_detection:
             return 10  # medium workloads
