@@ -10,7 +10,7 @@
 """Mean-field spiking ring attractor model."""
 
 from __future__ import annotations
-
+import logging
 import math
 from typing import Iterable
 from numba import njit, prange
@@ -27,6 +27,9 @@ def compute_center_of_mass(z, theta_i):
     sin_sum = np.sum(z * np.sin(theta_i))
     cos_sum = np.sum(z * np.cos(theta_i))
     return np.arctan2(sin_sum, cos_sum)
+
+logger = logging.getLogger("sim.mean_field")
+logger.setLevel(logging.DEBUG)
 
 class MeanFieldSystem:
     """
@@ -51,6 +54,7 @@ class MeanFieldSystem:
         guard_qualities: Iterable[float] | None = None,
         sigma: float = 0.01,
         dt: float = 0.1,
+        integration_time: float = 50.0,
         rng: np.random.Generator | None = None,
     ):
         """
@@ -79,6 +83,7 @@ class MeanFieldSystem:
         self.spatial_decay = spatial_decay
         self.sigma = float(sigma)
         self.dt = float(dt)
+        self.integration_time = float(integration_time)
         self.rng = rng or np.random.default_rng()
 
         self.theta = np.linspace(-np.pi, np.pi, self.num_neurons, endpoint=False)
@@ -139,6 +144,15 @@ class MeanFieldSystem:
             delta_targets = _delta_angle(self.theta[:, None], target_angles)
             vm_targets = np.exp(self.kappa * (np.cos(delta_targets) - 1.0))
             b = vm_targets @ target_qualities
+            logger.debug(
+                    "Target angles: %s",
+                    np.array2string(
+                        np.asarray(target_angles, dtype=float).reshape(-1),
+                        precision=6,
+                        separator=", ",
+                        max_line_width=1000,
+                    ),
+                )
 
         if num_guards > 0 and guard_angles is not None and guard_qualities is not None and guard_distances is not None:
             guard_angles = np.asarray(guard_angles, dtype=float).reshape(1, -1)
@@ -151,6 +165,15 @@ class MeanFieldSystem:
             decay = 0.0 if guard_decay_rate is None else guard_decay_rate
             scaled = guard_qualities * np.exp(-decay * guard_distances)
             b += vm_guards @ scaled
+            logger.debug(
+                    "Guard angles: %s",
+                    np.array2string(
+                        np.asarray(guard_angles, dtype=float).reshape(-1),
+                        precision=6,
+                        separator=", ",
+                        max_line_width=1000,
+                    ),
+                )
 
         b /= math.sqrt(self.num_neurons)
         self.b = b
@@ -187,7 +210,6 @@ class MeanFieldSystem:
             raise ValueError("external_input dimension must match num_neurons")
         self.b = external_input
 
-    @njit(fastmath=True, parallel=True)
     def euler_integrate(y0, t_eval, u, b, M, beta, n, sigma, randn_like_func):
         dt = t_eval[1] - t_eval[0]
         y = np.zeros((len(t_eval), len(y0)))
@@ -198,7 +220,6 @@ class MeanFieldSystem:
             y[i] = y[i-1] + dt * dydt
         return y
 
-    @njit(fastmath=True, parallel=True)
     def randn_like(y, sigma, inv_sqrt_n):
         out = np.empty_like(y)
         for i in prange(y.size):
@@ -206,15 +227,15 @@ class MeanFieldSystem:
         return out
     
     # Integrate timesteps to simulate the neural field dynamics
-    def compute_dynamics(self, total_time=200, dt=0.1):
+    def compute_dynamics(self, total_time=50, dt=0.1):
         t_eval = np.arange(0, total_time, dt)
-        y0 = self.neural_field.copy()
+        y0 = self.neural_ring.copy()
         result = MeanFieldSystem.euler_integrate(y0, t_eval, self.u, self.b, self.M, self.beta, self.num_neurons, self.sigma, MeanFieldSystem.randn_like)
         times = t_eval
         # Compute CoM of bump activity at each time
         bump_positions = np.array([compute_center_of_mass(z_t, self.theta) for z_t in result])
         final_norm = np.linalg.norm(result[-1])
-        self.neural_field = result[-1]  # Update neural field state
+        self.neural_ring = result[-1]  # Update neural field state
         return times, bump_positions, final_norm
 
 
@@ -242,9 +263,11 @@ class MeanFieldSystem:
             guard_distances=guard_distances,
         )
 
-        times, bump_positions, final_norm = self.compute_dynamics(total_time=50)
 
-        return self.neural_field, bump_positions, final_norm
+
+        times, bump_positions, final_norm = self.compute_dynamics()
+
+        return self.neural_ring, bump_positions, final_norm
 
     def run(self, steps: int, **step_kwargs):
         """Run multiple integration steps; returns trajectory of z."""
@@ -256,4 +279,4 @@ class MeanFieldSystem:
 
     def get_state(self):
         """Return current (z, s)."""
-        return self.neural_field.copy()
+        return self.neural_ring.copy()
