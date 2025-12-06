@@ -54,6 +54,7 @@ class MeanFieldMovementModel(MovementModel):
         self.perception = None
         self._active_perception_channel = "objects"
         self._mf_entities = {"targets": [], "guards": []}
+        self._last_bump_angle: Optional[float] = None
         self.mean_field_system: Optional[MeanFieldSystem] = None
         self.detection_model = self._create_detection_model()
         self.reset()
@@ -84,6 +85,7 @@ class MeanFieldMovementModel(MovementModel):
     def reset(self) -> None:
         """Reset the mean-field state."""
         self.perception = None
+        self._last_bump_angle = None
         self.mean_field_system = MeanFieldSystem(
             num_neurons=self.num_neurons,
             u=float(self.params.get("u", 6.0)),
@@ -135,6 +137,7 @@ class MeanFieldMovementModel(MovementModel):
             if self.perception is None or not np.any(self.perception):
                 self.agent.linear_velocity_cmd = 0.0
                 self.agent.angular_velocity_cmd = 0.0
+                self._last_bump_angle = None
                 return
             targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
             self.mean_field_system.num_targets = len(targets)
@@ -157,6 +160,7 @@ class MeanFieldMovementModel(MovementModel):
             if angle_rad is None:
                 self.agent.linear_velocity_cmd = 0.0
                 self.agent.angular_velocity_cmd = 0.0
+                self._last_bump_angle = None
                 return
             if self.reference == "allocentric":
                 angle_rad = angle_rad - math.radians(self.agent.orientation.z)
@@ -166,6 +170,7 @@ class MeanFieldMovementModel(MovementModel):
             scaling = np.clip(norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
             self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling
             self.agent.angular_velocity_cmd = angle_deg
+            self._last_bump_angle = angle_rad
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "%s mean-field direction updated -> angle=%.2f norm=%.3f scaling=%.3f",
@@ -298,13 +303,60 @@ class MeanFieldMovementModel(MovementModel):
         """Return raw state for logging or visualisation."""
         if not self.mean_field_system:
             return None
-        z, s = self.mean_field_system.get_state()
+        z = self.mean_field_system.get_state()
         return {
             "state": z.copy(),
-            "s": s,
             "perception": None if self.perception is None else self.perception.copy(),
             "channel": self._active_perception_channel,
+            "angle": self._last_bump_angle,
         }
+
+    def _normalize_state_for_display(self, values: np.ndarray) -> np.ndarray:
+        """Map neural field values to [0, 1] for GUI coloring."""
+        matrix = np.asarray(values, dtype=float).reshape(self.num_neurons, 1)
+        if matrix.size == 0:
+            return matrix
+        max_abs = float(np.max(np.abs(matrix))) if matrix.size else 0.0
+        if not math.isfinite(max_abs) or max_abs <= 1e-9:
+            normalized = np.zeros_like(matrix)
+        else:
+            normalized = matrix / max_abs
+        normalized = np.clip((normalized + 1.0) * 0.5, 0.0, 1.0)
+        return normalized
+
+    def _prepare_perception_vector(self, length: int) -> np.ndarray:
+        """Flatten perception into a vector consumed by the GUI plot."""
+        vector = np.zeros(length, dtype=float)
+        if self.perception is not None:
+            flat = np.asarray(self.perception, dtype=float).reshape(-1)
+            count = min(length, flat.size)
+            if count > 0:
+                vector[:count] = flat[:count]
+        return vector
+
+    def get_spin_system_data(self):
+        """
+        Expose mean-field neural activity using the same structure as the spin model.
+
+        The GUI expects:
+            (state_matrix, (angles, num_groups, num_spins_per_group), perception_vector, avg_angle)
+        """
+        if not self.mean_field_system:
+            return None
+        snapshot = self.get_mean_field_data()
+        if not snapshot:
+            return None
+        state_matrix = self._normalize_state_for_display(snapshot["state"])
+        num_groups = self.num_neurons
+        num_spins_per_group = 1
+        perception_vec = self._prepare_perception_vector(num_groups * num_spins_per_group)
+        angles_flat = np.repeat(self.group_angles, num_spins_per_group)
+        return (
+            state_matrix,
+            (angles_flat, num_groups, num_spins_per_group),
+            perception_vec,
+            snapshot.get("angle"),
+        )
 
 
 register_movement_model("mean_field", lambda agent: MeanFieldMovementModel(agent))

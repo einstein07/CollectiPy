@@ -278,5 +278,5 @@ class MeanFieldSystem:
         return np.asarray(history)
 
     def get_state(self):
-        """Return current (z, s)."""
+        """Return current neural ring state."""
         return self.neural_ring.copy()
