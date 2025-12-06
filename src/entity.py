@@ -1064,6 +1064,9 @@ class StaticObject(Object):
             self.shape_type = "dense"
         else: raise ValueError(f"Invalid object type: {self.entity_type}")
         self.shape = Shape3DFactory.create_shape("object",config_elem.get("shape","point"), {key:val for key,val in config_elem.items()})
+        if hasattr(self.shape, "metadata"):
+            self.shape.metadata["entity_name"] = self.get_name()
+            self.shape.metadata["hierarchy_node"] = self.hierarchy_node
         self.position = Vector3D()
         self.orientation = Vector3D()
         self.start_position = Vector3D()
