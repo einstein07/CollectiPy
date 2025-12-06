@@ -11,6 +11,7 @@
 
 import logging
 import math
+import time
 from typing import Optional, Tuple
 
 import numpy as np
@@ -40,6 +41,8 @@ class MeanFieldMovementModel(MovementModel):
         self.perception_width = float(self.params.get("perception_width", 0.3))
         self.perception_global_inhibition = float(self.params.get("perception_global_inhibition", 0.0))
         self.num_neurons = int(self.params.get("num_neurons", 100))
+        self.integration_time = float(self.params.get("integration_time", 50.0))
+        self.integration_dt = float(self.params.get("integration_dt", self.params.get("dt", 0.1)))
         self.perception_range = self._resolve_detection_range()
         self.task = (agent.get_task() or self.params.get("task") or "selection").lower()
         if hasattr(agent, "set_task") and not agent.get_task():
@@ -93,7 +96,8 @@ class MeanFieldMovementModel(MovementModel):
             target_qualities=self.params.get("target_qualities"),
             guard_qualities=self.params.get("guard_qualities"),
             sigma=float(self.params.get("sigma", 0.01)),
-            dt=float(self.params.get("dt", 0.1)),
+            dt=self.integration_dt,
+            integration_time=self.integration_time,
         )
         logger.debug("%s mean-field system reset", self.agent.get_name())
 
@@ -120,54 +124,60 @@ class MeanFieldMovementModel(MovementModel):
 
     def step(self, agent, tick: int, arena_shape, objects: dict, agents: dict) -> None:
         """Execute a simulation step."""
+        start_time = time.perf_counter()
         if self.mean_field_system is None:
             self.reset()
             if self.mean_field_system is None:
                 return
-        logger.debug("%s mean-field step tick=%s", self.agent.get_name(), tick)
-        self._update_perception(objects, agents, tick, arena_shape)
-        if self.perception is None or not np.any(self.perception):
-            self.agent.linear_velocity_cmd = 0.0
-            self.agent.angular_velocity_cmd = 0.0
-            return
-        targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
-        self.mean_field_system.num_targets = len(targets)
-        self.mean_field_system.num_guards = len(guard_angles) if guard_angles is not None else 0
-        neural_field = None
-        bump_positions = None
-        final_norm = 0.0
-        for _ in range(self.steps_per_tick):
-            neural_field, bump_positions, final_norm = self.mean_field_system.step(
-                target_angles=targets,
-                target_qualities=qualities,
-                guard_angles=guard_angles,
-                guard_qualities=guard_qualities,
-                guard_decay_rate=self.guard_decay_rate,
-                guard_distances=guard_distances,
-            )
-        angle_rad = None
-        if bump_positions is not None and len(bump_positions) > 0:
-            angle_rad = bump_positions[-1]
-        if angle_rad is None:
-            self.agent.linear_velocity_cmd = 0.0
-            self.agent.angular_velocity_cmd = 0.0
-            return
-        if self.reference == "allocentric":
-            angle_rad = angle_rad - math.radians(self.agent.orientation.z)
-        angle_deg = normalize_angle(math.degrees(angle_rad))
-        angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
-        norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
-        scaling = np.clip(norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
-        self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling
-        self.agent.angular_velocity_cmd = angle_deg
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "%s mean-field direction updated -> angle=%.2f norm=%.3f scaling=%.3f",
-                self.agent.get_name(),
-                angle_deg,
-                norm,
-                scaling,
-            )
+        logger.debug("--------------------%s mean-field step tick=%s-------------------------", self.agent.get_name(), tick)
+        try:
+            self._update_perception(objects, agents, tick, arena_shape)
+            if self.perception is None or not np.any(self.perception):
+                self.agent.linear_velocity_cmd = 0.0
+                self.agent.angular_velocity_cmd = 0.0
+                return
+            targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
+            self.mean_field_system.num_targets = len(targets)
+            self.mean_field_system.num_guards = len(guard_angles) if guard_angles is not None else 0
+            neural_field = None
+            bump_positions = None
+            final_norm = 0.0
+            for _ in range(self.steps_per_tick):
+                neural_field, bump_positions, final_norm = self.mean_field_system.step(
+                    target_angles=targets,
+                    target_qualities=qualities,
+                    guard_angles=guard_angles,
+                    guard_qualities=guard_qualities,
+                    guard_decay_rate=self.guard_decay_rate,
+                    guard_distances=guard_distances,
+                )
+            angle_rad = None
+            if bump_positions is not None and len(bump_positions) > 0:
+                angle_rad = bump_positions[-1]
+            if angle_rad is None:
+                self.agent.linear_velocity_cmd = 0.0
+                self.agent.angular_velocity_cmd = 0.0
+                return
+            if self.reference == "allocentric":
+                angle_rad = angle_rad - math.radians(self.agent.orientation.z)
+            angle_deg = normalize_angle(math.degrees(angle_rad))
+            angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
+            norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
+            scaling = np.clip(norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
+            self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling
+            self.agent.angular_velocity_cmd = angle_deg
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "%s mean-field direction updated -> angle=%.2f norm=%.3f scaling=%.3f",
+                    self.agent.get_name(),
+                    angle_deg,
+                    norm,
+                    scaling,
+                )
+        finally:
+            if logger.isEnabledFor(logging.DEBUG):
+                elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+                logger.debug("----------------------------%s mean-field step duration = %.3f ms-----------------------------------", self.agent.get_name(), elapsed_ms)
 
     def _update_perception(self, objects: dict, agents: dict, tick: int | None = None, arena_shape=None) -> None:
         """Update sensory perception from detections."""
@@ -196,6 +206,7 @@ class MeanFieldMovementModel(MovementModel):
                 channel_name,
                 max_val,
             )
+        logger.debug("%s mean-field entities=%r", self.agent.get_name(), self._mf_entities)
 
     def _select_perception_channel(self, snapshot: dict[str, np.ndarray]) -> tuple[np.ndarray, str]:
         """Select a perception channel depending on the configured task."""
@@ -274,8 +285,8 @@ class MeanFieldMovementModel(MovementModel):
             target_angles = np.array([entry.get("angle", 0.0) for entry in target_entries], dtype=float)
             target_qualities = np.array([entry.get("intensity", 1.0) for entry in target_entries], dtype=float)
         else:
-            target_angles = self.group_angles.copy()
-            target_qualities = self.perception.copy() if self.perception is not None else np.zeros_like(self.group_angles)
+            target_angles = np.array([0.0])
+            target_qualities = np.array([0.0])
         guard_angles = guard_qualities = guard_distances = None
         if guard_entries:
             guard_angles = np.array([entry.get("angle", 0.0) for entry in guard_entries], dtype=float)
