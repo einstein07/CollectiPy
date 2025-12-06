@@ -1,0 +1,89 @@
+{
+    "environment": {
+        "logging": {
+            "console": true,
+            "console_level": "DEBUG",
+            "file_level": "INFO"
+        },
+        "collisions": false,
+        "time_limit": 0,
+        "num_runs": 1,
+        "gui": {
+            "_id": "2D",
+            "on_click": [
+                "show_spins", "detection"
+            ],
+            "view": ["detection"]
+        },
+        "arenas": {
+            "arena_0": {
+                "random_seed": 0,
+                "radius": 1,
+                "_id": "square",
+                "color": "gray"
+            }
+        },
+        "objects": {
+            "static_0": {
+                "number": [1],
+                "position": [[0.0, 0.4, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "green",
+                "strength": [5],
+                "uncertainty": [0]
+            },
+            "static_1": {
+                "number": [1],
+                "position": [[0.0, -0.2, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "red",
+                "strength": [-15],
+                "uncertainty": [0]
+            }
+        },
+        "agents": {
+            "movable_0": {
+                "position": [[0.0,-0.9,0]],
+                "number": [1],
+                "shape": "cylinder",
+                "linear_velocity": 0.01,
+                "angular_velocity": 10,
+                "height": 0.02,
+                "diameter": 0.033,
+                "color": "blue",
+                "detection": {
+                    "type": "GPS",
+                    "range": 5.0,
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "mean_field",
+                "mean_field_model": {
+                    "steps_per_tick": 1,
+                    "perception_width": 0.2,
+                    "perception_global_inhibition": 0.2,
+                    "num_neurons": 30,
+                    "num_targets": 2,
+                    "target_qualities": [1.0],
+                    "num_guards": 0,
+                    "guard_qualities": [],
+                    "target_ids": ["static_0.s#0"],
+                    "guard_ids": ["static_1.s#0"],
+                    "guard_decay_rate": 6.0,
+                    "kappa": 20,
+                    "v": 0.5,
+                    "sigma": 0.4,
+                    "beta": 0.4,
+                    "integration_time": 50,
+                    "integration_dt": 0.1,
+                    "reference": "egocentric"
+                }
+            }
+        }
+    }
+}
