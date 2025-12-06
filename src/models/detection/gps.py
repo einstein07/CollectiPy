@@ -110,14 +110,16 @@ class GPSDetectionModel(DetectionModel):
 
     def _collect_object_targets(self, perception, objects, mf_targets, mf_guards):
         """Accumulate perception contributed by configured objects."""
-        for obj_key, (_, positions, strengths, uncertainties) in objects.items():
-            for idx, (position, strength, uncertainty) in enumerate(zip(positions, strengths, uncertainties)):
+        for obj_key, (shapes, positions, strengths, uncertainties) in objects.items():
+            entries = zip(shapes, positions, strengths, uncertainties)
+            for shape, position, strength, uncertainty in entries:
                 dx = position.x - self.agent.position.x
                 dy = position.y - self.agent.position.y
                 dz = position.z - self.agent.position.z
                 distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
                 angle_rad = self._compute_relative_angle(dx, dy)
-                entity_id = f"{obj_key}[{idx}]"
+                meta = getattr(shape, "metadata", {}) if hasattr(shape, "metadata") else {}
+                entity_id = meta.get("entity_name") or obj_key
                 self._record_mean_field_entity(entity_id, angle_rad, distance, strength, mf_targets, mf_guards)
                 effective_width = self.perception_width + uncertainty
                 self._accumulate_target(perception, dx, dy, dz, effective_width, strength)
