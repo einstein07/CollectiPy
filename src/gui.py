@@ -1336,15 +1336,32 @@ class GUI_2D(QWidget):
         if spin is None:
             self._clear_selection(update_view=False)
             return
+        display_states = spin
+        display_angles = None
+        display_field = None
+        avg_angle = None
+        if isinstance(spin, dict):
+            display_states = spin.get("states")
+            display_angles = spin.get("angles")
+            display_field = spin.get("external_field")
+            avg_angle = spin.get("avg_direction_of_activity")
+        else:
+            display_states = spin[0]
+            display_angles = spin[1]
+            display_field = spin[2]
+            avg_angle = spin[3]
+        if display_states is None or display_angles is None or display_field is None:
+            self._clear_selection(update_view=False)
+            return
         self._show_spin_canvas()
         cmap = cm.get_cmap("coolwarm")
-        group_mean_spins = spin[0].mean(axis=1)
+        group_mean_spins = display_states.mean(axis=1)
         colors_spins = cmap(group_mean_spins)
-        group_mean_perception = spin[2].reshape(spin[1][1], spin[1][2]).mean(axis=1)
+        group_mean_perception = display_field.reshape(display_angles[1], display_angles[2]).mean(axis=1)
         normalized_perception = (group_mean_perception + 1) * 0.5
         colors_perception = cmap(normalized_perception)
-        angles = spin[1][0][::spin[1][2]]
-        width = 2 * math.pi / spin[1][1]
+        angles = display_angles[0][::display_angles[2]]
+        width = 2 * math.pi / display_angles[1]
         if self.spins_bars is None or self.perception_bars is None:
             self.ax.clear()
             self.spins_bars = self.ax.bar(
@@ -1368,7 +1385,6 @@ class GUI_2D(QWidget):
                 bar.set_color(color)
             for bar, color in zip(self.perception_bars, colors_perception):
                 bar.set_color(color)
-        avg_angle = spin[3]
         if avg_angle is not None:
             if self.arrow is not None:
                 self.arrow.remove()

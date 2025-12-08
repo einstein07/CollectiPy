@@ -63,7 +63,16 @@ class EntityManager:
             return None
         except Exception:
             return None
-    def __init__(self, agents:dict, arena_shape, wrap_config=None, hierarchy: Optional[ArenaHierarchy] = None, snapshot_stride: int = 1, manager_id: int = 0, collisions: bool = False):
+    def __init__(
+        self,
+        agents: dict,
+        arena_shape,
+        wrap_config=None,
+        hierarchy: Optional[ArenaHierarchy] = None,
+        snapshot_stride: int = 1,
+        manager_id: int = 0,
+        collisions: bool = False,
+    ):
         """Initialize the instance."""
         self.agents = agents
         self.arena_shape = arena_shape
@@ -232,16 +241,37 @@ class EntityManager:
             break
         ticks_limit = time_limit * ticks_per_second + 1 if time_limit > 0 else 0
         run = 1
+        terminate_all = False
+        pending_message = None
         logger.info("EntityManager starting for %s runs (time_limit=%s)", num_runs, time_limit)
         while run < num_runs + 1:
             metadata_sent = False
             metadata_snapshot = self.get_agent_metadata()
             reset = False
-            data_in = self._blocking_get(arena_queue)
-            if data_in is None:
+            force_next_run = False
+            while True:
+                if pending_message is not None:
+                    data_in = pending_message
+                    pending_message = None
+                else:
+                    data_in = self._blocking_get(arena_queue)
+                if data_in is None:
+                    break
+                command = data_in.get("command")
+                if command == "terminate_all":
+                    terminate_all = True
+                    break
+                if command == "terminate_run" and not data_in.get("status"):
+                    continue
                 break
-            if data_in["status"][0] == 0:
-                self.initialize(data_in["random_seed"], data_in["objects"])
+            if terminate_all or data_in is None:
+                break
+            command = data_in.get("command")
+            if command == "terminate_run":
+                force_next_run = True
+            status = data_in.get("status")
+            if not force_next_run and isinstance(status, (list, tuple)) and len(status) >= 2 and status[0] == 0:
+                self.initialize(data_in.get("random_seed"), data_in.get("objects"))
             for agent_type, (_, entities) in self.agents.items():
                 bus = self.message_buses.get(agent_type)
                 if bus:
@@ -255,33 +285,74 @@ class EntityManager:
             }
             agents_queue.put(agents_data)
             t = 1
-            while True:
+            while not force_next_run:
                 if ticks_limit > 0 and t >= ticks_limit:
                     break
-                if data_in["status"] == "reset":
+                command = data_in.get("command")
+                if command == "terminate_run":
+                    force_next_run = True
+                    break
+                if command == "terminate_all":
+                    terminate_all = True
+                    force_next_run = True
+                    break
+                status = data_in.get("status")
+                if status == "reset":
                     reset = True
                     break
-                while data_in["status"][0] / data_in["status"][1] < t / ticks_per_second:
+                status_ratio = None
+                if isinstance(status, (list, tuple)) and len(status) >= 2:
+                    denom = max(1, status[1])
+                    status_ratio = status[0] / denom
+                while status_ratio is not None and status_ratio < t / ticks_per_second and not force_next_run and not reset:
                     new_msg = self._maybe_get(arena_queue, timeout=0.01)
                     if new_msg is not None:
                         data_in = new_msg
-                        if data_in["status"] == "reset":
+                        command = data_in.get("command")
+                        status = data_in.get("status")
+                        if command == "terminate_run":
+                            force_next_run = True
+                            break
+                        if command == "terminate_all":
+                            terminate_all = True
+                            force_next_run = True
+                            break
+                        if status == "reset":
                             reset = True
                             break
+                        if isinstance(status, (list, tuple)) and len(status) >= 2:
+                            denom = max(1, status[1])
+                            status_ratio = status[0] / denom
+                        else:
+                            status_ratio = None
                     else:
                         time.sleep(0.001)
-                    agents_data = {
-                        "status": [t, ticks_per_second],
-                        "agents_shapes": self.get_agent_shapes(),
-                        "agents_spins": self.get_agent_spins(),
-                        "agents_metadata": self.get_agent_metadata()
-                    }
-                    if agents_queue.qsize() == 0:
-                        agents_queue.put(agents_data)
-                if reset: break
+                    if not force_next_run and not reset:
+                        agents_data = {
+                            "status": [t, ticks_per_second],
+                            "agents_shapes": self.get_agent_shapes(),
+                            "agents_spins": self.get_agent_spins(),
+                            "agents_metadata": self.get_agent_metadata()
+                        }
+                        if agents_queue.qsize() == 0:
+                            agents_queue.put(agents_data)
+                if force_next_run or reset:
+                    break
                 latest = self._maybe_get(arena_queue, timeout=0.0)
                 if latest is not None:
                     data_in = latest
+                    command = data_in.get("command")
+                    status = data_in.get("status")
+                    if command == "terminate_run":
+                        force_next_run = True
+                        break
+                    if command == "terminate_all":
+                        terminate_all = True
+                        force_next_run = True
+                        break
+                    if status == "reset":
+                        reset = True
+                        break
                 for agent_type, (_, entities) in self.agents.items():
                     bus = self.message_buses.get(agent_type)
                     if bus:
@@ -294,7 +365,7 @@ class EntityManager:
                     for entity in entities:
                         if getattr(entity, "msg_enable", False) and entity.message_bus:
                             entity.receive_messages(t)
-                        entity.run(t, self.arena_shape, data_in["objects"],self.get_agent_shapes())
+                        entity.run(t, self.arena_shape, data_in.get("objects"), self.get_agent_shapes())
                         self._apply_wrap(entity)
                         self._clamp_to_arena(entity)
                 agents_data = {
@@ -310,6 +381,8 @@ class EntityManager:
                     "agents": self.pack_detector_data()
                 }
                 agents_queue.put(agents_data)
+                if force_next_run:
+                    break
                 dec_data_in = {}
                 if self.collisions and self._detector and t % self.snapshot_stride == 0:
                     dec_data_in = self._detector.compute_corrections(detector_data["agents"], data_in.get("objects"))
@@ -329,19 +402,33 @@ class EntityManager:
                             self._apply_wrap(entity)
                             self._clamp_to_arena(entity)
                 t += 1
-            if t < ticks_limit and not reset:
+            if terminate_all:
+                break
+            if not force_next_run and t < ticks_limit and not reset:
                 break
             if run < num_runs:
-                # Drain extra arena messages with gentle polling.
                 drained = self._maybe_get(arena_queue, timeout=0.01)
                 while drained is not None:
-                    data_in = drained
+                    command = drained.get("command")
+                    if command == "terminate_all":
+                        terminate_all = True
+                        break
+                    if command == "terminate_run" and not drained.get("status"):
+                        drained = self._maybe_get(arena_queue, timeout=0.0)
+                        continue
+                    pending_message = drained
+                    break
                     drained = self._maybe_get(arena_queue, timeout=0.0)
             elif not reset:
                 self.close()
+            if terminate_all:
+                break
             if not reset:
-                run +=1
-        logger.info("EntityManager completed all runs")
+                run += 1
+        if terminate_all:
+            logger.info("EntityManager terminating due to external command (manager=%s)", self.manager_id)
+        else:
+            logger.info("EntityManager completed all runs")
 
     def pack_detector_data(self) -> dict:
         """Pack detector data."""

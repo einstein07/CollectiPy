@@ -324,7 +324,7 @@ class Environment():
                     hierarchy=arena_hierarchy,
                     snapshot_stride=self.snapshot_stride,
                     manager_id=idx_block,
-                    collisions=self.collisions
+                    collisions=self.collisions,
                 )
                 proc = mp.Process(
                     target=entity_manager.run,

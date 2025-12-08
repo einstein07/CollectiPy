@@ -9,6 +9,7 @@
 
 """Movement model that wraps the phenomenological mean-field ring attractor."""
 
+import copy
 import logging
 import math
 import time
@@ -55,6 +56,7 @@ class MeanFieldMovementModel(MovementModel):
         self._active_perception_channel = "objects"
         self._mf_entities = {"targets": [], "guards": []}
         self._last_bump_angle: Optional[float] = None
+        self._last_norm: float = 0.0
         self.mean_field_system: Optional[MeanFieldSystem] = None
         self.detection_model = self._create_detection_model()
         self.reset()
@@ -138,6 +140,7 @@ class MeanFieldMovementModel(MovementModel):
                 self.agent.linear_velocity_cmd = 0.0
                 self.agent.angular_velocity_cmd = 0.0
                 self._last_bump_angle = None
+                self._last_norm = 0.0
                 return
             targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
             self.mean_field_system.num_targets = len(targets)
@@ -161,12 +164,14 @@ class MeanFieldMovementModel(MovementModel):
                 self.agent.linear_velocity_cmd = 0.0
                 self.agent.angular_velocity_cmd = 0.0
                 self._last_bump_angle = None
+                self._last_norm = 0.0
                 return
             if self.reference == "allocentric":
                 angle_rad = angle_rad - math.radians(self.agent.orientation.z)
             angle_deg = normalize_angle(math.degrees(angle_rad))
             angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
             norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
+            self._last_norm = norm
             scaling = np.clip(norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
             self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling
             self.agent.angular_velocity_cmd = angle_deg
@@ -351,12 +356,21 @@ class MeanFieldMovementModel(MovementModel):
         num_spins_per_group = 1
         perception_vec = self._prepare_perception_vector(num_groups * num_spins_per_group)
         angles_flat = np.repeat(self.group_angles, num_spins_per_group)
-        return (
-            state_matrix,
-            (angles_flat, num_groups, num_spins_per_group),
-            perception_vec,
-            snapshot.get("angle"),
-        )
+        raw_state = snapshot["state"].copy()
+        raw_perception = None if snapshot.get("perception") is None else snapshot["perception"].copy()
+        entities_copy = copy.deepcopy(self._mf_entities) if self._mf_entities else {"targets": [], "guards": []}
+        return {
+            "states": state_matrix,
+            "angles": (angles_flat, num_groups, num_spins_per_group),
+            "external_field": perception_vec,
+            "avg_direction_of_activity": snapshot.get("angle"),
+            "model": "mean_field",
+            "mean_field_state": raw_state,
+            "mean_field_perception": raw_perception,
+            "mean_field_entities": entities_copy,
+            "mean_field_norm": self._last_norm,
+            "channel": snapshot.get("channel"),
+        }
 
 
 register_movement_model("mean_field", lambda agent: MeanFieldMovementModel(agent))

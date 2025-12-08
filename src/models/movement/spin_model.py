@@ -254,11 +254,12 @@ class SpinMovementModel(MovementModel):
         """Return the spin system data."""
         if not self.spin_system:
             return None
-        return (
-            self.spin_system.get_states(),
-            self.spin_system.get_angles(),
-            self.spin_system.get_external_field(),
-            self.spin_system.get_avg_direction_of_activity(),
-        )
+        return {
+            "states": self.spin_system.get_states().copy(),
+            "angles": self.spin_system.get_angles(),
+            "external_field": self.spin_system.get_external_field().copy(),
+            "avg_direction_of_activity": self.spin_system.get_avg_direction_of_activity(),
+            "model": "spin_model",
+        }
 
 register_movement_model("spin_model", lambda agent: SpinMovementModel(agent))

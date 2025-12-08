@@ -56,7 +56,9 @@ class Arena():
         self.agents_spins = {}
         self.agents_metadata = {}
         self.data_handling = None
-        if len(config_elem.results) > 0 and not len(config_elem.gui) > 0 : self.data_handling = DataHandlingFactory.create_data_handling(config_elem)
+        results_enabled = bool(getattr(config_elem, "results", {}))
+        if results_enabled:
+            self.data_handling = DataHandlingFactory.create_data_handling(config_elem)
         self._hierarchy = None
         self._hierarchy_enabled = "hierarchy" in config_elem.arena
         self._hierarchy_config = config_elem.arena.get("hierarchy") if self._hierarchy_enabled else None

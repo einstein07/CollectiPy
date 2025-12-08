@@ -7,8 +7,12 @@
 #  license. Attribution is required if this code is used in other works.
 # ------------------------------------------------------------------------------
 
+import csv
 import math
 import os, json, pickle, shutil, zipfile
+from typing import Any
+
+import numpy as np
 from config import Config
 
 class DataHandlingFactory():
@@ -47,6 +51,7 @@ class DataHandling():
                 self.group_specs.add("graph_detection")
         self.base_dump_enabled = "base" in self.agent_specs
         self.spin_dump_enabled = "spin_model" in self.agent_specs
+        self.mean_field_logging_enabled = "mean_field" in self.agent_specs
         self.graph_messages_enabled = "graphs" in self.group_specs or "graph_messages" in self.group_specs
         self.graph_detection_enabled = "graphs" in self.group_specs or "graph_detection" in self.group_specs
         self.snapshots_per_second = self._parse_snapshot_rate(results_cfg.get("snapshots_per_second", 1))
@@ -62,6 +67,7 @@ class DataHandling():
             json.dump(config_elem.__dict__, f, indent=4, default=str)
         self.agents_files = {}
         self.agent_spin_files = {}
+        self.mean_field_files = {}
         self.agent_name_order = []
         self.agent_lookup = {}
         self.agents_metadata = {}
@@ -227,6 +233,7 @@ class SpaceDataHandling(DataHandling):
         super().new_run(run, shapes, spins, metadata, ticks_per_second)
         self.agent_name_order = []
         self.agent_lookup = {}
+        self.mean_field_files = {}
         if shapes is not None:
             for key, entities in shapes.items():
                 for idx, entity in enumerate(entities):
@@ -281,23 +288,34 @@ class SpaceDataHandling(DataHandling):
         capture = self._should_capture_tick(tick, force=force)
         if not capture:
             return
-        if self.base_dump_enabled and shapes is not None:
+        if shapes is not None:
             for key, entities in shapes.items():
+                spin_group = spin_data.get(key)
                 for idx, entity in enumerate(entities):
-                    entry = self.agents_files.get((key, idx))
-                    if not entry:
-                        continue
-                    com = entity.center_of_mass()
-                    row = {
-                        "tick": tick,
-                        "pos x": com.x,
-                        "pos y": com.y,
-                        "pos z": com.z
-                    }
-                    if self.hierarchy_enabled:
-                        row["hierarchy_node"] = self._resolve_hierarchy_node(entity)
-                    entry["pickler"].dump({"type": "row", "value": row})
-        if self.spin_dump_enabled and self.agent_spin_files:
+                    spin_values = self._resolve_spin_entry(spin_group, idx)
+                    if self.base_dump_enabled:
+                        entry = self.agents_files.get((key, idx))
+                        if entry:
+                            com = entity.center_of_mass()
+                            row = {
+                                "tick": tick,
+                                "pos x": com.x,
+                                "pos y": com.y,
+                                "pos z": com.z
+                            }
+                            if self.hierarchy_enabled:
+                                row["hierarchy_node"] = self._resolve_hierarchy_node(entity)
+                            entry["pickler"].dump({"type": "row", "value": row})
+                    if self.spin_dump_enabled and self.agent_spin_files:
+                        spin_entry = self.agent_spin_files.get((key, idx))
+                        if spin_entry:
+                            row = {"tick": tick}
+                            if spin_values is not None:
+                                row.update(spin_values)
+                            spin_entry["pickler"].dump({"type": "row", "value": row})
+                    if self.mean_field_logging_enabled:
+                        self._write_mean_field_logs(key, idx, spin_values, tick, entity)
+        elif self.spin_dump_enabled and self.agent_spin_files:
             for (key, idx), spin_entry in self.agent_spin_files.items():
                 spin_values = self._resolve_spin_entry(spin_data.get(key), idx)
                 row = {"tick": tick}
@@ -319,6 +337,13 @@ class SpaceDataHandling(DataHandling):
                 entry["handle"].flush()
                 entry["handle"].close()
             self.agent_spin_files.clear()
+        if self.mean_field_files:
+            for entry in self.mean_field_files.values():
+                for fh in entry.values():
+                    if fh and fh.get("handle"):
+                        fh["handle"].flush()
+                        fh["handle"].close()
+            self.mean_field_files.clear()
         self._finalize_graph_archives()
         super().close(shapes)
 
@@ -348,6 +373,97 @@ class SpaceDataHandling(DataHandling):
                     normalized[key] = payload[pos]
             return normalized if normalized else None
         return {"states": payload}
+
+    def _write_mean_field_logs(self, key, idx, spin_values: dict | None, tick: int, shape_obj):
+        """Persist mean-field neural/sensory/position data to CSV files."""
+        if not self.mean_field_logging_enabled or spin_values is None:
+            return
+        if str(spin_values.get("model")) != "mean_field":
+            return
+        files = self._ensure_mean_field_files(key, idx, shape_obj)
+        if not files:
+            return
+        raw_state = spin_values.get("mean_field_state")
+        if raw_state is None:
+            raw_state = spin_values.get("states")
+        state_values = self._flatten_array(raw_state)
+        raw_perception = spin_values.get("mean_field_perception")
+        if raw_perception is None:
+            raw_perception = spin_values.get("external_field")
+        perception_values = self._flatten_array(raw_perception)
+        norm_z = float(np.linalg.norm(state_values)) if state_values else 0.0
+        targets_meta = spin_values.get("mean_field_entities", {}).get("targets", [])
+        targets_str = json.dumps(targets_meta)
+        channel = spin_values.get("channel") or ""
+
+        neural_entry = files.get("neural")
+        if neural_entry:
+            if not neural_entry["header_written"]:
+                header = ["tick"]
+                header.extend(f"neuron_{i}" for i in range(len(state_values)))
+                header.extend(["norm_z", "target_angles"])
+                neural_entry["writer"].writerow(header)
+                neural_entry["header_written"] = True
+            row = [tick]
+            row.extend(state_values)
+            row.extend([norm_z, targets_str])
+            neural_entry["writer"].writerow(row)
+
+        sensory_entry = files.get("sensory")
+        if sensory_entry:
+            if not sensory_entry["header_written"]:
+                header = ["tick"]
+                header.extend(f"sensor_{i}" for i in range(len(perception_values)))
+                header.append("channel")
+                sensory_entry["writer"].writerow(header)
+                sensory_entry["header_written"] = True
+            row = [tick]
+            row.extend(perception_values)
+            row.append(channel)
+            sensory_entry["writer"].writerow(row)
+
+        position_entry = files.get("position")
+        if position_entry and shape_obj is not None:
+            if not position_entry["header_written"]:
+                header = ["tick", "pos_x", "pos_y", "pos_z"]
+                position_entry["writer"].writerow(header)
+                position_entry["header_written"] = True
+            com = shape_obj.center_of_mass()
+            row = [tick, com.x, com.y, com.z]
+            position_entry["writer"].writerow(row)
+
+    def _ensure_mean_field_files(self, key, idx, shape_obj):
+        """Return or create the CSV writers used for mean-field logging."""
+        if not self.run_folder:
+            return None
+        entry = self.mean_field_files.get((key, idx))
+        if entry:
+            return entry
+        agent_id = self.agent_lookup.get((key, idx))
+        if not agent_id:
+            agent_id = self._agent_identifier(key, idx, shape_obj)
+            self.agent_lookup[(key, idx)] = agent_id
+        neural_path = os.path.join(self.run_folder, f"{agent_id}_neural.csv")
+        sensory_path = os.path.join(self.run_folder, f"{agent_id}_sensory.csv")
+        position_path = os.path.join(self.run_folder, f"{agent_id}_position.csv")
+        neural_handle = open(neural_path, "w", newline="")
+        sensory_handle = open(sensory_path, "w", newline="")
+        position_handle = open(position_path, "w", newline="")
+        entry = {
+            "neural": {"handle": neural_handle, "writer": csv.writer(neural_handle), "header_written": False},
+            "sensory": {"handle": sensory_handle, "writer": csv.writer(sensory_handle), "header_written": False},
+            "position": {"handle": position_handle, "writer": csv.writer(position_handle), "header_written": False},
+        }
+        self.mean_field_files[(key, idx)] = entry
+        return entry
+
+    @staticmethod
+    def _flatten_array(array: Any):
+        """Return the flattened values for the provided array-like input."""
+        if array is None:
+            return []
+        values = np.asarray(array, dtype=float).reshape(-1)
+        return values.tolist()
 
     def _resolve_hierarchy_node(self, entity):
         """Return the hierarchy node identifier for the provided entity, if any."""
