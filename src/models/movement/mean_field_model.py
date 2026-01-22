@@ -355,15 +355,25 @@ class MeanFieldMovementModel(MovementModel):
         num_groups = self.num_neurons
         num_spins_per_group = 1
         perception_vec = self._prepare_perception_vector(num_groups * num_spins_per_group)
-        angles_flat = np.repeat(self.group_angles, num_spins_per_group)
+        theta = getattr(self.mean_field_system, "theta", None)
+        use_theta = theta is not None and len(theta) == num_groups
+        angles_source = theta if use_theta else self.group_angles
+        angles_flat = np.repeat(angles_source, num_spins_per_group)
+        if use_theta:
+            shift = num_groups // 2
+            perception_vec = np.roll(perception_vec, -shift)
         raw_state = snapshot["state"].copy()
         raw_perception = None if snapshot.get("perception") is None else snapshot["perception"].copy()
         entities_copy = copy.deepcopy(self._mf_entities) if self._mf_entities else {"targets": [], "guards": []}
+        avg_angle = snapshot.get("angle")
+        if avg_angle is not None and self.reference == "allocentric":
+            avg_angle = avg_angle + math.radians(self.agent.orientation.z)
+            avg_angle = math.atan2(math.sin(avg_angle), math.cos(avg_angle))
         return {
             "states": state_matrix,
             "angles": (angles_flat, num_groups, num_spins_per_group),
             "external_field": perception_vec,
-            "avg_direction_of_activity": snapshot.get("angle"),
+            "avg_direction_of_activity": avg_angle,
             "model": "mean_field",
             "mean_field_state": raw_state,
             "mean_field_perception": raw_perception,
