@@ -37,7 +37,7 @@ class MeanFieldSystem:
 
     Core dynamics:
         z_dot = -z + tanh((u0 - s) * M @ z + b - beta) - tanh(beta) + noise
-        tau * s_dot = -s + k * ||z||^4
+        tau * s_dot = -s + k * ||z||^4 => necessary for spiking behavior. right now not included
     """
 
     def __init__(
