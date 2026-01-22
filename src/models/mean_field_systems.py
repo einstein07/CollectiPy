@@ -56,6 +56,9 @@ class MeanFieldSystem:
         dt: float = 0.1,
         integration_time: float = 50.0,
         rng: np.random.Generator | None = None,
+        # SFA parameters
+        g_adapt: float = 0.0, # set > 0 to enable SFA
+        tau_adapt: float = 0.0, # adaptation time constant
     ):
         """
         Initialize the mean-field system.
@@ -72,6 +75,8 @@ class MeanFieldSystem:
             initial_state: Optional initial state vector z.
             external_input: Optional initial external input vector b.
             rng: Optional numpy random generator for reproducibility.
+            g_adapt: Adaptation strength (set > 0 to enable spike-frequency adaptation).
+            tau_adapt: Adaptation time constant (used when g_adapt > 0).
         """
         if num_neurons <= 0:
             raise ValueError("num_neurons must be positive")
@@ -113,6 +118,14 @@ class MeanFieldSystem:
 
         if self.b.shape[0] != self.num_neurons:
             raise ValueError("external_input dimension must match num_neurons")
+
+        self.g_adapt = float(g_adapt)
+        self.tau_adapt = float(tau_adapt)
+        if self.g_adapt > 0.0 and self.tau_adapt <= 0.0:
+            raise ValueError("tau_adapt must be positive when g_adapt > 0")
+        
+        self.adapt_ring = np.zeros(self.num_neurons, dtype=float)
+        
 
 
     def compute_interaction_kernel(self) -> np.ndarray:
@@ -182,7 +195,7 @@ class MeanFieldSystem:
     def reset(
         self,
         z: np.ndarray | None = None,
-        s: float = 0.0,
+        a: np.ndarray | None = None,
         external_input: np.ndarray | None = None,
     ):
         """Reset internal state."""
@@ -190,11 +203,10 @@ class MeanFieldSystem:
             z = np.asarray(z, dtype=float).reshape(-1)
             if z.shape[0] != self.num_neurons:
                 raise ValueError("Reset state dimension must match num_neurons")
-            self.z = z
+            self.neural_ring = z
         else:
-            self.z = np.zeros(self.num_neurons, dtype=float)
+            self.neural_ring = np.zeros(self.num_neurons, dtype=float)
 
-        self.s = float(s)
 
         if external_input is not None:
             external_input = np.asarray(external_input, dtype=float).reshape(-1)
@@ -202,7 +214,7 @@ class MeanFieldSystem:
                 raise ValueError("Reset input dimension must match num_neurons")
             self.b = external_input
         else:
-            self.b = np.zeros_like(self.z)
+            self.b = np.zeros_like(self.neural_ring)
 
         """Update external input vector b."""
         external_input = np.asarray(external_input, dtype=float).reshape(-1)
@@ -210,6 +222,40 @@ class MeanFieldSystem:
             raise ValueError("external_input dimension must match num_neurons")
         self.b = external_input
 
+        if a is not None:
+            self.adapt_ring = np.asarray(a, dtype=float).reshape(-1)
+        else:
+            self.adapt_ring = np.zeros(self.num_neurons, dtype=float)
+
+    @staticmethod
+    def euler_integrate_sfa(y0, t_eval, u, b, M, beta, n, sigma, g_adapt, tau_adapt, randn_like_func):
+        """
+        Euler integration for stacked state y = [z; a] where:
+        z_dot = -z + tanh(u M z + b - beta - g_adapt*a) - tanh(-beta) + noise
+        a_dot = (-a + z)/tau_adapt
+        """
+        dt = t_eval[1] - t_eval[0]
+        y = np.zeros((len(t_eval), len(y0)))
+        y[0] = y0
+
+        N = n  # number of neurons
+        for i in range(1, len(t_eval)):
+            z_prev = y[i-1, :N]
+            a_prev = y[i-1, N:]
+
+            noise = randn_like_func(z_prev, sigma * np.sqrt(dt), 1.0 / np.sqrt(N))
+
+            drive = u * (M @ z_prev) + b - beta - (g_adapt * a_prev)
+            z_dot = -z_prev + np.tanh(drive) - np.tanh(-beta) + noise
+
+            a_dot = (-a_prev + z_prev) / tau_adapt
+
+            y[i, :N] = z_prev + dt * z_dot
+            y[i, N:] = a_prev + dt * a_dot
+
+        return y
+    
+    @staticmethod
     def euler_integrate(y0, t_eval, u, b, M, beta, n, sigma, randn_like_func):
         dt = t_eval[1] - t_eval[0]
         y = np.zeros((len(t_eval), len(y0)))
@@ -219,15 +265,57 @@ class MeanFieldSystem:
             dydt = -y[i-1] + np.tanh(u * M @ y[i-1] + b - beta) - np.tanh(-beta) + noise
             y[i] = y[i-1] + dt * dydt
         return y
-
+    
+    @staticmethod
     def randn_like(y, sigma, inv_sqrt_n):
         out = np.empty_like(y)
         for i in prange(y.size):
             out[i] = np.random.normal(0.0, sigma) * inv_sqrt_n
         return out
     
-    # Integrate timesteps to simulate the neural field dynamics
+
     def compute_dynamics(self, total_time=50, dt=0.1):
+        t_eval = np.arange(0, total_time, dt)
+
+        use_adaptation = self.g_adapt > 0.0 and self.tau_adapt > 0.0
+        if use_adaptation:
+            # Stack initial condition y0 = [z0; a0]
+            y0 = np.concatenate([self.neural_ring.copy(), self.adapt_ring.copy()])
+            result = MeanFieldSystem.euler_integrate_sfa(
+                y0, t_eval,
+                self.u, self.b, self.M, self.beta,
+                self.num_neurons, self.sigma,
+                self.g_adapt, self.tau_adapt,
+                MeanFieldSystem.randn_like,
+            )
+            z_traj = result[:, :self.num_neurons]
+            a_traj = result[:, self.num_neurons:]
+        else:
+            y0 = self.neural_ring.copy()
+            z_traj = MeanFieldSystem.euler_integrate(
+                y0, t_eval,
+                self.u, self.b, self.M, self.beta,
+                self.num_neurons, self.sigma,
+                MeanFieldSystem.randn_like,
+            )
+            a_traj = None
+
+        times = t_eval
+
+        bump_positions = np.array([compute_center_of_mass(z_t, self.theta) for z_t in z_traj])
+        final_norm = np.linalg.norm(z_traj[-1])
+
+        # Update internal states
+        self.neural_ring = z_traj[-1]
+        if a_traj is not None:
+            self.adapt_ring = a_traj[-1]
+        else:
+            self.adapt_ring = np.zeros_like(self.adapt_ring)
+
+        return times, bump_positions, final_norm
+
+    # Integrate timesteps to simulate the neural field dynamics
+    """def compute_dynamics(self, total_time=50, dt=0.1):
         t_eval = np.arange(0, total_time, dt)
         y0 = self.neural_ring.copy()
         result = MeanFieldSystem.euler_integrate(y0, t_eval, self.u, self.b, self.M, self.beta, self.num_neurons, self.sigma, MeanFieldSystem.randn_like)
@@ -236,7 +324,7 @@ class MeanFieldSystem:
         bump_positions = np.array([compute_center_of_mass(z_t, self.theta) for z_t in result])
         final_norm = np.linalg.norm(result[-1])
         self.neural_ring = result[-1]  # Update neural field state
-        return times, bump_positions, final_norm
+        return times, bump_positions, final_norm"""
 
 
     def step(
@@ -274,7 +362,7 @@ class MeanFieldSystem:
         history = []
         for _ in range(steps):
             self.step(**step_kwargs)
-            history.append(self.z.copy())
+            history.append(self.neural_ring.copy())
         return np.asarray(history)
 
     def get_state(self):

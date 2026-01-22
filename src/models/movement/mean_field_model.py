@@ -44,6 +44,8 @@ class MeanFieldMovementModel(MovementModel):
         self.num_neurons = int(self.params.get("num_neurons", 100))
         self.integration_time = float(self.params.get("integration_time", 50.0))
         self.integration_dt = float(self.params.get("integration_dt", self.params.get("dt", 0.1)))
+        self.g_adapt = float(self.params.get("g_adapt", 0.0))
+        self.tau_adapt = float(self.params.get("tau_adapt", 0.0))
         self.perception_range = self._resolve_detection_range()
         self.task = (agent.get_task() or self.params.get("task") or "selection").lower()
         if hasattr(agent, "set_task") and not agent.get_task():
@@ -102,6 +104,8 @@ class MeanFieldMovementModel(MovementModel):
             sigma=float(self.params.get("sigma", 0.01)),
             dt=self.integration_dt,
             integration_time=self.integration_time,
+            g_adapt=self.g_adapt,
+            tau_adapt=self.tau_adapt,
         )
         logger.debug("%s mean-field system reset", self.agent.get_name())
 
