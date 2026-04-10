@@ -380,7 +380,7 @@ class MeanFieldSystem:
         return y
     
     @staticmethod
-    @njit(parallel=True)
+    @njit(parallel=True, cache=True)
     def randn_like(y, sigma, inv_sqrt_n):
         out = np.empty_like(y)
         for i in prange(y.size):
