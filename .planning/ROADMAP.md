@@ -50,7 +50,10 @@ Plans:
   2. The detection fires correctly for both the standard model (single bump transition) and the SFA model (oscillating bump that eventually settles)
   3. A config with non-default window size, angular tolerance, and variance threshold is accepted and respected at runtime
   4. An experiment with no stable decision (bump never settles within tolerance) completes without error and logs no bifurcation event
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 02-01-PLAN.md — BifurcationDetector class + unit tests (BIF-01, BIF-02)
+- [ ] 02-02-PLAN.md — Integration with MeanFieldMovementModel + DataHandling events.json output (BIF-01, BIF-02, BIF-03, BIF-04)
 
 ### Phase 3: Target Swap
 **Goal**: Experiments can test re-decision by swapping target positions after the initial commitment
@@ -93,7 +96,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 0/4 | Not started | - |
-| 2. Bifurcation Detection | 0/TBD | Not started | - |
+| 2. Bifurcation Detection | 0/2 | Not started | - |
 | 3. Target Swap | 0/TBD | Not started | - |
 | 4. Analysis Pipeline | 0/TBD | Not started | - |
 | 5. Sweep Tooling | 0/TBD | Not started | - |
