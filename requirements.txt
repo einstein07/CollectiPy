@@ -4,3 +4,5 @@ numpy
 psutil
 PySide6
 pytest
+scipy
+numba
