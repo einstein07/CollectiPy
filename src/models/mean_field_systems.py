@@ -144,6 +144,7 @@ class MeanFieldSystem:
         self.last_target_ids: list[str] = []
         self.last_target_base_qualities = np.array([], dtype=float)
         self.last_modulated_target_qualities = np.array([], dtype=float)
+        self._step_count: int = 0
         
 
     @staticmethod
@@ -463,6 +464,7 @@ class MeanFieldSystem:
         Advance the system by one Euler step. Provide either an explicit external_input
         or target/guard descriptors to build b.
         """
+        self._step_count += 1
         self.compute_sensory_map(
             num_targets=self.num_targets,
             num_guards=self.num_guards,
@@ -475,12 +477,19 @@ class MeanFieldSystem:
             guard_distances=guard_distances,
         )
 
-
-
         times, bump_positions, final_norm = self.compute_dynamics(
             total_time=self.integration_time,
             dt=self.dt,
         )
+        z_new = self.neural_ring
+        if np.any(np.isnan(z_new)) or np.any(np.isinf(z_new)):
+            norm = float(np.linalg.norm(z_new))
+            msg = (
+                f"MeanFieldSystem diverged at tick {self._step_count}: "
+                f"state norm={norm:.4f}, dt={self.dt}, beta={self.beta}, sigma={self.sigma}"
+            )
+            logger.debug(msg)
+            raise RuntimeError(msg)
         self._advance_sensory_time()
 
         return self.neural_ring, bump_positions, final_norm
