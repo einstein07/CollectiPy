@@ -179,8 +179,22 @@ class Arena():
         """Reset the component state."""
         self.set_random_seed()
 
+    def _collect_bifurcation_events(self):
+        """Transfer bifurcation events from all agents' detectors to DataHandling."""
+        if self.data_handling is None:
+            return
+        for _config, entities in self.objects.values():
+            for entity in entities:
+                plugin = getattr(entity, '_movement_plugin', None)
+                if plugin is None:
+                    continue
+                detector = getattr(plugin, 'bifurcation_detector', None)
+                if detector is not None and detector.events:
+                    self.data_handling.collect_bifurcation_events(detector.events)
+
     def close(self):
         """Close the component resources."""
+        self._collect_bifurcation_events()
         for (config,entities) in self.objects.values():
             for n in range(len(entities)):
                 entities[n].close()
@@ -991,6 +1005,7 @@ class SolidArena(Arena):
         min_v = self.shape.min_vert()
         max_v = self.shape.max_vert()
         rng = self.random_generator
+        self._collect_bifurcation_events()
         if self.data_handling is not None: self.data_handling.close(self.agents_shapes)
         for (config, entities) in self.objects.values():
             n_entities = len(entities)

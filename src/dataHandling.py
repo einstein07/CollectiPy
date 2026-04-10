@@ -80,6 +80,7 @@ class DataHandling():
         self._last_snapshot_tick = None
         self._graph_step_dirs = {}
         self._graphs_root = None
+        self._bifurcation_events: list[dict] = []
         self.hierarchy_enabled = bool(getattr(config_elem, "arena", {}).get("hierarchy"))
 
     def _normalize_specs(self, value):
@@ -184,6 +185,22 @@ class DataHandling():
         self._graph_step_dirs = {}
         self._graphs_root = None
 
+    def collect_bifurcation_events(self, events: list[dict]) -> None:
+        """Accumulate bifurcation events from an agent's detector."""
+        self._bifurcation_events.extend(events)
+
+    def _write_events_json(self) -> None:
+        """Write bifurcation and swap events to events.json sidecar (D-06)."""
+        if self.run_folder is None or not os.path.isdir(self.run_folder):
+            return
+        events_data = {
+            "bifurcation_events": self._bifurcation_events,
+            "swap_events": [],  # Reserved for Phase 3
+        }
+        events_path = os.path.join(self.run_folder, "events.json")
+        with open(events_path, "w") as f:
+            json.dump(events_data, f, indent=2)
+
     def new_run(self, run: int, shapes, spins, metadata, ticks_per_second: int | None = None):
         """Create a new run."""
         self.run_folder = os.path.join(self.config_folder, f"run_{run}")
@@ -195,6 +212,7 @@ class DataHandling():
         self.agent_name_order = []
         self.agent_lookup = {}
         self.agents_metadata = metadata or {}
+        self._bifurcation_events = []
         self._ticks_per_second = self._sanitize_tick_rate(ticks_per_second)
         self._snapshot_offsets = self._build_snapshot_offsets(self._ticks_per_second)
         self._last_snapshot_tick = None
@@ -206,6 +224,7 @@ class DataHandling():
 
     def close(self, shapes):
         """Close the component resources."""
+        self._write_events_json()
         self._archive_run_folder()
 
     def _archive_run_folder(self):
