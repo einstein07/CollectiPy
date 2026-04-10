@@ -2,7 +2,7 @@
     "environment": {
         "logging": {
             "console": true,
-            "console_level": "DEBUG",
+            "console_level": "INFO",
             "file_level": "INFO"
         },
         "collisions": false,
@@ -15,10 +15,16 @@
             ],
             "view": ["detection"]
         },
+        "termination": {
+            "type": "proximity",
+            "target_ids": ["static_0.s#0", "static_1.s#0", "static_2.s#0"],
+            "radius": 0.025,
+            "agent_ids": "any"
+        },
         "arenas": {
             "arena_0": {
                 "random_seed": 0,
-                "radius": 1,
+                "side": 2,
                 "_id": "square",
                 "color": "gray"
             }
@@ -26,7 +32,7 @@
         "objects": {
             "static_0": {
                 "number": [1],
-                "position": [[0.4, 0.336, 0]],
+                "position": [[0.383, -0.321, 0]],
                 "_id": "idle",
                 "shape": "cylinder",
                 "height": 0.2,
@@ -37,7 +43,7 @@
             },
             "static_1": {
                 "number": [1],
-                "position": [[-0.4, 0.336, 0]],
+                "position": [[0.5, 0.0, 0]],
                 "_id": "idle",
                 "shape": "cylinder",
                 "height": 0.2,
@@ -48,7 +54,7 @@
             },
             "static_2": {
                 "number": [1],
-                "position": [[0.0, 0.4, 0]],
+                "position": [[0.383, 0.321, 0]],
                 "_id": "idle",
                 "shape": "cylinder",
                 "height": 0.2,
@@ -60,7 +66,8 @@
         },
         "agents": {
             "movable_0": {
-                "position": [[0.0,-0.9,0]],
+                "position": [[0.0, 0.0, 0]],
+                "orientation": [[0, 0, 0]],
                 "number": [1],
                 "shape": "cylinder",
                 "linear_velocity": 0.01,
@@ -79,21 +86,38 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
-                    "num_targets": 2,
-                    "target_qualities": [1.0],
+                    "num_targets": 3,
+                    "target_qualities": [1.0, 1.0, 1.0],
+                    "target_quality_modulations": {
+                        "static_0.s#0": {
+                            "epsilon": 0.2,
+                            "omega": 0.02,
+                            "psi": 0.0
+                        },
+                        "static_1.s#0": {
+                            "epsilon": 0.2,
+                            "omega": 0.02,
+                            "psi": 2.0943951023931953
+                        },
+                        "static_2.s#0": {
+                            "epsilon": 0.2,
+                            "omega": 0.02,
+                            "psi": 4.1887902047863905
+                        }
+                    },
                     "num_guards": 0,
                     "guard_qualities": [],
                     "target_ids": [
                         "static_0.s#0",
                         "static_1.s#0",
-                        "static_1.s#0"
+                        "static_2.s#0"
                     ],
                     "guard_ids": [],
-                    "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "sigma": 0.4,
-                    "beta": 0.4,
+                    "u": 10.0,
+                    "sigma": 1.5,
+                    "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
                     "reference": "egocentric"

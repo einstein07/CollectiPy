@@ -1,0 +1,15 @@
+beta: cotrols bifurcation point occurance in space: 0.9
+sigma: 5 for systematic search
+u: focus on these first three parameters
+v: could give us spiral search - need to investigate more
+
+On the variability of trajectory lenghts:
+Movement updates are tick‑based; bump strength doesn’t change the update period, but it does scale speed. Turning is rate‑limited per tick (not instantaneous), with no acceleration model.
+    
+Details with code pointers:
+
+Tick cadence / “period”: Each agent runs once per tick, where the tick rate is ticks_per_second on the agent (entity.py (line 227)). Per‑tick max speeds are derived by dividing configured linear_velocity/angular_velocity by ticks_per_second (entity.py (lines 1271-1272)). The mean‑field movement step runs every tick and repeats its internal update steps_per_tick times (mean_field_model.py (lines 39-45), mean_field_model.py (lines 151-159)).
+Mean‑field integration window is fixed: The mean‑field system integrates for a fixed total_time=50 and dt=0.1 in compute_dynamics, and step() calls it without overriding those defaults (mean_field_systems.py (lines 230-239), mean_field_systems.py (lines 242-270)). So the internal “period” is constant in the current code and does not depend on bump strength.
+Bump strength affects speed: The bump (neural field) norm is computed and mapped to a 0–1 scaling factor; linear velocity is max_absolute_velocity * scaling (mean_field_model.py (lines 173-176)). If perception is empty or no bump is found, velocity is set to zero (mean_field_model.py (lines 138-168)). This is the main reason trajectory lengths change with u/sigma.
+Turning is rate‑limited, not instantaneous: The bump angle is converted to degrees and clamped to max_angular_velocity per tick (mean_field_model.py (lines 171-172)), then applied by the unicycle kinematics as a per‑tick delta (unicycle.py (lines 20-34)). So turning takes multiple ticks if the required angle exceeds the per‑tick cap, though there’s no acceleration smoothing.
+Only some behaviors use explicit “turn time”: random_walk uses turning_ticks to hold a turn for multiple ticks (random_walk.py (lines 31-49)), but mean‑field does not.

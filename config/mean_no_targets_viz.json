@@ -17,40 +17,17 @@
         },
         "arenas": {
             "arena_0": {
-                "random_seed": 99991,
+                "random_seed": 0,
                 "radius": 1,
                 "_id": "square",
                 "color": "gray"
             }
         },
-        "objects": {
-            "static_0": {
-                "number": [1],
-                "position": [[0.433, -0.25, 0]],
-                "_id": "idle",
-                "shape": "cylinder",
-                "height": 0.2,
-                "diameter": 0.05,
-                "color": "green",
-                "strength": [5.0],
-                "uncertainty": [0]
-            },
-            "static_1": {
-                "number": [1],
-                "position": [[0.433, 0.25, 0]],
-                "_id": "idle",
-                "shape": "cylinder",
-                "height": 0.2,
-                "diameter": 0.05,
-                "color": "blue",
-                "strength": [5.0],
-                "uncertainty": [0]
-            }    
+        "objects":{
         },
         "agents": {
             "movable_0": {
-                "position": [[0.0,0.00,0]],
-                "orientation": [[0, 0, 0]],
+                "position": [[0.0,0.0,0]],
                 "number": [1],
                 "shape": "cylinder",
                 "linear_velocity": 0.01,
@@ -69,26 +46,23 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
-                    "tau_adapt": 3.2,
+                    "tau_adapt": 2.7,
                     "g_adapt": 0.0,
-                    "num_targets": 2,
+                    "num_targets": 0,
+                    "target_qualities": [],
                     "num_guards": 0,
                     "guard_qualities": [],
-                    "target_ids": [
-                        "static_0.s#0",
-                        "static_1.s#0"
-                    ],
+                    "target_ids": [],
                     "guard_ids": [],
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 10.0,
-                    "sigma": 1.5,
-                    "beta": 1.0,
+                    "u": 6.0,
+                    "sigma": 0.4,
+                    "beta": 0.4,
                     "integration_time": 50,
                     "integration_dt": 0.1,
-                    "reference": "egocentric",
-                    "norm_scale": 1.0
+                    "reference": "egocentric"
                 }
             }
         }
