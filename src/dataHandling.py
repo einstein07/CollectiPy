@@ -57,12 +57,15 @@ class DataHandling():
         self.snapshots_per_second = self._parse_snapshot_rate(results_cfg.get("snapshots_per_second", 1))
         abs_base_path = os.path.join(os.path.abspath(""), base_path)
         os.makedirs(abs_base_path, exist_ok=True)
-        existing = [d for d in os.listdir(abs_base_path) if d.startswith("config_folder_")]
-        folder_id = len(existing)
-        self.config_folder = os.path.join(abs_base_path, f"config_folder_{folder_id}")
-        if os.path.exists(self.config_folder):
-            raise Exception(f"Error config folder {self.config_folder} already present")
-        os.mkdir(self.config_folder)
+        folder_id = 0
+        while True:
+            candidate = os.path.join(abs_base_path, f"config_folder_{folder_id}")
+            try:
+                os.makedirs(candidate, exist_ok=False)
+                self.config_folder = candidate
+                break
+            except FileExistsError:
+                folder_id += 1
         with open(os.path.join(self.config_folder, "config.json"), "w") as f:
             json.dump(config_elem.__dict__, f, indent=4, default=str)
         self.agents_files = {}
