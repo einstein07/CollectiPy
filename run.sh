@@ -25,12 +25,22 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 # Uncomment the scenario you want to run.
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/spin_model_1_target.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/random_wp_collision_handshake_demo.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/random_wp_test_bounded.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/random_wp_test_unbounded.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/random_wp_message_cleanup.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/spin_model_test_selection_bounded.json"
-"$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/spin_model_test_flocking_bounded.json"
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_no_targets.json"
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_no_targets_viz.json"
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_1_target.json"
+ "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_2_targets.json" 
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_3_targets.json"
+#  "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_asymetric_3_targets.json"
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_1_target_3_guards.json"
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_1_target_X_guards.json"
+#  "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/mean_field_1_target_8_guards.json"
+# "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/spin_model_test_flocking_bounded.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/spin_model_test_flocking_unbounded.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/random_wp_hierarchy_bounded.json"
 # "$PYTHON_BIN" "$ROOT_DIR/src/main.py" -c "$ROOT_DIR/config/random_wp_minimal_setting.json"
