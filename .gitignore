@@ -2,4 +2,4 @@
 **/.vscode/
 **/*pycache*/
 **/data/
-**/logs/
+**/logs/.planning/
