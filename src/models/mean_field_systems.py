@@ -12,7 +12,7 @@
 from __future__ import annotations
 import logging
 import math
-from typing import Iterable
+from typing import Iterable, Mapping
 from numba import njit, prange
 import numpy as np
 
@@ -52,9 +52,12 @@ class MeanFieldSystem:
         num_guards: int = 0,
         target_qualities: Iterable[float] | None = None,
         guard_qualities: Iterable[float] | None = None,
+        target_quality_modulations: Mapping[str, Mapping[str, float]] | None = None,
         sigma: float = 0.01,
         dt: float = 0.1,
         integration_time: float = 50.0,
+        sensory_time_mode: str = "world_time",
+        sensory_dt: float | None = None,
         rng: np.random.Generator | None = None,
         # SFA parameters
         g_adapt: float = 0.0, # set > 0 to enable SFA
@@ -89,6 +92,15 @@ class MeanFieldSystem:
         self.sigma = float(sigma)
         self.dt = float(dt)
         self.integration_time = float(integration_time)
+        self.sensory_time_mode = self._normalize_sensory_time_mode(sensory_time_mode)
+        default_sensory_dt = (
+            self.integration_time
+            if self.sensory_time_mode == "integration_time"
+            else 1.0
+        )
+        self.sensory_dt = float(default_sensory_dt if sensory_dt is None else sensory_dt)
+        if self.sensory_dt < 0.0:
+            raise ValueError("sensory_dt must be non-negative")
         self.rng = rng or np.random.default_rng()
 
         self.theta = np.linspace(-np.pi, np.pi, self.num_neurons, endpoint=False)
@@ -103,6 +115,10 @@ class MeanFieldSystem:
             None if guard_qualities is None
             else np.asarray(guard_qualities, dtype=float).reshape(-1).copy()
         )
+        self.target_quality_modulations = self._normalize_target_quality_modulations(
+            target_quality_modulations
+        )
+        self.sensory_time = 0.0
 
         self.M = self.compute_interaction_kernel()
 
@@ -125,7 +141,71 @@ class MeanFieldSystem:
             raise ValueError("tau_adapt must be positive when g_adapt > 0")
         
         self.adapt_ring = np.zeros(self.num_neurons, dtype=float)
+        self.last_target_ids: list[str] = []
+        self.last_target_base_qualities = np.array([], dtype=float)
+        self.last_modulated_target_qualities = np.array([], dtype=float)
         
+
+    @staticmethod
+    def _normalize_sensory_time_mode(mode: str | None) -> str:
+        """Normalize how the modulation clock advances between updates."""
+        normalized = str(mode or "world_time").strip().lower()
+        if normalized in {"world", "world_time", "simulation", "simulation_time"}:
+            return "world_time"
+        if normalized in {"integration", "integration_time", "legacy"}:
+            return "integration_time"
+        raise ValueError(
+            "sensory_time_mode must be 'world_time' or 'integration_time'"
+        )
+
+
+    def _normalize_target_quality_modulations(
+        self,
+        target_quality_modulations: Mapping[str, Mapping[str, float]] | None,
+    ) -> dict[str, dict[str, float]]:
+        """Normalize per-target sinusoidal modulation parameters."""
+        if not target_quality_modulations:
+            return {}
+
+        normalized: dict[str, dict[str, float]] = {}
+        for target_id, params in target_quality_modulations.items():
+            if not isinstance(params, Mapping):
+                raise ValueError(
+                    f"target_quality_modulations['{target_id}'] must be a mapping"
+                )
+            normalized[str(target_id)] = {
+                "epsilon": float(params.get("epsilon", 0.0)),
+                "omega": float(params.get("omega", 0.0)),
+                "psi": float(params.get("psi", 0.0)),
+            }
+        return normalized
+
+    def _apply_target_quality_modulation(
+        self,
+        target_ids: Iterable[str] | None,
+        target_qualities: np.ndarray,
+    ) -> np.ndarray:
+        """Return target qualities after applying sinusoidal per-target modulation."""
+        if not self.target_quality_modulations or target_ids is None:
+            return target_qualities
+
+        target_id_list = [str(target_id) for target_id in target_ids]
+        if len(target_id_list) != target_qualities.shape[0]:
+            raise ValueError(
+                "target_ids and target_qualities must have the same length: "
+                f"{len(target_id_list)} vs {target_qualities.shape[0]}"
+            )
+
+        modulated = target_qualities.copy()
+        for idx, target_id in enumerate(target_id_list):
+            params = self.target_quality_modulations.get(target_id)
+            if params is None:
+                continue
+            modulation = 1.0 + params["epsilon"] * np.sin(
+                params["omega"] * self.sensory_time + params["psi"]
+            )
+            modulated[idx] *= modulation
+        return modulated
 
 
     def compute_interaction_kernel(self) -> np.ndarray:
@@ -133,12 +213,20 @@ class MeanFieldSystem:
         theta_col = self.theta[:, np.newaxis] # shape (num_neurons, 1)
         theta_row = self.theta[np.newaxis, :] # shape (1, num_neurons)
         delta = np.abs(_delta_angle(theta_col, theta_row)) # pairwise delta_ij matrix: shape (num_neurons, num_neurons)
-        return (1.0 / self.num_neurons) * np.cos(np.pi * (delta / np.pi) ** self.v)
+        return (1.0 / self.num_neurons ) * np.cos(np.pi * (delta / np.pi) ** self.v)
+
+    def _advance_sensory_time(self) -> None:
+        """Advance the modulation clock after one mean-field update."""
+        if self.sensory_time_mode == "integration_time":
+            self.sensory_time += self.integration_time
+            return
+        self.sensory_time += self.sensory_dt
 
     def compute_sensory_map(
         self,
         num_targets: int,
         num_guards: int,
+        target_ids: Iterable[str] | None,
         target_angles: Iterable[float],
         target_qualities: Iterable[float],
         guard_angles: Iterable[float] | None = None,
@@ -150,17 +238,37 @@ class MeanFieldSystem:
         Compute sensory input b using von Mises bumps for targets and optional guard inhibition.
         """
         b = np.zeros(self.num_neurons, dtype=float)
+        self.last_target_ids = []
+        self.last_target_base_qualities = np.array([], dtype=float)
+        self.last_modulated_target_qualities = np.array([], dtype=float)
         
         if num_targets > 0 and target_angles is not None and target_qualities is not None:
+            target_id_list = [] if target_ids is None else [str(target_id) for target_id in target_ids]
             target_angles = np.asarray(target_angles, dtype=float).reshape(1, -1)
             target_qualities = np.asarray(target_qualities, dtype=float).reshape(-1)
+            modulated_target_qualities = self._apply_target_quality_modulation(
+                target_ids=target_id_list if target_ids is not None else None,
+                target_qualities=target_qualities,
+            )
+            self.last_target_ids = target_id_list
+            self.last_target_base_qualities = target_qualities.copy()
+            self.last_modulated_target_qualities = modulated_target_qualities.copy()
             delta_targets = _delta_angle(self.theta[:, None], target_angles)
             vm_targets = np.exp(self.kappa * (np.cos(delta_targets) - 1.0))
-            b = vm_targets @ target_qualities
+            b = vm_targets @ modulated_target_qualities
             logger.debug(
                     "Target angles: %s",
                     np.array2string(
                         np.asarray(target_angles, dtype=float).reshape(-1),
+                        precision=6,
+                        separator=", ",
+                        max_line_width=1000,
+                    ),
+                )
+            logger.debug(
+                    "Target qualities: %s",
+                    np.array2string(
+                        np.asarray(modulated_target_qualities, dtype=float).reshape(-1),
                         precision=6,
                         separator=", ",
                         max_line_width=1000,
@@ -226,6 +334,10 @@ class MeanFieldSystem:
             self.adapt_ring = np.asarray(a, dtype=float).reshape(-1)
         else:
             self.adapt_ring = np.zeros(self.num_neurons, dtype=float)
+        self.sensory_time = 0.0
+        self.last_target_ids = []
+        self.last_target_base_qualities = np.array([], dtype=float)
+        self.last_modulated_target_qualities = np.array([], dtype=float)
 
     @staticmethod
     def euler_integrate_sfa(y0, t_eval, u, b, M, beta, n, sigma, g_adapt, tau_adapt, randn_like_func):
@@ -274,8 +386,17 @@ class MeanFieldSystem:
         return out
     
 
-    def compute_dynamics(self, total_time=50, dt=0.1):
-        t_eval = np.arange(0, total_time, dt)
+    def compute_dynamics(self, total_time: float | None = None, dt: float | None = None):
+        total_time = self.integration_time if total_time is None else float(total_time)
+        dt = self.dt if dt is None else float(dt)
+        if total_time <= 0.0:
+            raise ValueError("total_time must be positive")
+        if dt <= 0.0:
+            raise ValueError("dt must be positive")
+
+        # Always take at least one Euler step and keep the configured dt.
+        n_steps = max(1, int(np.ceil(total_time / dt)))
+        t_eval = np.arange(n_steps + 1, dtype=float) * dt
 
         use_adaptation = self.g_adapt > 0.0 and self.tau_adapt > 0.0
         if use_adaptation:
@@ -329,6 +450,7 @@ class MeanFieldSystem:
 
     def step(
         self,
+        target_ids: Iterable[str] | None = None,
         target_angles: Iterable[float] | None = None,
         target_qualities: Iterable[float] | None = None,
         guard_angles: Iterable[float] | None = None,
@@ -343,6 +465,7 @@ class MeanFieldSystem:
         self.compute_sensory_map(
             num_targets=self.num_targets,
             num_guards=self.num_guards,
+            target_ids=target_ids,
             target_angles=target_angles,
             target_qualities=target_qualities,
             guard_angles=guard_angles,
@@ -353,7 +476,11 @@ class MeanFieldSystem:
 
 
 
-        times, bump_positions, final_norm = self.compute_dynamics()
+        times, bump_positions, final_norm = self.compute_dynamics(
+            total_time=self.integration_time,
+            dt=self.dt,
+        )
+        self._advance_sensory_time()
 
         return self.neural_ring, bump_positions, final_norm
 
@@ -368,3 +495,11 @@ class MeanFieldSystem:
     def get_state(self):
         """Return current neural ring state."""
         return self.neural_ring.copy()
+
+    def get_sensory_map(self):
+        """Return the latest processed sensory map b."""
+        return self.b.copy()
+
+    def get_modulated_target_qualities(self):
+        """Return the latest time-varying target qualities used for b."""
+        return self.last_modulated_target_qualities.copy()

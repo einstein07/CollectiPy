@@ -247,7 +247,7 @@ class SpaceDataHandling(DataHandling):
                             raise Exception(f"Error: file {file_path} already exists")
                         file_handle = open(file_path, "wb")
                         pickler = pickle.Pickler(file_handle, protocol=pickle.HIGHEST_PROTOCOL)
-                        header = ["tick", "pos x", "pos y", "pos z"]
+                        header = ["tick", "pos x", "pos y", "pos z", "linear_velocity_cmd", "angular_velocity_cmd"]
                         if self.hierarchy_enabled:
                             header.append("hierarchy_node")
                         pickler.dump({"type": "header", "value": header, "columns": header})
@@ -268,12 +268,24 @@ class SpaceDataHandling(DataHandling):
                         self.agent_spin_files[(key, idx)] = {"handle": spin_handle, "pickler": spin_pickler, "columns": spin_columns}
         self.agents_metadata = metadata or {}
         # Capture the bootstrap snapshot (tick 0) right away.
-        if self.base_dump_enabled or self.spin_dump_enabled or self.graph_messages_enabled or self.graph_detection_enabled:
+        if (
+            self.base_dump_enabled
+            or self.spin_dump_enabled
+            or self.mean_field_logging_enabled
+            or self.graph_messages_enabled
+            or self.graph_detection_enabled
+        ):
             self.save(shapes, spins, metadata, tick=0, ticks_per_second=self._ticks_per_second, force=True)
 
     def save(self, shapes, spins, metadata, tick: int, ticks_per_second: int | None = None, force: bool = False):
         """Save sampled data for the current tick."""
-        if not (self.base_dump_enabled or self.spin_dump_enabled or self.graph_messages_enabled or self.graph_detection_enabled):
+        if not (
+            self.base_dump_enabled
+            or self.spin_dump_enabled
+            or self.mean_field_logging_enabled
+            or self.graph_messages_enabled
+            or self.graph_detection_enabled
+        ):
             return
         self._update_tick_rate(ticks_per_second)
         if tick is None:
@@ -297,11 +309,14 @@ class SpaceDataHandling(DataHandling):
                         entry = self.agents_files.get((key, idx))
                         if entry:
                             com = entity.center_of_mass()
+                            linear_velocity_cmd, angular_velocity_cmd = self._resolve_velocity_commands(entity)
                             row = {
                                 "tick": tick,
                                 "pos x": com.x,
                                 "pos y": com.y,
-                                "pos z": com.z
+                                "pos z": com.z,
+                                "linear_velocity_cmd": linear_velocity_cmd,
+                                "angular_velocity_cmd": angular_velocity_cmd,
                             }
                             if self.hierarchy_enabled:
                                 row["hierarchy_node"] = self._resolve_hierarchy_node(entity)
@@ -374,6 +389,23 @@ class SpaceDataHandling(DataHandling):
             return normalized if normalized else None
         return {"states": payload}
 
+    def _resolve_velocity_commands(self, shape_obj):
+        """Return the latest motion commands stored in the shape metadata."""
+        metadata = getattr(shape_obj, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None, None
+        linear = metadata.get("linear_velocity_cmd")
+        angular = metadata.get("angular_velocity_cmd")
+        try:
+            linear = float(linear) if linear is not None else None
+        except (TypeError, ValueError):
+            linear = None
+        try:
+            angular = float(angular) if angular is not None else None
+        except (TypeError, ValueError):
+            angular = None
+        return linear, angular
+
     def _write_mean_field_logs(self, key, idx, spin_values: dict | None, tick: int, shape_obj):
         """Persist mean-field neural/sensory/position data to CSV files."""
         if not self.mean_field_logging_enabled or spin_values is None:
@@ -387,13 +419,27 @@ class SpaceDataHandling(DataHandling):
         if raw_state is None:
             raw_state = spin_values.get("states")
         state_values = self._flatten_array(raw_state)
-        raw_perception = spin_values.get("mean_field_perception")
+        raw_perception = spin_values.get("mean_field_perception_raw")
+        if raw_perception is None:
+            raw_perception = spin_values.get("mean_field_perception")
         if raw_perception is None:
             raw_perception = spin_values.get("external_field")
         perception_values = self._flatten_array(raw_perception)
+        raw_sensory_map = spin_values.get("mean_field_sensory_map")
+        if raw_sensory_map is None:
+            raw_sensory_map = spin_values.get("mean_field_perception")
+        if raw_sensory_map is None:
+            raw_sensory_map = spin_values.get("external_field")
+        sensory_map_values = self._flatten_array(raw_sensory_map)
         norm_z = float(np.linalg.norm(state_values)) if state_values else 0.0
-        targets_meta = spin_values.get("mean_field_entities", {}).get("targets", [])
-        targets_str = json.dumps(targets_meta)
+        target_metadata = spin_values.get("mean_field_target_metadata")
+        if target_metadata is None:
+            target_metadata = spin_values.get("mean_field_entities", {}).get("targets", [])
+        target_metadata_str = json.dumps(target_metadata)
+        modulated_target_qualities = self._flatten_array(
+            spin_values.get("mean_field_modulated_target_qualities")
+        )
+        modulated_target_qualities_str = json.dumps(modulated_target_qualities)
         channel = spin_values.get("channel") or ""
 
         neural_entry = files.get("neural")
@@ -401,26 +447,48 @@ class SpaceDataHandling(DataHandling):
             if not neural_entry["header_written"]:
                 header = ["tick"]
                 header.extend(f"neuron_{i}" for i in range(len(state_values)))
-                header.extend(["norm_z", "target_angles"])
+                header.append("norm_z")
                 neural_entry["writer"].writerow(header)
                 neural_entry["header_written"] = True
             row = [tick]
             row.extend(state_values)
-            row.extend([norm_z, targets_str])
+            row.append(norm_z)
             neural_entry["writer"].writerow(row)
+
+        perception_entry = files.get("perception")
+        if perception_entry:
+            if not perception_entry["header_written"]:
+                header = ["tick"]
+                header.extend(f"perception_{i}" for i in range(len(perception_values)))
+                header.append("channel")
+                perception_entry["writer"].writerow(header)
+                perception_entry["header_written"] = True
+            row = [tick]
+            row.extend(perception_values)
+            row.append(channel)
+            perception_entry["writer"].writerow(row)
 
         sensory_entry = files.get("sensory")
         if sensory_entry:
             if not sensory_entry["header_written"]:
                 header = ["tick"]
-                header.extend(f"sensor_{i}" for i in range(len(perception_values)))
+                header.extend(f"sensory_map_{i}" for i in range(len(sensory_map_values)))
                 header.append("channel")
                 sensory_entry["writer"].writerow(header)
                 sensory_entry["header_written"] = True
             row = [tick]
-            row.extend(perception_values)
+            row.extend(sensory_map_values)
             row.append(channel)
             sensory_entry["writer"].writerow(row)
+
+        targets_entry = files.get("targets")
+        if targets_entry:
+            if not targets_entry["header_written"]:
+                header = ["tick", "target_metadata", "modulated_target_qualities"]
+                targets_entry["writer"].writerow(header)
+                targets_entry["header_written"] = True
+            row = [tick, target_metadata_str, modulated_target_qualities_str]
+            targets_entry["writer"].writerow(row)
 
         position_entry = files.get("position")
         if position_entry and shape_obj is not None:
@@ -444,14 +512,20 @@ class SpaceDataHandling(DataHandling):
             agent_id = self._agent_identifier(key, idx, shape_obj)
             self.agent_lookup[(key, idx)] = agent_id
         neural_path = os.path.join(self.run_folder, f"{agent_id}_neural.csv")
+        perception_path = os.path.join(self.run_folder, f"{agent_id}_perception.csv")
         sensory_path = os.path.join(self.run_folder, f"{agent_id}_sensory.csv")
+        targets_path = os.path.join(self.run_folder, f"{agent_id}_targets.csv")
         position_path = os.path.join(self.run_folder, f"{agent_id}_position.csv")
         neural_handle = open(neural_path, "w", newline="")
+        perception_handle = open(perception_path, "w", newline="")
         sensory_handle = open(sensory_path, "w", newline="")
+        targets_handle = open(targets_path, "w", newline="")
         position_handle = open(position_path, "w", newline="")
         entry = {
             "neural": {"handle": neural_handle, "writer": csv.writer(neural_handle), "header_written": False},
+            "perception": {"handle": perception_handle, "writer": csv.writer(perception_handle), "header_written": False},
             "sensory": {"handle": sensory_handle, "writer": csv.writer(sensory_handle), "header_written": False},
+            "targets": {"handle": targets_handle, "writer": csv.writer(targets_handle), "header_written": False},
             "position": {"handle": position_handle, "writer": csv.writer(position_handle), "header_written": False},
         }
         self.mean_field_files[(key, idx)] = entry

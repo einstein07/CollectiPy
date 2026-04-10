@@ -44,8 +44,11 @@ class MeanFieldMovementModel(MovementModel):
         self.num_neurons = int(self.params.get("num_neurons", 100))
         self.integration_time = float(self.params.get("integration_time", 50.0))
         self.integration_dt = float(self.params.get("integration_dt", self.params.get("dt", 0.1)))
+        self.sensory_time_mode = str(self.params.get("sensory_time_mode", "world_time"))
+        self.sensory_dt = self._resolve_sensory_dt()
         self.g_adapt = float(self.params.get("g_adapt", 0.0))
         self.tau_adapt = float(self.params.get("tau_adapt", 0.0))
+        self.norm_scale = float(self.params.get("norm_scale", 1.0))
         self.perception_range = self._resolve_detection_range()
         self.task = (agent.get_task() or self.params.get("task") or "selection").lower()
         if hasattr(agent, "set_task") and not agent.get_task():
@@ -53,6 +56,9 @@ class MeanFieldMovementModel(MovementModel):
         self.group_angles = np.linspace(0, 2 * math.pi, self.num_neurons, endpoint=False)
         self.target_ids = [str(x) for x in self.params.get("target_ids", [])]
         self.guard_ids = [str(x) for x in self.params.get("guard_ids", [])]
+        self.target_quality_modulations = self._normalize_target_quality_modulations(
+            self.params.get("target_quality_modulations")
+        )
         self.guard_decay_rate = float(self.params.get("guard_decay_rate", self.params.get("spatial_decay", 2.0)))
         self.perception = None
         self._active_perception_channel = "objects"
@@ -63,11 +69,38 @@ class MeanFieldMovementModel(MovementModel):
         self.detection_model = self._create_detection_model()
         self.reset()
         logger.info(
-            "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d)",
+            "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f)",
             self.agent.get_name(),
             self.num_neurons,
             self.steps_per_tick,
+            self.sensory_time_mode,
+            self.sensory_dt,
         )
+
+    def _resolve_agent_tick_rate(self) -> float:
+        """Return the effective agent update rate used by the simulator."""
+        if hasattr(self.agent, "ticks"):
+            try:
+                ticks = float(self.agent.ticks())
+                if ticks > 0.0:
+                    return ticks
+            except (TypeError, ValueError):
+                pass
+        ticks = getattr(self.agent, "ticks_per_second", 1)
+        try:
+            ticks = float(ticks)
+        except (TypeError, ValueError):
+            ticks = 1.0
+        return max(1.0, ticks)
+
+    def _resolve_sensory_dt(self) -> float:
+        """Resolve how much simulated time the modulation clock advances per internal update."""
+        mode = str(self.sensory_time_mode or "world_time").strip().lower()
+        if "sensory_dt" in self.params:
+            return float(self.params.get("sensory_dt", 0.0))
+        if mode in {"integration", "integration_time", "legacy"}:
+            return self.integration_time
+        return 1.0 / (self._resolve_agent_tick_rate() * self.steps_per_tick)
 
     def _create_detection_model(self):
         """Create detection model matching the mean-field layout."""
@@ -101,9 +134,12 @@ class MeanFieldMovementModel(MovementModel):
             num_guards=int(self.params.get("num_guards", 0)),
             target_qualities=self.params.get("target_qualities"),
             guard_qualities=self.params.get("guard_qualities"),
+            target_quality_modulations=self.target_quality_modulations,
             sigma=float(self.params.get("sigma", 0.01)),
             dt=self.integration_dt,
             integration_time=self.integration_time,
+            sensory_time_mode=self.sensory_time_mode,
+            sensory_dt=self.sensory_dt,
             g_adapt=self.g_adapt,
             tau_adapt=self.tau_adapt,
         )
@@ -117,10 +153,11 @@ class MeanFieldMovementModel(MovementModel):
         if self.perception is None:
             return
         for _ in range(self.pre_run_steps):
-            targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
+            target_ids, targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
             self.mean_field_system.num_targets = len(targets)
             self.mean_field_system.num_guards = 0 if guard_angles is None else len(guard_angles)
             self.mean_field_system.step(
+                target_ids=target_ids,
                 target_angles=targets,
                 target_qualities=qualities,
                 guard_angles=guard_angles,
@@ -146,7 +183,7 @@ class MeanFieldMovementModel(MovementModel):
                 self._last_bump_angle = None
                 self._last_norm = 0.0
                 return
-            targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
+            target_ids, targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
             self.mean_field_system.num_targets = len(targets)
             self.mean_field_system.num_guards = len(guard_angles) if guard_angles is not None else 0
             neural_field = None
@@ -154,6 +191,7 @@ class MeanFieldMovementModel(MovementModel):
             final_norm = 0.0
             for _ in range(self.steps_per_tick):
                 neural_field, bump_positions, final_norm = self.mean_field_system.step(
+                    target_ids=target_ids,
                     target_angles=targets,
                     target_qualities=qualities,
                     guard_angles=guard_angles,
@@ -176,17 +214,18 @@ class MeanFieldMovementModel(MovementModel):
             angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
             norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
             self._last_norm = norm
-            scaling = np.clip(norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
-            self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling
+            scaling = np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
+            self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
             self.agent.angular_velocity_cmd = angle_deg
             self._last_bump_angle = angle_rad
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
-                    "%s mean-field direction updated -> angle=%.2f norm=%.3f scaling=%.3f",
+                    "%s mean-field direction updated -> angle=%.2f norm=%.3f scaling=%.3f linear_vel_cmd=%.5f",
                     self.agent.get_name(),
                     angle_deg,
                     norm,
                     scaling,
+                    self.agent.linear_velocity_cmd
                 )
         finally:
             if logger.isEnabledFor(logging.DEBUG):
@@ -290,32 +329,95 @@ class MeanFieldMovementModel(MovementModel):
             return 0.1
         return value
 
-    def _convert_perception_to_targets(self) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+    def _normalize_target_quality_modulations(self, raw_config) -> dict[str, dict[str, float]]:
+        """Normalize modulation settings keyed by target ID."""
+        if not raw_config:
+            return {}
+        if not isinstance(raw_config, dict):
+            raise ValueError("target_quality_modulations must be a mapping keyed by target ID")
+
+        normalized: dict[str, dict[str, float]] = {}
+        for target_id, params in raw_config.items():
+            if not isinstance(params, dict):
+                raise ValueError(
+                    f"target_quality_modulations['{target_id}'] must be a mapping"
+                )
+            normalized[str(target_id)] = {
+                "epsilon": float(params.get("epsilon", 0.0)),
+                "omega": float(params.get("omega", 0.0)),
+                "psi": float(params.get("psi", 0.0)),
+            }
+        return normalized
+
+    def _convert_perception_to_targets(
+        self,
+    ) -> Tuple[list[str], np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """Convert detection metadata into target and guard descriptors."""
         meta = self._mf_entities or {"targets": [], "guards": []}
         target_entries = meta.get("targets") or []
         guard_entries = meta.get("guards") or []
         if target_entries:
+            target_ids = [str(entry.get("id", "")) for entry in target_entries]
             target_angles = np.array([entry.get("angle", 0.0) for entry in target_entries], dtype=float)
             target_qualities = np.array([entry.get("intensity", 1.0) for entry in target_entries], dtype=float)
         else:
-            target_angles = np.array([0.0])
-            target_qualities = np.array([0.0])
+            target_ids = []
+            target_angles = np.array([], dtype=float)
+            target_qualities = np.array([], dtype=float)
         guard_angles = guard_qualities = guard_distances = None
         if guard_entries:
             guard_angles = np.array([entry.get("angle", 0.0) for entry in guard_entries], dtype=float)
             guard_qualities = np.array([entry.get("intensity", 1.0) for entry in guard_entries], dtype=float)
             guard_distances = np.array([entry.get("distance", 0.0) for entry in guard_entries], dtype=float)
-        return target_angles, target_qualities, guard_angles, guard_qualities, guard_distances
+        return target_ids, target_angles, target_qualities, guard_angles, guard_qualities, guard_distances
+
+    def _build_target_signal_snapshot(
+        self,
+        target_metadata: list[dict],
+        modulated_target_qualities: np.ndarray,
+    ) -> list[dict]:
+        """Return a GUI-friendly per-target input snapshot."""
+        flattened = np.asarray(modulated_target_qualities, dtype=float).reshape(-1)
+        snapshot: list[dict] = []
+        for idx, entry in enumerate(target_metadata):
+            target_id = str(entry.get("id", f"target_{idx}"))
+            base_quality = float(entry.get("intensity", 0.0))
+            modulated_quality = base_quality
+            if idx < flattened.size:
+                modulated_quality = float(flattened[idx])
+            snapshot.append(
+                {
+                    "id": target_id,
+                    "label": target_id,
+                    "base_quality": base_quality,
+                    "modulated_quality": modulated_quality,
+                    "angle": float(entry.get("angle", 0.0)),
+                    "distance": float(entry.get("distance", 0.0)),
+                }
+            )
+        return snapshot
 
     def get_mean_field_data(self):
         """Return raw state for logging or visualisation."""
         if not self.mean_field_system:
             return None
         z = self.mean_field_system.get_state()
+        target_metadata = copy.deepcopy((self._mf_entities or {}).get("targets", []))
+        modulated_target_qualities = self.mean_field_system.get_modulated_target_qualities()
+        sensory_time = float(getattr(self.mean_field_system, "sensory_time", 0.0))
+        sensory_increment = float(getattr(self.mean_field_system, "sensory_dt", self.sensory_dt))
+        last_sensory_time = max(0.0, sensory_time - sensory_increment)
         return {
             "state": z.copy(),
-            "perception": None if self.perception is None else self.perception.copy(),
+            "perception_raw": None if self.perception is None else self.perception.copy(),
+            "sensory_map": self.mean_field_system.get_sensory_map(),
+            "target_metadata": target_metadata,
+            "modulated_target_qualities": modulated_target_qualities,
+            "target_signals": self._build_target_signal_snapshot(
+                target_metadata,
+                modulated_target_qualities,
+            ),
+            "sensory_time": last_sensory_time,
             "channel": self._active_perception_channel,
             "angle": self._last_bump_angle,
         }
@@ -367,8 +469,16 @@ class MeanFieldMovementModel(MovementModel):
             shift = num_groups // 2
             perception_vec = np.roll(perception_vec, -shift)
         raw_state = snapshot["state"].copy()
-        raw_perception = None if snapshot.get("perception") is None else snapshot["perception"].copy()
+        raw_perception = None if snapshot.get("perception_raw") is None else snapshot["perception_raw"].copy()
+        raw_sensory_map = None if snapshot.get("sensory_map") is None else snapshot["sensory_map"].copy()
         entities_copy = copy.deepcopy(self._mf_entities) if self._mf_entities else {"targets": [], "guards": []}
+        target_metadata = copy.deepcopy(snapshot.get("target_metadata") or [])
+        modulated_target_qualities = (
+            None
+            if snapshot.get("modulated_target_qualities") is None
+            else snapshot["modulated_target_qualities"].copy()
+        )
+        target_signals = copy.deepcopy(snapshot.get("target_signals") or [])
         avg_angle = snapshot.get("angle")
         if avg_angle is not None and self.reference == "allocentric":
             avg_angle = avg_angle + math.radians(self.agent.orientation.z)
@@ -381,6 +491,12 @@ class MeanFieldMovementModel(MovementModel):
             "model": "mean_field",
             "mean_field_state": raw_state,
             "mean_field_perception": raw_perception,
+            "mean_field_perception_raw": raw_perception,
+            "mean_field_sensory_map": raw_sensory_map,
+            "mean_field_target_metadata": target_metadata,
+            "mean_field_modulated_target_qualities": modulated_target_qualities,
+            "mean_field_target_signals": target_signals,
+            "mean_field_sensory_time": float(snapshot.get("sensory_time", 0.0)),
             "mean_field_entities": entities_copy,
             "mean_field_norm": self._last_norm,
             "channel": snapshot.get("channel"),
