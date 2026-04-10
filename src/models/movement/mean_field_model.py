@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from models.bifurcation import BifurcationDetector
 from models.mean_field_systems import MeanFieldSystem
 from models.utils import normalize_angle
 from plugin_base import MovementModel
@@ -67,6 +68,13 @@ class MeanFieldMovementModel(MovementModel):
         self._last_norm: float = 0.0
         self.mean_field_system: Optional[MeanFieldSystem] = None
         self.detection_model = self._create_detection_model()
+        # Bifurcation detection config (D-07: mean_field_model.bifurcation namespace)
+        bif_cfg = self.params.get("bifurcation", {})
+        self.bifurcation_detector = BifurcationDetector(
+            agent_name=str(agent.get_name()),
+            lambda_threshold=float(bif_cfg.get("lambda_threshold", -0.1)),
+            spike_min_separation=int(bif_cfg.get("spike_min_separation", 10)),
+        )
         self.reset()
         logger.info(
             "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f)",
@@ -143,6 +151,10 @@ class MeanFieldMovementModel(MovementModel):
             g_adapt=self.g_adapt,
             tau_adapt=self.tau_adapt,
         )
+        if hasattr(self, 'bifurcation_detector'):
+            self.bifurcation_detector.events.clear()
+            self.bifurcation_detector._buffer.clear()
+            self.bifurcation_detector._last_fire_tick = None
         logger.debug("%s mean-field system reset", self.agent.get_name())
 
     def pre_run(self, objects: dict, agents: dict) -> None:
@@ -218,6 +230,19 @@ class MeanFieldMovementModel(MovementModel):
             self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
             self.agent.angular_velocity_cmd = angle_deg
             self._last_bump_angle = angle_rad
+            # Bifurcation detection (D-01): check for eigenvalue spike after this tick
+            if self.mean_field_system is not None:
+                target_angles_for_bif = []
+                for t in self._mf_entities.get("targets", []):
+                    if "angle" in t:
+                        target_angles_for_bif.append(float(t["angle"]))
+                self.bifurcation_detector.update(
+                    tick=tick,
+                    mf=self.mean_field_system,
+                    bump_angle=angle_rad,
+                    target_angles=target_angles_for_bif,
+                    target_ids=self.target_ids,
+                )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "%s mean-field direction updated -> angle=%.2f norm=%.3f scaling=%.3f linear_vel_cmd=%.5f",
