@@ -243,8 +243,11 @@ class EntityManager:
         run = 1
         terminate_all = False
         pending_message = None
+        current_objects = None
+        current_seed = None
         logger.info("EntityManager starting for %s runs (time_limit=%s)", num_runs, time_limit)
         while run < num_runs + 1:
+            initialized = False
             metadata_sent = False
             metadata_snapshot = self.get_agent_metadata()
             reset = False
@@ -269,9 +272,18 @@ class EntityManager:
             command = data_in.get("command")
             if command == "terminate_run":
                 force_next_run = True
+            if "objects" in data_in:
+                current_objects = data_in.get("objects")
+            if "random_seed" in data_in:
+                current_seed = data_in.get("random_seed")
             status = data_in.get("status")
-            if not force_next_run and isinstance(status, (list, tuple)) and len(status) >= 2 and status[0] == 0:
-                self.initialize(data_in.get("random_seed"), data_in.get("objects"))
+            if not force_next_run and not initialized:
+                init_objects = data_in.get("objects") or current_objects or {}
+                init_seed = data_in.get("random_seed")
+                if init_seed is None:
+                    init_seed = current_seed
+                self.initialize(init_seed, init_objects)
+                initialized = True
             for agent_type, (_, entities) in self.agents.items():
                 bus = self.message_buses.get(agent_type)
                 if bus:
@@ -629,6 +641,8 @@ class EntityManager:
                 if hasattr(shape, "metadata"):
                     shape.metadata["entity_name"] = entity.get_name()
                     shape.metadata["hierarchy_node"] = getattr(entity, "hierarchy_node", None)
+                    shape.metadata["linear_velocity_cmd"] = float(getattr(entity, "linear_velocity_cmd", 0.0))
+                    shape.metadata["angular_velocity_cmd"] = float(getattr(entity, "angular_velocity_cmd", 0.0))
                 group_shapes.append(shape)
             shapes[group_key] = group_shapes
         return shapes

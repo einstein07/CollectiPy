@@ -8,6 +8,7 @@
 # ------------------------------------------------------------------------------
 
 """Graphical user interface for the simulator."""
+from collections import deque
 import logging, math, time
 from typing import Any, Optional, cast
 import matplotlib.pyplot as plt
@@ -189,6 +190,19 @@ class GUI_2D(QWidget):
         self.perception_bars = None
         self.arrow = None
         self.angle_labels = []
+        inputs_plot_cfg = config_elem.get("inputs_plot", {})
+        if not isinstance(inputs_plot_cfg, dict):
+            inputs_plot_cfg = {}
+        try:
+            history_seconds = float(inputs_plot_cfg.get("history_seconds", 64.0))
+        except (TypeError, ValueError):
+            history_seconds = 64.0
+        self.input_history_seconds = max(1.0, history_seconds)
+        self.input_plot_show_base = bool(inputs_plot_cfg.get("show_base", True))
+        self.input_plot_show_modulated = bool(inputs_plot_cfg.get("show_modulated", True))
+        self.input_ax = None
+        self._input_panel_visible = False
+        self._input_histories = {}
         self.spin_window = None
         self.spin_panel_visible = False
         self.abstract_dot_items = []
@@ -198,11 +212,12 @@ class GUI_2D(QWidget):
         self.abstract_dot_margin = max(0, int(markers_cfg.get("margin", 10)))
         self.abstract_dot_default_color = markers_cfg.get("default_color", "black")
         if self.show_spins_enabled:
-            self.figure, self.ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(4, 4))
+            self.figure = plt.figure(figsize=(5.2, 6.4))
+            self.ax = self.figure.add_subplot(211, projection="polar")
+            self.input_ax = self.figure.add_subplot(212)
             self.canvas = FigureCanvas(self.figure)
-            self.canvas.setMinimumSize(320, 320)
-            self.canvas.setMaximumWidth(360)
-            self.spin_window = DetachedPanelWindow("Spin Model", close_callback=self._on_spin_window_closed)
+            self.canvas.setMinimumSize(420, 560)
+            self.spin_window = DetachedPanelWindow("Activity Inspector", close_callback=self._on_spin_window_closed)
             self.spin_window.setFocusPolicy(Qt.NoFocus)
             self.spin_window.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
             self.spin_window.setAttribute(Qt.WA_ShowWithoutActivating, True)
@@ -211,6 +226,7 @@ class GUI_2D(QWidget):
             spin_layout.addWidget(self.canvas)
             self.spin_window.setLayout(spin_layout)
             self.spin_window.setVisible(False)
+            self._set_input_panel_visible(False)
             hint = self.spin_window.sizeHint()
             if hint.isValid():
                 self.spin_window.setFixedSize(hint)
@@ -547,6 +563,209 @@ class GUI_2D(QWidget):
             return
         self.spin_panel_visible = False
         self._update_side_container_visibility()
+
+    def _set_input_panel_visible(self, visible: bool):
+        """Resize the detached inspector depending on whether the input chart is needed."""
+        if not self.show_spins_enabled or self.ax is None or self.input_ax is None:
+            return
+        self._input_panel_visible = bool(visible)
+        if self._input_panel_visible:
+            self.ax.set_position([0.12, 0.56, 0.76, 0.31])
+            self.input_ax.set_position([0.12, 0.10, 0.82, 0.30])
+            self.input_ax.set_visible(True)
+            return
+        self.ax.set_position([0.12, 0.12, 0.76, 0.72])
+        self.input_ax.clear()
+        self.input_ax.set_visible(False)
+
+    def _update_spin_window_title(self, spin) -> None:
+        """Reflect the active model in the detached inspector title."""
+        if not self.spin_window:
+            return
+        title = "Spin Model"
+        if isinstance(spin, dict) and spin.get("model") == "mean_field":
+            title = "Mean-Field Inspector"
+        self.spin_window.setWindowTitle(title)
+
+    def _reset_input_histories(self) -> None:
+        """Forget all live mean-field input traces."""
+        self._input_histories = {}
+
+    def _extract_mean_field_input_snapshot(self, spin):
+        """Return normalized mean-field target signals from the latest agent payload."""
+        if not isinstance(spin, dict):
+            return None
+        raw_targets = spin.get("mean_field_target_signals")
+        if raw_targets is None:
+            raw_targets = []
+        if not raw_targets:
+            metadata = spin.get("mean_field_target_metadata")
+            if metadata is None:
+                metadata = []
+            qualities = spin.get("mean_field_modulated_target_qualities")
+            if qualities is None:
+                qualities = []
+            raw_targets = []
+            for idx, entry in enumerate(metadata):
+                if not isinstance(entry, dict):
+                    continue
+                base_quality = float(entry.get("intensity", 0.0))
+                modulated_quality = base_quality
+                if idx < len(qualities):
+                    modulated_quality = float(qualities[idx])
+                raw_targets.append(
+                    {
+                        "id": str(entry.get("id", f"target_{idx}")),
+                        "label": str(entry.get("id", f"target_{idx}")),
+                        "base_quality": base_quality,
+                        "modulated_quality": modulated_quality,
+                        "angle": float(entry.get("angle", 0.0)),
+                        "distance": float(entry.get("distance", 0.0)),
+                    }
+                )
+        normalized_targets = []
+        for idx, entry in enumerate(raw_targets):
+            if not isinstance(entry, dict):
+                continue
+            target_id = str(entry.get("id") or entry.get("label") or f"target_{idx}")
+            label = str(entry.get("label") or target_id)
+            normalized_targets.append(
+                {
+                    "id": target_id,
+                    "label": label,
+                    "base_quality": float(entry.get("base_quality", entry.get("intensity", 0.0))),
+                    "modulated_quality": float(entry.get("modulated_quality", entry.get("base_quality", 0.0))),
+                    "angle": float(entry.get("angle", 0.0)),
+                    "distance": float(entry.get("distance", 0.0)),
+                }
+            )
+        if not normalized_targets:
+            return None
+        try:
+            current_time = float(spin.get("mean_field_sensory_time", self.time))
+        except (TypeError, ValueError):
+            current_time = float(self.time)
+        return {
+            "time": max(0.0, current_time),
+            "targets": normalized_targets,
+        }
+
+    def _append_input_history_sample(self, agent_key, snapshot) -> None:
+        """Append one live target-input sample for the selected history window."""
+        if snapshot is None:
+            return
+        current_time = float(snapshot.get("time", self.time))
+        target_entries = snapshot.get("targets") or []
+        history = self._input_histories.get(agent_key)
+        if history is None or (
+            history.get("last_time") is not None and current_time < float(history.get("last_time", 0.0))
+        ):
+            history = {
+                "times": deque(),
+                "targets": {},
+                "last_time": None,
+            }
+            self._input_histories[agent_key] = history
+        last_time = history.get("last_time")
+        if last_time is not None and math.isclose(current_time, float(last_time), rel_tol=0.0, abs_tol=1e-9):
+            return
+        target_map = {str(entry["id"]): entry for entry in target_entries if isinstance(entry, dict) and entry.get("id")}
+        existing_length = len(history["times"])
+        for target_id, entry in target_map.items():
+            if target_id in history["targets"]:
+                history["targets"][target_id]["label"] = entry.get("label", target_id)
+                continue
+            history["targets"][target_id] = {
+                "label": entry.get("label", target_id),
+                "base": deque([float("nan")] * existing_length),
+                "modulated": deque([float("nan")] * existing_length),
+            }
+        history["times"].append(current_time)
+        for target_id, series in history["targets"].items():
+            entry = target_map.get(target_id)
+            if entry is None:
+                series["base"].append(float("nan"))
+                series["modulated"].append(float("nan"))
+                continue
+            series["base"].append(float(entry.get("base_quality", 0.0)))
+            series["modulated"].append(float(entry.get("modulated_quality", 0.0)))
+        history["last_time"] = current_time
+        while history["times"] and current_time - history["times"][0] > self.input_history_seconds:
+            history["times"].popleft()
+            for series in history["targets"].values():
+                if series["base"]:
+                    series["base"].popleft()
+                if series["modulated"]:
+                    series["modulated"].popleft()
+
+    def _update_input_histories(self) -> None:
+        """Capture live mean-field input traces for all agents currently in the GUI snapshot."""
+        if not self.agents_spins:
+            return
+        for group_key, spins in self.agents_spins.items():
+            if not isinstance(spins, list):
+                continue
+            for idx, spin in enumerate(spins):
+                snapshot = self._extract_mean_field_input_snapshot(spin)
+                if snapshot is None:
+                    continue
+                self._append_input_history_sample((group_key, idx), snapshot)
+
+    def _update_input_plot(self, spin) -> None:
+        """Render the live mean-field target inputs for the currently selected agent."""
+        if not self.show_spins_enabled or self.input_ax is None:
+            return
+        snapshot = self._extract_mean_field_input_snapshot(spin)
+        history = self._input_histories.get(self.clicked_spin) if self.clicked_spin else None
+        if snapshot is None or history is None or not history.get("times"):
+            self._set_input_panel_visible(False)
+            return
+        self._set_input_panel_visible(True)
+        self.input_ax.clear()
+        times = list(history["times"])
+        cmap = plt.get_cmap("tab10")
+        plotted = False
+        for idx, (target_id, series) in enumerate(history["targets"].items()):
+            label = str(series.get("label", target_id))
+            color = cmap(idx % cmap.N)
+            if self.input_plot_show_modulated:
+                self.input_ax.plot(
+                    times,
+                    list(series["modulated"]),
+                    color=color,
+                    linewidth=2.0,
+                    label=label,
+                )
+                plotted = True
+            if self.input_plot_show_base:
+                self.input_ax.plot(
+                    times,
+                    list(series["base"]),
+                    color=color,
+                    linewidth=1.2,
+                    linestyle="--" if self.input_plot_show_modulated else "-",
+                    alpha=0.65 if self.input_plot_show_modulated else 0.95,
+                    label=f"{label} base" if self.input_plot_show_modulated else label,
+                )
+                plotted = True
+        if not plotted:
+            self._set_input_panel_visible(False)
+            return
+        x_max = times[-1]
+        x_min = max(0.0, x_max - self.input_history_seconds)
+        if math.isclose(x_min, x_max, rel_tol=0.0, abs_tol=1e-9):
+            x_min = min(times[0], x_max)
+            x_max = x_min + 1e-6
+        self.input_ax.set_xlim(x_min, x_max)
+        self.input_ax.set_title("Target Inputs", fontsize=11)
+        self.input_ax.set_xlabel("Sensory time (s)")
+        self.input_ax.set_ylabel("Quality")
+        self.input_ax.grid(True, alpha=0.25)
+        self.input_ax.margins(x=0.02, y=0.15)
+        self.input_ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.4)
+        handles, labels = self.input_ax.get_legend_handles_labels()
+        if handles and labels:
+            self.input_ax.legend(loc="upper right", fontsize=8, frameon=False)
 
     def _on_graph_window_closed(self):
         """React when the graph window is manually closed."""
@@ -1336,6 +1555,7 @@ class GUI_2D(QWidget):
         if spin is None:
             self._clear_selection(update_view=False)
             return
+        self._update_spin_window_title(spin)
         display_states = spin
         display_angles = None
         display_field = None
@@ -1392,8 +1612,11 @@ class GUI_2D(QWidget):
                 "", xy=(avg_angle, 0.5), xytext=(avg_angle, 0.1),
                 arrowprops=dict(facecolor="black", arrowstyle="->", lw=2),
             )
+        elif self.arrow is not None:
+            self.arrow.remove()
+            self.arrow = None
         self.ax.set_title(self.clicked_spin[0]+" "+str(self.clicked_spin[1]), fontsize=12, y=1.15)
-        self.figure.tight_layout()
+        self._update_input_plot(spin)
         self.canvas.draw_idle()
 
     def update_data(self):
@@ -1408,6 +1631,7 @@ class GUI_2D(QWidget):
                 self.objects_shapes = o_shapes
                 self.agents_shapes = data["agents_shapes"]
                 self.agents_spins = data["agents_spins"]
+                self._update_input_histories()
                 self._refresh_agent_centers()
                 if self.connection_features_enabled:
                     self.agents_metadata = data.get("agents_metadata", {})
@@ -1435,6 +1659,9 @@ class GUI_2D(QWidget):
             self.agents_metadata = {}
             self._agent_centers = {}
             self._view_initialized = False
+            self._reset_input_histories()
+            self._set_input_panel_visible(False)
+            self._update_spin_window_title(None)
             self._clear_connection_caches()
             self._update_graph_views()
             self._clear_selection(update_view=False)

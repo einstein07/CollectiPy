@@ -84,6 +84,14 @@ class Arena():
         self._gui_backpressure_interval = max(0.001, interval_ms / 1000.0)
         self._gui_backpressure_active = False
         self.quiet = getattr(config_elem, "quiet", False) if config_elem else False
+        self.termination_config = self._normalize_termination_config(
+            config_elem.environment.get("termination", {}) if config_elem else {}
+        )
+        self._target_position_swap_specs = self._normalize_target_position_swaps(
+            config_elem.environment.get("target_position_swaps", []) if config_elem else []
+        )
+        self._target_position_swap_events = []
+        self._target_position_swap_index = 0
 
     @staticmethod
     def _blocking_get(q, timeout: float = 0.01, sleep_s: float = 0.001):
@@ -197,6 +205,330 @@ class Arena():
             return ArenaHierarchy(bounds, depth=depth, branches=branches)
         except ValueError as exc:
             raise ValueError(f"Invalid hierarchy configuration: {exc}") from exc
+
+    @staticmethod
+    def _normalize_termination_config(cfg: Any) -> dict:
+        """Normalize termination configuration."""
+        if not isinstance(cfg, dict) or not cfg:
+            return {}
+        normalized = dict(cfg)
+        term_type = str(normalized.get("type", "")).strip().lower()
+        if not term_type:
+            return {}
+        normalized["type"] = term_type
+        try:
+            normalized["radius"] = float(normalized.get("radius", 0.0))
+        except (TypeError, ValueError):
+            normalized["radius"] = 0.0
+        target_ids = normalized.get("target_ids", [])
+        if isinstance(target_ids, (str, int, float)):
+            target_ids = [target_ids]
+        if isinstance(target_ids, (list, tuple, set)):
+            normalized["target_ids"] = [str(x) for x in target_ids if str(x)]
+        else:
+            normalized["target_ids"] = []
+        agent_ids = normalized.get("agent_ids", "any")
+        if isinstance(agent_ids, str):
+            agent_key = agent_ids.strip().lower()
+            if agent_key in ("any", "all", "*"):
+                normalized["agent_ids"] = None
+            else:
+                normalized["agent_ids"] = [agent_ids]
+        elif isinstance(agent_ids, (list, tuple, set)):
+            normalized["agent_ids"] = [str(x) for x in agent_ids if str(x)]
+        else:
+            normalized["agent_ids"] = None
+        normalized["mode"] = str(normalized.get("mode", "any") or "any").strip().lower()
+        return normalized
+
+    @staticmethod
+    def _normalize_target_position_swaps(cfg: Any) -> list[dict]:
+        """Normalize target position swap events configured at environment scope."""
+        if not cfg:
+            return []
+        if not isinstance(cfg, list):
+            raise ValueError("environment.target_position_swaps must be a list")
+        normalized = []
+        for idx, entry in enumerate(cfg):
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"target_position_swaps[{idx}] must be a mapping"
+                )
+            tick_value = entry.get("at_tick")
+            seconds_value = None
+            for key in ("at_seconds", "at_second", "at_s", "time_seconds", "time_s"):
+                if key in entry:
+                    seconds_value = entry.get(key)
+                    break
+            if tick_value is None and seconds_value is None:
+                raise ValueError(
+                    f"target_position_swaps[{idx}] must define at_tick or at_seconds"
+                )
+            parsed_tick = None
+            if tick_value is not None:
+                try:
+                    parsed_tick = int(tick_value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"target_position_swaps[{idx}].at_tick must be an integer"
+                    ) from exc
+                if parsed_tick < 0:
+                    raise ValueError(
+                        f"target_position_swaps[{idx}].at_tick must be >= 0"
+                    )
+            parsed_seconds = None
+            if seconds_value is not None:
+                try:
+                    parsed_seconds = float(seconds_value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"target_position_swaps[{idx}].at_seconds must be a float"
+                    ) from exc
+                if parsed_seconds < 0.0:
+                    raise ValueError(
+                        f"target_position_swaps[{idx}].at_seconds must be >= 0"
+                    )
+
+            pairs_cfg = entry.get("pairs", entry.get("swaps"))
+            if pairs_cfg is None:
+                pairs_cfg = entry.get("pair")
+            if pairs_cfg is None and any(
+                key in entry
+                for key in ("target_a_id", "target_b_id", "target_a", "target_b", "from", "to")
+            ):
+                pairs_cfg = [entry]
+            if pairs_cfg is None:
+                raise ValueError(
+                    f"target_position_swaps[{idx}] must define 'pairs'"
+                )
+            if not isinstance(pairs_cfg, (list, tuple)):
+                pairs_cfg = [pairs_cfg]
+
+            parsed_pairs = []
+            for pair_idx, pair_cfg in enumerate(pairs_cfg):
+                if isinstance(pair_cfg, (list, tuple)):
+                    if len(pair_cfg) != 2:
+                        raise ValueError(
+                            f"target_position_swaps[{idx}].pairs[{pair_idx}] must contain exactly two IDs"
+                        )
+                    left_raw, right_raw = pair_cfg[0], pair_cfg[1]
+                elif isinstance(pair_cfg, dict):
+                    left_raw = pair_cfg.get(
+                        "a",
+                        pair_cfg.get(
+                            "target_a",
+                            pair_cfg.get(
+                                "target_a_id",
+                                pair_cfg.get("from", pair_cfg.get("left"))
+                            ),
+                        ),
+                    )
+                    right_raw = pair_cfg.get(
+                        "b",
+                        pair_cfg.get(
+                            "target_b",
+                            pair_cfg.get(
+                                "target_b_id",
+                                pair_cfg.get("to", pair_cfg.get("right"))
+                            ),
+                        ),
+                    )
+                else:
+                    raise ValueError(
+                        f"target_position_swaps[{idx}].pairs[{pair_idx}] must be a pair list or mapping"
+                    )
+                left_id = str(left_raw).strip() if left_raw is not None else ""
+                right_id = str(right_raw).strip() if right_raw is not None else ""
+                if not left_id or not right_id:
+                    raise ValueError(
+                        f"target_position_swaps[{idx}].pairs[{pair_idx}] contains empty target IDs"
+                    )
+                if left_id == right_id:
+                    raise ValueError(
+                        f"target_position_swaps[{idx}].pairs[{pair_idx}] must contain two distinct IDs"
+                    )
+                parsed_pairs.append((left_id, right_id))
+
+            normalized.append(
+                {
+                    "tick": parsed_tick,
+                    "seconds": parsed_seconds,
+                    "pairs": parsed_pairs,
+                    "label": str(entry.get("label", f"swap_{idx}")),
+                }
+            )
+        return normalized
+
+    def _prepare_target_position_swaps_for_run(self) -> None:
+        """Resolve configured swap events to tick indices for the current run."""
+        events = []
+        for spec in self._target_position_swap_specs:
+            tick = spec["tick"]
+            if tick is None:
+                seconds = 0.0 if spec["seconds"] is None else float(spec["seconds"])
+                tick = int(math.ceil(seconds * self.ticks_per_second))
+            tick = max(0, int(tick))
+            events.append(
+                {
+                    "tick": tick,
+                    "pairs": list(spec["pairs"]),
+                    "label": spec["label"],
+                }
+            )
+        events.sort(key=lambda item: item["tick"])
+        self._target_position_swap_events = events
+        self._target_position_swap_index = 0
+        if events:
+            logging.info(
+                "Loaded %d target position swap events for this run",
+                len(events),
+            )
+
+    def _index_objects_by_name(self) -> dict:
+        """Return object entities keyed by runtime entity name."""
+        indexed = {}
+        for _, entities in self.objects.values():
+            for entity in entities:
+                name = entity.get_name() if hasattr(entity, "get_name") else None
+                if name:
+                    indexed[str(name)] = entity
+        return indexed
+
+    @staticmethod
+    def _swap_object_xy_positions(first, second) -> None:
+        """Swap x/y positions of two objects while preserving each own z."""
+        pos_first = first.get_position()
+        pos_second = second.get_position()
+        first.set_position(Vector3D(pos_second.x, pos_second.y, pos_first.z))
+        second.set_position(Vector3D(pos_first.x, pos_first.y, pos_second.z))
+
+    def _apply_target_position_swap_event(self, event: dict, objects_by_name: dict, tick: int) -> None:
+        """Apply a single configured target position swap event."""
+        for left_id, right_id in event.get("pairs", []):
+            left_obj = objects_by_name.get(left_id)
+            right_obj = objects_by_name.get(right_id)
+            if left_obj is None or right_obj is None:
+                logging.warning(
+                    "Skipping target swap '%s' at tick %s: missing target(s) '%s' or '%s'",
+                    event.get("label", ""),
+                    tick,
+                    left_id,
+                    right_id,
+                )
+                continue
+            self._swap_object_xy_positions(left_obj, right_obj)
+            logging.info(
+                "Target position swap '%s' executed at tick %s: %s <-> %s",
+                event.get("label", ""),
+                tick,
+                left_id,
+                right_id,
+            )
+
+    def _apply_due_target_position_swaps(self, tick: int) -> None:
+        """Apply all target position swap events scheduled up to `tick`."""
+        if not self._target_position_swap_events:
+            return
+        objects_by_name = None
+        while self._target_position_swap_index < len(self._target_position_swap_events):
+            event = self._target_position_swap_events[self._target_position_swap_index]
+            if int(event.get("tick", 0)) > tick:
+                break
+            if objects_by_name is None:
+                objects_by_name = self._index_objects_by_name()
+            self._apply_target_position_swap_event(event, objects_by_name, tick)
+            self._target_position_swap_index += 1
+
+    def _should_terminate_run(self, agents_shapes: dict, objects_data: dict) -> bool:
+        """Return True if termination conditions are satisfied."""
+        cfg = self.termination_config or {}
+        if cfg.get("type") != "proximity":
+            return False
+        radius = float(cfg.get("radius", 0.0) or 0.0)
+        if radius <= 0:
+            return False
+        target_ids = cfg.get("target_ids") or []
+        if not target_ids:
+            return False
+        agent_filter = cfg.get("agent_ids")
+        agent_positions = self._collect_agent_positions(agents_shapes, agent_filter)
+        if not agent_positions:
+            return False
+        target_positions = self._collect_target_positions(objects_data, agents_shapes, target_ids)
+        if not target_positions:
+            return False
+        for _, agent_pos in agent_positions.items():
+            if agent_pos is None:
+                continue
+            for target_id in target_ids:
+                target_pos = target_positions.get(target_id)
+                if target_pos is None:
+                    continue
+                dx = float(target_pos.x - agent_pos.x)
+                dy = float(target_pos.y - agent_pos.y)
+                if math.hypot(dx, dy) <= radius:
+                    return True
+        return False
+
+    def _collect_agent_positions(self, agents_shapes: dict, agent_filter) -> dict:
+        """Collect agent positions keyed by entity name."""
+        positions = {}
+        if not isinstance(agents_shapes, dict):
+            return positions
+        allowed = None
+        if isinstance(agent_filter, list):
+            allowed = set(agent_filter)
+        for shapes in agents_shapes.values():
+            for shape in shapes:
+                meta = getattr(shape, "metadata", None) if shape is not None else None
+                entity_id = meta.get("entity_name") if isinstance(meta, dict) else None
+                if not entity_id:
+                    entity_id = meta.get("name") if isinstance(meta, dict) else None
+                if not entity_id:
+                    continue
+                if allowed is not None and entity_id not in allowed:
+                    continue
+                try:
+                    pos = shape.center_of_mass()
+                except Exception:
+                    pos = None
+                positions[entity_id] = pos
+        return positions
+
+    def _collect_target_positions(self, objects_data: dict, agents_shapes: dict, target_ids: list) -> dict:
+        """Collect target positions keyed by entity name."""
+        targets = {}
+        wanted = set(target_ids)
+        # objects
+        if isinstance(objects_data, dict):
+            for _, payload in objects_data.items():
+                if not payload or len(payload) < 2:
+                    continue
+                shapes, positions = payload[0], payload[1]
+                for shape, position in zip(shapes, positions):
+                    meta = getattr(shape, "metadata", None) if shape is not None else None
+                    entity_id = meta.get("entity_name") if isinstance(meta, dict) else None
+                    if not entity_id:
+                        entity_id = meta.get("name") if isinstance(meta, dict) else None
+                    if not entity_id or entity_id not in wanted:
+                        continue
+                    targets[entity_id] = position
+        # agents can also be targets
+        if isinstance(agents_shapes, dict):
+            for shapes in agents_shapes.values():
+                for shape in shapes:
+                    meta = getattr(shape, "metadata", None) if shape is not None else None
+                    entity_id = meta.get("entity_name") if isinstance(meta, dict) else None
+                    if not entity_id:
+                        entity_id = meta.get("name") if isinstance(meta, dict) else None
+                    if not entity_id or entity_id not in wanted:
+                        continue
+                    try:
+                        pos = shape.center_of_mass()
+                    except Exception:
+                        pos = None
+                    targets[entity_id] = pos
+        return targets
 
 
 class AbstractArena(Arena):
@@ -496,6 +828,8 @@ class SolidArena(Arena):
         run = 1
         while run < num_runs + 1:
             logging.info(f"Run number {run} started")
+            self._prepare_target_position_swaps_for_run()
+            self._apply_due_target_position_swaps(0)
             arena_data = {
                 "status": [0,self.ticks_per_second],
                 "objects": self.pack_objects_data()
@@ -531,6 +865,7 @@ class SolidArena(Arena):
             step_mode = False
             reset = False
             last_snapshot_info = None
+            termination_triggered = False
             while True:
                 if ticks_limit > 0 and t >= ticks_limit: break
                 if render:
@@ -547,6 +882,7 @@ class SolidArena(Arena):
                             running = False
                             reset = True
                         cmd = self._maybe_get(gui_control_queue, timeout=0.0)
+                self._apply_due_target_position_swaps(t)
                 arena_data = {
                     "status": [t,self.ticks_per_second],
                     "objects": self.pack_objects_data()
@@ -598,6 +934,13 @@ class SolidArena(Arena):
                     if render:
                         gui_in_queue.put({**arena_data, "agents_shapes": self.agents_shapes, "agents_spins": self.agents_spins, "agents_metadata": self.agents_metadata})
                         self._apply_gui_backpressure(gui_in_queue)
+                    if self._should_terminate_run(self.agents_shapes, arena_data.get("objects")):
+                        termination_triggered = True
+                        terminate_cmd = {"command": "terminate_run", "status": True, "reason": "proximity"}
+                        for q in arena_queues:
+                            q.put(terminate_cmd)
+                        logging.info("Termination triggered (proximity) at tick %s", t)
+                        break
                     step_mode = False
                     t += 1
                 elif reset:
@@ -612,7 +955,7 @@ class SolidArena(Arena):
                     last_snapshot_info[1],
                     force=True
                 )
-            if t < ticks_limit and not reset: break
+            if t < ticks_limit and not reset and not termination_triggered: break
             if run < num_runs:
                 if not reset:
                     run += 1
