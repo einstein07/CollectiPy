@@ -36,10 +36,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. SpinSystem and movement model outputs match reference snapshots before and after any refactor
 **Plans**: 4 plans
 Plans:
-- [ ] 01-01-PLAN.md — PERF-01 prange fix + TEST-02 NaN/Inf guard + pytest infrastructure
-- [ ] 01-02-PLAN.md — PERF-02 atomic folder creation race fix
-- [ ] 01-03-PLAN.md — TEST-01 MeanFieldSystem unit tests
-- [ ] 01-04-PLAN.md — TEST-03 regression snapshots for SpinSystem and movement models
+- [x] 01-01-PLAN.md — PERF-01 prange fix + TEST-02 NaN/Inf guard + pytest infrastructure
+- [x] 01-02-PLAN.md — PERF-02 atomic folder creation race fix
+- [x] 01-03-PLAN.md — TEST-01 MeanFieldSystem unit tests
+- [x] 01-04-PLAN.md — TEST-03 regression snapshots for SpinSystem and movement models
 
 ### Phase 2: Bifurcation Detection
 **Goal**: The mean-field model can detect and log the moment agents commit to a target direction
