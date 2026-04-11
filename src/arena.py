@@ -191,6 +191,7 @@ class Arena():
                 detector = getattr(plugin, 'bifurcation_detector', None)
                 if detector is not None and detector.events:
                     self.data_handling.collect_bifurcation_events(detector.events)
+                    detector.events.clear()  # prevent double-collection on repeated calls
 
     def close(self):
         """Close the component resources."""
