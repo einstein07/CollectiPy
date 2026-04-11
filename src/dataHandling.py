@@ -8,12 +8,15 @@
 # ------------------------------------------------------------------------------
 
 import csv
+import logging
 import math
 import os, json, pickle, shutil, zipfile
 from typing import Any
 
 import numpy as np
 from config import Config
+
+logger = logging.getLogger("sim.data_handling")
 
 class DataHandlingFactory():
     """Data handling factory."""
@@ -198,8 +201,14 @@ class DataHandling():
             "swap_events": [],  # Reserved for Phase 3
         }
         events_path = os.path.join(self.run_folder, "events.json")
-        with open(events_path, "w") as f:
-            json.dump(events_data, f, indent=2)
+        try:
+            with open(events_path, "w") as f:
+                json.dump(events_data, f, indent=2)
+        except OSError as exc:
+            logger.error(
+                "DataHandling: failed to write events.json to '%s': %s",
+                events_path, exc
+            )
 
     def new_run(self, run: int, shapes, spins, metadata, ticks_per_second: int | None = None):
         """Create a new run."""
