@@ -266,6 +266,17 @@ class BifurcationDetector:
     # Utilities
     # ------------------------------------------------------------------
 
+    def reset(self) -> None:
+        """Clear all accumulated state for a fresh run.
+
+        Call this at the start of each new run instead of poking internal
+        attributes directly. Centralises state reset so future additions
+        (e.g. running means, event counts) only need to be cleared here.
+        """
+        self.events.clear()
+        self._buffer.clear()
+        self._last_fire_tick = None
+
     @staticmethod
     def _nearest_target(
         bump_angle: float,

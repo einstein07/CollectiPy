@@ -152,9 +152,7 @@ class MeanFieldMovementModel(MovementModel):
             tau_adapt=self.tau_adapt,
         )
         if hasattr(self, 'bifurcation_detector'):
-            self.bifurcation_detector.events.clear()
-            self.bifurcation_detector._buffer.clear()
-            self.bifurcation_detector._last_fire_tick = None
+            self.bifurcation_detector.reset()
         logger.debug("%s mean-field system reset", self.agent.get_name())
 
     def pre_run(self, objects: dict, agents: dict) -> None:
