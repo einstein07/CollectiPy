@@ -287,8 +287,12 @@ class BifurcationDetector:
         """
         if not target_angles or not target_ids:
             return "unknown"
+        # Clip both lists to the shorter length so a mismatched caller
+        # (e.g. len(target_angles) != len(target_ids)) never produces an
+        # out-of-range index or silently returns "unknown" for valid angles.
+        n = min(len(target_angles), len(target_ids))
         deltas = np.abs(
-            (np.array(target_angles, dtype=float) - bump_angle + np.pi) % (2 * np.pi) - np.pi
+            (np.array(target_angles[:n], dtype=float) - bump_angle + np.pi) % (2 * np.pi) - np.pi
         )
         idx = int(np.argmin(deltas))
-        return target_ids[idx] if idx < len(target_ids) else "unknown"
+        return target_ids[idx]
