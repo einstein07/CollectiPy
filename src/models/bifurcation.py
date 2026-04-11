@@ -121,9 +121,9 @@ class BifurcationDetector:
             J = self.compute_jacobian(mf)
             if not np.all(np.isfinite(J)):
                 logger.warning(
-                    "BifurcationDetector: Jacobian contains non-finite values at step %d "
+                    "BifurcationDetector: Jacobian contains non-finite values at step %s "
                     "for agent '%s' — skipping tick",
-                    mf._step_count,
+                    getattr(mf, '_step_count', '?'),
                     self.agent_name,
                 )
                 return None
@@ -131,9 +131,9 @@ class BifurcationDetector:
             return float(np.max(eigenvalues.real))
         except (np.linalg.LinAlgError, ValueError) as exc:
             logger.warning(
-                "BifurcationDetector: eigvals failed for agent '%s' at step %d: %s — skipping tick",
+                "BifurcationDetector: eigvals failed for agent '%s' at step %s: %s — skipping tick",
                 self.agent_name,
-                mf._step_count,
+                getattr(mf, '_step_count', '?'),
                 exc,
             )
             return None
