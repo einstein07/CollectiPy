@@ -159,10 +159,22 @@ class BifurcationDetector:
         Per D-04: suppresses re-detection within spike_min_separation ticks.
         Per D-05: event dict has keys {agent, tick, lambda1, target}.
 
+        Timing note: After appending tick N, the buffer holds [N-2, N-1, N].
+        A local maximum at N-1 can only be confirmed once N is observed (so that
+        v_confirm = lambda1[N] is available). The emitted event therefore records
+        ``tick = t_peak`` (the N-1 sample, when the peak actually occurred) rather
+        than the current tick N. Detection is fired one tick after the peak.
+
+        Target-assignment caveat: ``bump_angle``, ``target_angles``, and
+        ``target_ids`` are supplied by the caller at the *confirm* tick (N), not
+        at the peak tick (N-1). Target assignment is therefore approximate — off
+        by at most one tick of angular motion.
+
         Args:
-            tick: Current simulation tick.
+            tick: Current simulation tick (the confirm tick, one after the peak).
             lambda1: Re(lambda_1) value for this tick.
             bump_angle: Current bump heading (radians), used for target assignment.
+                        NOTE: evaluated at the confirm tick, not the peak tick.
             target_angles: List of known target angles (radians).
             target_ids: Corresponding target identifiers.
 
@@ -174,14 +186,17 @@ class BifurcationDetector:
         if len(self._buffer) < 3:
             return None
 
-        (_, v_prev), (t_curr, v_curr), (_, v_next) = self._buffer
+        # After appending tick N, buffer is: [N-2, N-1, N]
+        # t_peak / v_peak: the middle sample — the actual peak tick (N-1)
+        # v_confirm: the newest sample — used only to confirm descent (N)
+        (_, v_prev), (t_peak, v_peak), (_, v_confirm) = self._buffer
 
         # Local maximum check + threshold check (D-03)
-        if v_prev < v_curr > v_next and v_curr > self.lambda_threshold:
-            # Suppression check (D-04)
+        if v_prev < v_peak > v_confirm and v_peak > self.lambda_threshold:
+            # Suppression check (D-04); use t_peak (confirmed peak time)
             if (
                 self._last_fire_tick is not None
-                and t_curr - self._last_fire_tick < self.spike_min_separation
+                and t_peak - self._last_fire_tick < self.spike_min_separation
             ):
                 return None
 
@@ -190,17 +205,17 @@ class BifurcationDetector:
 
             event = {
                 "agent": self.agent_name,
-                "tick": int(t_curr),
-                "lambda1": float(round(v_curr, 6)),
+                "tick": int(t_peak),   # tick when peak occurred (one tick before detection)
+                "lambda1": float(round(v_peak, 6)),
                 "target": nearest_target,
             }
             self.events.append(event)
-            self._last_fire_tick = t_curr
+            self._last_fire_tick = t_peak
             logger.info(
                 "Bifurcation detected: agent=%s tick=%d lambda1=%.6f target=%s",
                 self.agent_name,
-                t_curr,
-                v_curr,
+                t_peak,
+                v_peak,
                 nearest_target,
             )
             return event
