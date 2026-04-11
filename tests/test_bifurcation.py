@@ -468,7 +468,10 @@ def test_collect_bifurcation_events_wiring():
 
     mock_dh = _MockDataHandling()
 
-    # Run the collection logic inline (mirrors Arena._collect_bifurcation_events)
+    # NOTE: This loop is an intentional logic-replica of Arena._collect_bifurcation_events
+    # (src/arena.py lines 182-194). It exists because constructing a real Arena instance
+    # requires a full config/GUI stack. If the real method changes (e.g. attribute names,
+    # loop structure), this test must be updated to match.
     for _config, entities in mock_objects.values():
         for entity in entities:
             plugin = getattr(entity, '_movement_plugin', None)
