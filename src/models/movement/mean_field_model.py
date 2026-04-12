@@ -68,12 +68,17 @@ class MeanFieldMovementModel(MovementModel):
         self._last_norm: float = 0.0
         self.mean_field_system: Optional[MeanFieldSystem] = None
         self.detection_model = self._create_detection_model()
-        # Bifurcation detection config (D-07: mean_field_model.bifurcation namespace)
+        # Bifurcation detection config (D-09: mean_field_model.bifurcation namespace)
         bif_cfg = self.params.get("bifurcation", {})
         self.bifurcation_detector = BifurcationDetector(
             agent_name=str(agent.get_name()),
             lambda_threshold=float(bif_cfg.get("lambda_threshold", -0.1)),
             spike_min_separation=int(bif_cfg.get("spike_min_separation", 10)),
+            mode=str(bif_cfg.get("mode", "behavioral")),
+            alignment_tolerance_deg=float(bif_cfg.get("alignment_tolerance_deg", 5.0)),
+            alignment_consecutive_ticks=int(bif_cfg.get("alignment_consecutive_ticks", 5)),
+            gradient_window=int(bif_cfg.get("gradient_window", 5)),
+            gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
         self.reset()
         logger.info(
@@ -228,7 +233,7 @@ class MeanFieldMovementModel(MovementModel):
             self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
             self.agent.angular_velocity_cmd = angle_deg
             self._last_bump_angle = angle_rad
-            # Bifurcation detection (D-01): check for eigenvalue spike after this tick
+            # Bifurcation detection: check after this tick (D-01, D-05)
             if self.mean_field_system is not None:
                 target_angles_for_bif = []
                 for t in self._mf_entities.get("targets", []):
@@ -240,6 +245,7 @@ class MeanFieldMovementModel(MovementModel):
                     bump_angle=angle_rad,
                     target_angles=target_angles_for_bif,
                     target_ids=self.target_ids,
+                    perception_vec=self.perception,
                 )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -522,6 +528,16 @@ class MeanFieldMovementModel(MovementModel):
             "mean_field_sensory_time": float(snapshot.get("sensory_time", 0.0)),
             "mean_field_entities": entities_copy,
             "mean_field_norm": self._last_norm,
+            "mean_field_lambda1": (
+                self.bifurcation_detector.last_lambda1
+                if hasattr(self, "bifurcation_detector")
+                else None
+            ),
+            "mean_field_omega": (
+                self.bifurcation_detector.last_omega
+                if hasattr(self, "bifurcation_detector") and self.g_adapt > 0.0
+                else None
+            ),
             "channel": snapshot.get("channel"),
         }
 
