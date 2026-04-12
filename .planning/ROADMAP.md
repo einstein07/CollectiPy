@@ -54,7 +54,7 @@ Plans:
 Plans:
 - [x] 02-01-PLAN.md — BifurcationDetector class + unit tests (BIF-01, BIF-02)
 - [x] 02-02-PLAN.md — Integration with MeanFieldMovementModel + DataHandling events.json output (BIF-01, BIF-02, BIF-03, BIF-04)
-- [ ] 02-03-PLAN.md — Two detection modes (behavioral + analytical), gradient criterion, Omega SFA criterion (BIF-01, BIF-02, BIF-03, BIF-04)
+- [x] 02-03-PLAN.md — Two detection modes (behavioral + analytical), gradient criterion, Omega SFA criterion (BIF-01, BIF-02, BIF-03, BIF-04)
 
 ### Phase 3: Target Swap
 **Goal**: Experiments can test re-decision by swapping target positions after the initial commitment
@@ -65,7 +65,10 @@ Plans:
   2. The run output log contains both the bifurcation tick and the swap tick (bifurcation tick + N)
   3. Running a sweep over multiple N values produces one output folder per N, each with the correct swap tick recorded
   4. A config specifying the post-bifurcation delay N is accepted via JSON without code changes
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 03-01-PLAN.md — Arena post-bifurcation swap config, scheduling, execution + DataHandling swap event logging (SWAP-01, SWAP-02, SWAP-03)
+- [ ] 03-02-PLAN.md — Target swap test suite covering all SWAP requirements (SWAP-01, SWAP-02, SWAP-03, SWAP-04)
 
 ### Phase 4: Analysis Pipeline
 **Goal**: Experiment results can be loaded and visualised in a Jupyter notebook with minimal boilerplate
@@ -98,6 +101,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Foundation | 4/4 | Complete | 2026-04-10 |
 | 2. Bifurcation Detection | 2/3 | In progress | - |
-| 3. Target Swap | 0/TBD | Not started | - |
+| 3. Target Swap | 0/2 | Not started | - |
 | 4. Analysis Pipeline | 0/TBD | Not started | - |
 | 5. Sweep Tooling | 0/TBD | Not started | - |
