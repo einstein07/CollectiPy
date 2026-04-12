@@ -638,17 +638,19 @@ def test_gradient_no_fire_flat():
 
 
 def test_gradient_window_respected():
-    """Gradient uses values gradient_window ticks apart."""
+    """Gradient uses values gradient_window ticks apart; fires at gradient local max."""
     det = make_mode_detector(mode="analytical", gradient_window=3,
                               gradient_threshold=0.001, spike_min_separation=100)
-    # tick 0: -1.0, tick 1: -0.9, tick 2: -0.8, tick 3: -0.7
-    # At tick 3: gradient = (-0.7 - (-1.0)) / 3 = 0.1
-    # tick 4: -0.7 (plateau)
-    # At tick 4: gradient = (-0.7 - (-0.9)) / 3 = 0.0667
-    # tick 5: -0.7
-    # At tick 5: gradient = (-0.7 - (-0.8)) / 3 = 0.0333
-    # gradient peaks at tick 3 (0.1), confirmed by tick 4 and 5 being lower
-    sequence = [-1.0, -0.9, -0.8, -0.7, -0.7, -0.7, -0.7]
+    # With gradient_window=3, gradient[t] = (lambda1[t] - lambda1[t-3]) / 3
+    # Need g_prev < g_peak > g_confirm for a local max to fire.
+    # Sequence: flat, slow rise, steep rise, then plateau:
+    #   tick 0-2: -1.0, -1.0, -1.0  (flat, gradient not computed yet)
+    #   tick 3: -0.95  -> g(3) = (-0.95 - (-1.0)) / 3 = 0.017  (slow)
+    #   tick 4: -0.5   -> g(4) = (-0.5 - (-1.0)) / 3 = 0.167   (rising)
+    #   tick 5: -0.1   -> g(5) = (-0.1 - (-1.0)) / 3 = 0.300   (peak — g_prev < g_peak)
+    #   tick 6: -0.09  -> g(6) = (-0.09 - (-0.95)) / 3 = 0.287 (falling — g_confirm < g_peak)
+    #   3-sample at tick 6: [g(4)=0.167, g(5)=0.300, g(6)=0.287] -> FIRE at t_peak=5
+    sequence = [-1.0, -1.0, -1.0, -0.95, -0.5, -0.1, -0.09, -0.09]
     events = []
     for tick, l1 in enumerate(sequence):
         event = det._check_gradient(tick, l1, 0.0, [0.0], ["A"])
