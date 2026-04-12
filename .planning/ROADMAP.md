@@ -16,7 +16,7 @@ sweep pipeline that makes parameter exploration reproducible and publishable.
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** - Fix infrastructure bugs and establish the test suite
+- [x] **Phase 1: Foundation** - Fix infrastructure bugs and establish the test suite
 - [ ] **Phase 2: Bifurcation Detection** - Add sliding-window decision detection to the mean-field model
 - [ ] **Phase 3: Target Swap** - Implement post-bifurcation environment swap and re-decision logic
 - [ ] **Phase 4: Analysis Pipeline** - Build notebook-ready result loading, metrics, and visualisation
@@ -50,10 +50,11 @@ Plans:
   2. The detection fires correctly for both the standard model (single bump transition) and the SFA model (oscillating bump that eventually settles)
   3. A config with non-default window size, angular tolerance, and variance threshold is accepted and respected at runtime
   4. An experiment with no stable decision (bump never settles within tolerance) completes without error and logs no bifurcation event
-**Plans**: 2 plans
+**Plans**: 3 plans
 Plans:
-- [ ] 02-01-PLAN.md — BifurcationDetector class + unit tests (BIF-01, BIF-02)
-- [ ] 02-02-PLAN.md — Integration with MeanFieldMovementModel + DataHandling events.json output (BIF-01, BIF-02, BIF-03, BIF-04)
+- [x] 02-01-PLAN.md — BifurcationDetector class + unit tests (BIF-01, BIF-02)
+- [x] 02-02-PLAN.md — Integration with MeanFieldMovementModel + DataHandling events.json output (BIF-01, BIF-02, BIF-03, BIF-04)
+- [ ] 02-03-PLAN.md — Two detection modes (behavioral + analytical), gradient criterion, Omega SFA criterion (BIF-01, BIF-02, BIF-03, BIF-04)
 
 ### Phase 3: Target Swap
 **Goal**: Experiments can test re-decision by swapping target positions after the initial commitment
@@ -95,8 +96,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/4 | Not started | - |
-| 2. Bifurcation Detection | 0/2 | Not started | - |
+| 1. Foundation | 4/4 | Complete | 2026-04-10 |
+| 2. Bifurcation Detection | 2/3 | In progress | - |
 | 3. Target Swap | 0/TBD | Not started | - |
 | 4. Analysis Pipeline | 0/TBD | Not started | - |
 | 5. Sweep Tooling | 0/TBD | Not started | - |
