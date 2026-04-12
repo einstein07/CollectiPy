@@ -361,6 +361,7 @@ def test_standard_model_bifurcation():
     )
     detector = BifurcationDetector(
         agent_name="test_standard",
+        mode="analytical",          # analytical mode: gradient-of-lambda1 criterion
         lambda_threshold=-0.1,
         spike_min_separation=10,
     )
@@ -405,6 +406,7 @@ def test_sfa_model_bifurcation():
     )
     detector = BifurcationDetector(
         agent_name="test_sfa",
+        mode="analytical",          # analytical mode: Omega threshold-crossing criterion
         lambda_threshold=-0.1,
         spike_min_separation=10,
     )
@@ -486,3 +488,355 @@ def test_collect_bifurcation_events_wiring():
     )
     assert mock_dh._bifurcation_events[0]["agent"] == "agent_0"
     assert mock_dh._bifurcation_events[1]["agent"] == "agent_1"
+
+
+# ---------------------------------------------------------------------------
+# 02-03: Mode dispatch, behavioral, gradient, and Omega tests
+# ---------------------------------------------------------------------------
+
+
+def make_mode_detector(
+    mode: str = "behavioral",
+    alignment_tolerance_deg: float = 5.0,
+    alignment_consecutive_ticks: int = 3,
+    gradient_window: int = 5,
+    gradient_threshold: float = 0.005,
+    spike_min_separation: int = 10,
+    **kwargs,
+) -> BifurcationDetector:
+    return BifurcationDetector(
+        agent_name="test_agent",
+        mode=mode,
+        alignment_tolerance_deg=alignment_tolerance_deg,
+        alignment_consecutive_ticks=alignment_consecutive_ticks,
+        gradient_window=gradient_window,
+        gradient_threshold=gradient_threshold,
+        spike_min_separation=spike_min_separation,
+        **kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Behavioral mode tests
+# ---------------------------------------------------------------------------
+
+def test_behavioral_alignment_fires():
+    """Bump within tolerance for N consecutive ticks fires a behavioral event."""
+    det = make_mode_detector(mode="behavioral", alignment_consecutive_ticks=3,
+                              alignment_tolerance_deg=5.0, spike_min_separation=100)
+    target_angles = [0.0, math.pi]
+    target_ids = ["A", "B"]
+    bump_angle = 0.01  # ~0.57 deg from target A at 0.0
+
+    event = None
+    for tick in range(3):
+        event = det._update_behavioral(tick, bump_angle, target_angles, target_ids)
+
+    assert event is not None, "Expected behavioral event after 3 consecutive aligned ticks"
+    assert event["mode"] == "behavioral"
+    assert event["target"] == "A"
+    assert "metric" in event
+    assert len(det.events) == 1
+
+
+def test_behavioral_alignment_resets_on_gap():
+    """Counter resets when bump drifts out of tolerance."""
+    det = make_mode_detector(mode="behavioral", alignment_consecutive_ticks=3,
+                              alignment_tolerance_deg=5.0, spike_min_separation=100)
+    target_angles = [0.0, math.pi]
+    target_ids = ["A", "B"]
+
+    # 2 aligned ticks
+    det._update_behavioral(0, 0.01, target_angles, target_ids)
+    det._update_behavioral(1, 0.01, target_angles, target_ids)
+    # Gap: bump drifts to 0.5 (28 deg from target A, outside 5 deg tolerance)
+    det._update_behavioral(2, 0.5, target_angles, target_ids)
+    # 2 more aligned ticks — not enough (need 3 consecutive)
+    det._update_behavioral(3, 0.01, target_angles, target_ids)
+    result = det._update_behavioral(4, 0.01, target_angles, target_ids)
+    assert result is None, "Should not fire after gap (only 2 consecutive after reset)"
+    # 1 more to reach 3 consecutive
+    result = det._update_behavioral(5, 0.01, target_angles, target_ids)
+    assert result is not None, "Should fire after 3 consecutive aligned ticks"
+
+
+def test_behavioral_alignment_correct_target():
+    """Behavioral event assigns the correct target when bump is near pi."""
+    det = make_mode_detector(mode="behavioral", alignment_consecutive_ticks=2,
+                              alignment_tolerance_deg=10.0, spike_min_separation=100)
+    target_angles = [0.0, math.pi]
+    target_ids = ["A", "B"]
+    bump_near_pi = math.pi - 0.05  # within 10 deg of target B at pi
+
+    event = None
+    for tick in range(2):
+        event = det._update_behavioral(tick, bump_near_pi, target_angles, target_ids)
+
+    assert event is not None
+    assert event["target"] == "B"
+
+
+def test_behavioral_suppression():
+    """Second behavioral fire within spike_min_separation is suppressed."""
+    det = make_mode_detector(mode="behavioral", alignment_consecutive_ticks=2,
+                              alignment_tolerance_deg=5.0, spike_min_separation=10)
+    target_angles = [0.0]
+    target_ids = ["A"]
+
+    # First fire at tick 1
+    det._update_behavioral(0, 0.01, target_angles, target_ids)
+    event1 = det._update_behavioral(1, 0.01, target_angles, target_ids)
+    assert event1 is not None
+
+    # Second alignment attempt at tick 3 (too close, within separation=10)
+    det._update_behavioral(2, 0.01, target_angles, target_ids)
+    event2 = det._update_behavioral(3, 0.01, target_angles, target_ids)
+    assert event2 is None, "Second fire should be suppressed (within spike_min_separation)"
+
+
+# ---------------------------------------------------------------------------
+# Gradient criterion tests
+# ---------------------------------------------------------------------------
+
+def test_gradient_fires_at_peak():
+    """Gradient-of-lambda1 local maximum fires an event for standard model."""
+    det = make_mode_detector(mode="analytical", gradient_window=3,
+                              gradient_threshold=0.01, spike_min_separation=100)
+    # Simulate a lambda1 curve: flat, then steep rise, then plateau
+    # ticks 0-5: flat at -1.0
+    # ticks 6-10: rising [-1.0, -0.8, -0.5, -0.2, -0.1]
+    # ticks 11-15: plateau at -0.1
+    # gradient peaks during the rise
+    sequence = (
+        [-1.0] * 6  # flat
+        + [-0.8, -0.5, -0.2, -0.1]  # rise
+        + [-0.1] * 6  # plateau
+    )
+    events = []
+    for tick, l1 in enumerate(sequence):
+        event = det._check_gradient(tick, l1, 0.0, [0.0, math.pi], ["A", "B"])
+        if event is not None:
+            events.append(event)
+
+    assert len(events) >= 1, f"Expected at least 1 gradient event, got {len(events)}"
+    assert events[0]["mode"] == "analytical"
+    assert "metric" in events[0]
+
+
+def test_gradient_no_fire_flat():
+    """Flat lambda1 sequence produces zero gradient, no event."""
+    det = make_mode_detector(mode="analytical", gradient_window=3,
+                              gradient_threshold=0.01, spike_min_separation=100)
+    sequence = [-1.0] * 20
+    events = []
+    for tick, l1 in enumerate(sequence):
+        event = det._check_gradient(tick, l1, 0.0, [0.0], ["A"])
+        if event is not None:
+            events.append(event)
+
+    assert len(events) == 0, f"Expected 0 events from flat sequence, got {len(events)}"
+
+
+def test_gradient_window_respected():
+    """Gradient uses values gradient_window ticks apart."""
+    det = make_mode_detector(mode="analytical", gradient_window=3,
+                              gradient_threshold=0.001, spike_min_separation=100)
+    # tick 0: -1.0, tick 1: -0.9, tick 2: -0.8, tick 3: -0.7
+    # At tick 3: gradient = (-0.7 - (-1.0)) / 3 = 0.1
+    # tick 4: -0.7 (plateau)
+    # At tick 4: gradient = (-0.7 - (-0.9)) / 3 = 0.0667
+    # tick 5: -0.7
+    # At tick 5: gradient = (-0.7 - (-0.8)) / 3 = 0.0333
+    # gradient peaks at tick 3 (0.1), confirmed by tick 4 and 5 being lower
+    sequence = [-1.0, -0.9, -0.8, -0.7, -0.7, -0.7, -0.7]
+    events = []
+    for tick, l1 in enumerate(sequence):
+        event = det._check_gradient(tick, l1, 0.0, [0.0], ["A"])
+        if event is not None:
+            events.append(event)
+
+    assert len(events) >= 1, f"Expected event at gradient peak, got {len(events)}"
+
+
+# ---------------------------------------------------------------------------
+# Omega computation and crossing tests
+# ---------------------------------------------------------------------------
+
+def test_omega_computation_formula():
+    """Omega matches the analytical formula for a known neural_ring and input."""
+    mf = MeanFieldSystem(
+        num_neurons=20,
+        u=6.0, beta=1.0, sigma=0.0, dt=0.1, integration_time=5.0,
+        g_adapt=0.5, tau_adapt=10.0,
+        rng=np.random.default_rng(42),
+    )
+    # Set a cosine bump centered at 0
+    mf.neural_ring = 0.5 * (1.0 + np.cos(mf.theta))
+    # Set a known input
+    mf.b = 0.3 * (1.0 + np.cos(mf.theta - 0.5))
+
+    det = make_mode_detector(mode="analytical")
+    omega = det.compute_omega(mf)
+
+    # Manual computation
+    theta = mf.theta
+    n = mf.num_neurons
+    beta_paper = mf.g_adapt  # 0.5
+    z_complex = np.sum(mf.neural_ring * np.exp(1j * theta))
+    A = np.abs(z_complex) / (n / 2.0)
+    i0_complex = np.sum(mf.b * np.exp(1j * theta))
+    I0 = np.abs(i0_complex) / (n / 2.0)
+    expected_omega = (1.0 + beta_paper) * A / ((1.0 + beta_paper) * A + I0 + 1e-12)
+
+    assert omega is not None
+    assert abs(omega - expected_omega) < 1e-6, (
+        f"Omega mismatch: got {omega}, expected {expected_omega}"
+    )
+
+
+def test_omega_crossing_detection():
+    """Omega crossing the Hopf threshold fires an event."""
+    mf = MeanFieldSystem(
+        num_neurons=20, u=6.0, beta=1.0, sigma=0.0, dt=0.1, integration_time=5.0,
+        g_adapt=0.5, tau_adapt=10.0, rng=np.random.default_rng(42),
+    )
+    det = make_mode_detector(mode="analytical", spike_min_separation=100)
+
+    alpha_paper = 1.0 / mf.tau_adapt  # 0.1
+    beta_paper = mf.g_adapt  # 0.5
+    threshold = (1.0 + alpha_paper) / (1.0 + beta_paper)  # 1.1 / 1.5 = 0.7333
+
+    # Feed synthetic omega values: below, crossing, above
+    omega_sequence = [0.5, 0.6, 0.75, 0.8]  # crosses threshold at index 2
+    events = []
+    for tick, omega in enumerate(omega_sequence):
+        event = det._check_omega_crossing(tick, omega, 0.0, [0.0], ["A"], mf)
+        if event is not None:
+            events.append(event)
+
+    assert len(events) == 1, f"Expected 1 Omega crossing event, got {len(events)}"
+    assert events[0]["mode"] == "analytical"
+    assert "metric" in events[0]
+
+
+def test_omega_no_fire_below_threshold():
+    """Omega values staying below threshold produce no event."""
+    mf = MeanFieldSystem(
+        num_neurons=20, u=6.0, beta=1.0, sigma=0.0, dt=0.1, integration_time=5.0,
+        g_adapt=0.5, tau_adapt=10.0, rng=np.random.default_rng(42),
+    )
+    det = make_mode_detector(mode="analytical", spike_min_separation=100)
+
+    # All values below threshold (0.7333)
+    omega_sequence = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.65, 0.7]
+    events = []
+    for tick, omega in enumerate(omega_sequence):
+        event = det._check_omega_crossing(tick, omega, 0.0, [0.0], ["A"], mf)
+        if event is not None:
+            events.append(event)
+
+    assert len(events) == 0, f"Expected 0 events below threshold, got {len(events)}"
+
+
+# ---------------------------------------------------------------------------
+# Integration tests (analytical mode with real MeanFieldSystem)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_standard_model_analytical_gradient():
+    """Standard model in analytical mode fires via gradient criterion."""
+    num_neurons = 50
+    mf = MeanFieldSystem(
+        num_neurons=num_neurons, u=6.0, beta=1.0, sigma=0.0,
+        dt=0.1, integration_time=5.0, num_targets=2,
+        rng=np.random.default_rng(0),
+    )
+    det = BifurcationDetector(
+        agent_name="test_std_grad",
+        mode="analytical",
+        gradient_window=5,
+        gradient_threshold=0.005,
+        spike_min_separation=10,
+    )
+    target_angles = [0.0, math.pi]
+    target_ids = ["A", "B"]
+    target_qualities = np.array([1.0, 0.5])
+
+    for tick in range(200):
+        _, bump_positions, _ = mf.step(
+            target_angles=target_angles,
+            target_qualities=target_qualities,
+        )
+        bump_angle = float(bump_positions[-1]) if bump_positions is not None and len(bump_positions) > 0 else 0.0
+        det.update(
+            tick=tick, mf=mf, bump_angle=bump_angle,
+            target_angles=list(target_angles), target_ids=target_ids,
+        )
+
+    # Should have computed lambda1 for logging
+    assert det.last_lambda1 is not None, "last_lambda1 should be populated"
+
+
+@pytest.mark.slow
+def test_sfa_model_analytical_omega():
+    """SFA model in analytical mode computes Omega each tick."""
+    num_neurons = 50
+    mf = MeanFieldSystem(
+        num_neurons=num_neurons, u=6.0, beta=1.0, sigma=0.0,
+        dt=0.1, integration_time=5.0, num_targets=2,
+        g_adapt=0.5, tau_adapt=10.0,
+        rng=np.random.default_rng(0),
+    )
+    det = BifurcationDetector(
+        agent_name="test_sfa_omega",
+        mode="analytical",
+        spike_min_separation=10,
+    )
+    target_angles = [0.0, math.pi]
+    target_ids = ["A", "B"]
+    target_qualities = np.array([1.0, 0.5])
+
+    for tick in range(300):
+        _, bump_positions, _ = mf.step(
+            target_angles=target_angles,
+            target_qualities=target_qualities,
+        )
+        bump_angle = float(bump_positions[-1]) if bump_positions is not None and len(bump_positions) > 0 else 0.0
+        det.update(
+            tick=tick, mf=mf, bump_angle=bump_angle,
+            target_angles=list(target_angles), target_ids=target_ids,
+            perception_vec=mf.b,
+        )
+
+    assert det.last_omega is not None, "last_omega should be populated for SFA model"
+
+
+# ---------------------------------------------------------------------------
+# Event schema tests
+# ---------------------------------------------------------------------------
+
+def test_new_event_schema_behavioral():
+    """Behavioral event has {agent, tick, metric, target, mode} keys."""
+    det = make_mode_detector(mode="behavioral", alignment_consecutive_ticks=1,
+                              alignment_tolerance_deg=90.0, spike_min_separation=100)
+    event = det._update_behavioral(0, 0.01, [0.0], ["A"])
+    assert event is not None
+    assert set(event.keys()) == {"agent", "tick", "metric", "target", "mode"}
+    assert event["mode"] == "behavioral"
+
+
+def test_new_event_schema_analytical():
+    """Analytical gradient event has {agent, tick, metric, target, mode} keys."""
+    det = make_mode_detector(mode="analytical", gradient_window=2,
+                              gradient_threshold=0.01, spike_min_separation=100)
+    # Feed: flat, steep rise, plateau to trigger gradient peak
+    sequence = [-1.0, -1.0, -1.0, -0.5, -0.2, -0.1, -0.1, -0.1]
+    event = None
+    for tick, l1 in enumerate(sequence):
+        result = det._check_gradient(tick, l1, 0.0, [0.0], ["A"])
+        if result is not None:
+            event = result
+
+    assert event is not None, "Expected gradient event"
+    assert set(event.keys()) == {"agent", "tick", "metric", "target", "mode"}
+    assert event["mode"] == "analytical"
