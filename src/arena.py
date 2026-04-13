@@ -92,6 +92,12 @@ class Arena():
         )
         self._target_position_swap_events = []
         self._target_position_swap_index = 0
+        # Post-bifurcation swap config (Phase 3)
+        post_bif_cfg = config_elem.environment.get("post_bifurcation_swap") if config_elem else None
+        self._post_bif_swap_cfg = self._normalize_post_bif_swap_config(post_bif_cfg)
+        self._post_bif_swap_triggered = False
+        self._post_bif_swap_event = None  # scheduled swap event dict or None
+        self._latest_queue_bif_events: list = []  # cumulative events from EntityManager queue
 
     @staticmethod
     def _blocking_get(q, timeout: float = 0.01, sleep_s: float = 0.001):
@@ -196,6 +202,13 @@ class Arena():
     def close(self):
         """Close the component resources."""
         self._collect_bifurcation_events()
+<<<<<<< HEAD
+=======
+        # Flush queue-received bifurcation events before writing events.json (IPC path).
+        if self.data_handling is not None and self._latest_queue_bif_events:
+            self.data_handling.collect_bifurcation_events(self._latest_queue_bif_events)
+            self._latest_queue_bif_events = []
+>>>>>>> 0076a64 (feat(03-01): Arena post-bifurcation swap config, scheduling, and execution)
         for (config,entities) in self.objects.values():
             for n in range(len(entities)):
                 entities[n].close()
@@ -373,6 +386,151 @@ class Arena():
                 }
             )
         return normalized
+
+    @staticmethod
+    def _normalize_post_bif_swap_config(cfg) -> dict | None:
+        """Validate and normalise the post_bifurcation_swap environment config.
+
+        Returns None if cfg is absent/empty (backward compatible — no swap).
+        Raises ValueError for malformed input.
+        """
+        if not cfg:
+            return None
+        if not isinstance(cfg, dict):
+            raise ValueError("environment.post_bifurcation_swap must be a mapping")
+        pairs_cfg = cfg.get("pairs")
+        if pairs_cfg is None:
+            raise ValueError("environment.post_bifurcation_swap must define 'pairs'")
+        if not isinstance(pairs_cfg, (list, tuple)):
+            raise ValueError("environment.post_bifurcation_swap.pairs must be a list")
+        parsed_pairs = []
+        for pair_idx, pair in enumerate(pairs_cfg):
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise ValueError(
+                    f"environment.post_bifurcation_swap.pairs[{pair_idx}] must be a 2-element list"
+                )
+            left_id = str(pair[0]).strip() if pair[0] is not None else ""
+            right_id = str(pair[1]).strip() if pair[1] is not None else ""
+            if not left_id or not right_id:
+                raise ValueError(
+                    f"environment.post_bifurcation_swap.pairs[{pair_idx}] contains empty target IDs"
+                )
+            if left_id == right_id:
+                raise ValueError(
+                    f"environment.post_bifurcation_swap.pairs[{pair_idx}] must contain two distinct IDs"
+                )
+            parsed_pairs.append((left_id, right_id))
+        delay_raw = cfg.get("delay_ticks", 0)
+        try:
+            delay_ticks = int(delay_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "environment.post_bifurcation_swap.delay_ticks must be a non-negative integer"
+            ) from exc
+        if delay_ticks < 0:
+            raise ValueError(
+                "environment.post_bifurcation_swap.delay_ticks must be >= 0"
+            )
+        return {"pairs": parsed_pairs, "delay_ticks": delay_ticks}
+
+    def _collect_bifurcation_events(self):
+        """Transfer bifurcation events from all agents' detectors to DataHandling."""
+        if self.data_handling is None:
+            return
+        for _config, entities in self.objects.values():
+            for entity in entities:
+                plugin = getattr(entity, '_movement_plugin', None)
+                if plugin is None:
+                    continue
+                detector = getattr(plugin, 'bifurcation_detector', None)
+                if detector is not None and detector.events:
+                    self.data_handling.collect_bifurcation_events(detector.events)
+                    detector.events.clear()  # prevent double-collection
+
+    def _find_first_bifurcation_in_snapshots(self, agent_snapshots: list) -> dict | None:
+        """Find the first (earliest-tick) bifurcation event across all agent snapshots."""
+        earliest = None
+        for snap in agent_snapshots:
+            if not snap:
+                continue
+            for _grp, spin_list in snap.get("agents_spins", {}).items():
+                if not isinstance(spin_list, list):
+                    continue
+                for spin_data in spin_list:
+                    if not isinstance(spin_data, dict):
+                        continue
+                    for ev in spin_data.get("new_bifurcation_events", []):
+                        if earliest is None or ev.get("tick", float("inf")) < earliest.get("tick", float("inf")):
+                            earliest = ev
+        return earliest
+
+    def _check_post_bif_swap(self, tick: int, agent_snapshots: list) -> None:
+        """Check for first bifurcation event and schedule/execute post-bifurcation swap."""
+        if self._post_bif_swap_cfg is None:
+            return
+        # Phase 1: If swap not yet triggered, scan for first bifurcation event
+        if not self._post_bif_swap_triggered:
+            bif_event = self._find_first_bifurcation_in_snapshots(agent_snapshots)
+            if bif_event is not None:
+                self._post_bif_swap_triggered = True
+                swap_tick = bif_event["tick"] + self._post_bif_swap_cfg["delay_ticks"]
+                self._post_bif_swap_event = {
+                    "tick": swap_tick,
+                    "pairs": list(self._post_bif_swap_cfg["pairs"]),
+                    "triggered_by_agent": bif_event.get("agent", "unknown"),
+                    "bifurcation_tick": bif_event["tick"],
+                }
+                logging.info(
+                    "Post-bifurcation swap scheduled at tick %d (bif_tick=%d + delay=%d, agent=%s)",
+                    swap_tick, bif_event["tick"], self._post_bif_swap_cfg["delay_ticks"],
+                    bif_event.get("agent", "unknown"),
+                )
+                # Also forward bifurcation events to DataHandling for events.json
+                if self.data_handling is not None:
+                    all_bif_events = []
+                    for snap in agent_snapshots:
+                        if not snap:
+                            continue
+                        for _grp, spin_list in snap.get("agents_spins", {}).items():
+                            if not isinstance(spin_list, list):
+                                continue
+                            for spin_data in spin_list:
+                                if not isinstance(spin_data, dict):
+                                    continue
+                                evts = spin_data.get("new_bifurcation_events", [])
+                                if evts:
+                                    all_bif_events.extend(evts)
+                    if all_bif_events:
+                        self.data_handling.collect_bifurcation_events(all_bif_events)
+        # Phase 2: If swap is scheduled and due, execute it
+        if self._post_bif_swap_event is not None and tick >= self._post_bif_swap_event["tick"]:
+            self._execute_post_bif_swap(tick)
+
+    def _execute_post_bif_swap(self, tick: int) -> None:
+        """Execute the scheduled post-bifurcation swap."""
+        event = self._post_bif_swap_event
+        if event is None:
+            return
+        objects_by_name = self._index_objects_by_name()
+        for left_id, right_id in event.get("pairs", []):
+            left_obj = objects_by_name.get(left_id)
+            right_obj = objects_by_name.get(right_id)
+            if left_obj is None or right_obj is None:
+                logging.warning(
+                    "Post-bif swap: missing target '%s' or '%s' at tick %s",
+                    left_id, right_id, tick,
+                )
+                continue
+            self._swap_object_xy_positions(left_obj, right_obj)
+            # Swap strength (== intensity seen by mean-field model, per D-02 and D-07)
+            left_obj.strength, right_obj.strength = right_obj.strength, left_obj.strength
+            logging.info(
+                "Post-bifurcation swap executed at tick %s: %s <-> %s (positions + strength)",
+                tick, left_id, right_id,
+            )
+        if self.data_handling is not None:
+            self.data_handling.collect_swap_events([event])
+        self._post_bif_swap_event = None
 
     def _prepare_target_position_swaps_for_run(self) -> None:
         """Resolve configured swap events to tick indices for the current run."""
@@ -844,6 +1002,9 @@ class SolidArena(Arena):
         while run < num_runs + 1:
             logging.info(f"Run number {run} started")
             self._prepare_target_position_swaps_for_run()
+            # Reset post-bifurcation swap state for this run (D-04: once per run)
+            self._post_bif_swap_triggered = False
+            self._post_bif_swap_event = None
             self._apply_due_target_position_swaps(0)
             arena_data = {
                 "status": [0,self.ticks_per_second],
@@ -935,6 +1096,7 @@ class SolidArena(Arena):
                         self.agents_spins,
                         self.agents_metadata
                     )
+                    self._check_post_bif_swap(t, latest_agent_data)
                     if self.data_handling is not None:
                         tick_stamp = arena_data.get("status", [t, self.ticks_per_second])[0]
                         tick_rate = arena_data.get("status", [tick_stamp, self.ticks_per_second])[1]
@@ -1006,8 +1168,19 @@ class SolidArena(Arena):
         min_v = self.shape.min_vert()
         max_v = self.shape.max_vert()
         rng = self.random_generator
+<<<<<<< HEAD
         self._collect_bifurcation_events()
+=======
+        # Flush bifurcation events and write events.json before closing the run
+        self._collect_bifurcation_events()
+        if self.data_handling is not None and self._latest_queue_bif_events:
+            self.data_handling.collect_bifurcation_events(self._latest_queue_bif_events)
+            self._latest_queue_bif_events = []
+>>>>>>> 0076a64 (feat(03-01): Arena post-bifurcation swap config, scheduling, and execution)
         if self.data_handling is not None: self.data_handling.close(self.agents_shapes)
+        # Reset post-bifurcation swap state for next run
+        self._post_bif_swap_triggered = False
+        self._post_bif_swap_event = None
         for (config, entities) in self.objects.values():
             n_entities = len(entities)
             for entity in entities:
