@@ -19,6 +19,7 @@ import numpy as np
 
 from models.bifurcation import BifurcationDetector
 from models.mean_field_systems import MeanFieldSystem
+from models.bifurcation import BifurcationDetector
 from models.utils import normalize_angle
 from plugin_base import MovementModel
 from plugin_registry import (
@@ -68,7 +69,11 @@ class MeanFieldMovementModel(MovementModel):
         self._last_norm: float = 0.0
         self.mean_field_system: Optional[MeanFieldSystem] = None
         self.detection_model = self._create_detection_model()
+<<<<<<< HEAD
         # Bifurcation detection config (D-09: mean_field_model.bifurcation namespace)
+=======
+        # Bifurcation detection config (mean_field_model.bifurcation namespace)
+>>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
         bif_cfg = self.params.get("bifurcation", {})
         self.bifurcation_detector = BifurcationDetector(
             agent_name=str(agent.get_name()),
@@ -233,7 +238,11 @@ class MeanFieldMovementModel(MovementModel):
             self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
             self.agent.angular_velocity_cmd = angle_deg
             self._last_bump_angle = angle_rad
+<<<<<<< HEAD
             # Bifurcation detection: check after this tick (D-01, D-05)
+=======
+            # Bifurcation detection: check after this tick
+>>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
             if self.mean_field_system is not None:
                 target_angles_for_bif = []
                 for t in self._mf_entities.get("targets", []):
@@ -246,6 +255,10 @@ class MeanFieldMovementModel(MovementModel):
                     target_angles=target_angles_for_bif,
                     target_ids=self.target_ids,
                     perception_vec=self.perception,
+<<<<<<< HEAD
+=======
+                    agent_angle=0.0,  # egocentric frame: agent heading is always 0
+>>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
                 )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
@@ -512,7 +525,7 @@ class MeanFieldMovementModel(MovementModel):
         if avg_angle is not None and self.reference == "allocentric":
             avg_angle = avg_angle + math.radians(self.agent.orientation.z)
             avg_angle = math.atan2(math.sin(avg_angle), math.cos(avg_angle))
-        return {
+        data = {
             "states": state_matrix,
             "angles": (angles_flat, num_groups, num_spins_per_group),
             "external_field": perception_vec,
@@ -539,7 +552,24 @@ class MeanFieldMovementModel(MovementModel):
                 else None
             ),
             "channel": snapshot.get("channel"),
+            "mean_field_lambda1": (
+                self.bifurcation_detector.last_lambda1
+                if hasattr(self, "bifurcation_detector")
+                else None
+            ),
+            "mean_field_omega": (
+                self.bifurcation_detector.last_omega
+                if hasattr(self, "bifurcation_detector") and self.g_adapt > 0.0
+                else None
+            ),
         }
+        # Drain new bifurcation events detected this tick (Path A IPC: events flow
+        # through per-tick spin data from agent process to Arena).
+        new_bif = list(self.bifurcation_detector.events) if hasattr(self, 'bifurcation_detector') else []
+        if new_bif:
+            self.bifurcation_detector.events.clear()
+        data["new_bifurcation_events"] = new_bif
+        return data
 
 
 register_movement_model("mean_field", lambda agent: MeanFieldMovementModel(agent))
