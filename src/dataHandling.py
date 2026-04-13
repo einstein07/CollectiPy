@@ -13,6 +13,8 @@ import math
 import os, json, pickle, shutil, zipfile
 from typing import Any
 
+logger = logging.getLogger("sim.data_handling")
+
 import numpy as np
 from config import Config
 
@@ -78,6 +80,8 @@ class DataHandling():
         self.agent_lookup = {}
         self.agents_metadata = {}
         self.run_folder: str | None = None
+        self._bifurcation_events: list[dict] = []
+        self._swap_events: list[dict] = []
         self._ticks_per_second = 1
         self._snapshot_offsets = [1]
         self._last_snapshot_tick = None
@@ -225,7 +229,35 @@ class DataHandling():
         self._ticks_per_second = self._sanitize_tick_rate(ticks_per_second)
         self._snapshot_offsets = self._build_snapshot_offsets(self._ticks_per_second)
         self._last_snapshot_tick = None
+        self._bifurcation_events = []
+        self._swap_events = []
         self._prepare_graph_dirs()
+
+    def collect_bifurcation_events(self, events: list[dict]) -> None:
+        """Accumulate bifurcation events from an agent's detector."""
+        self._bifurcation_events.extend(events)
+
+    def collect_swap_events(self, events: list[dict]) -> None:
+        """Accumulate swap events for the current run."""
+        self._swap_events.extend(events)
+
+    def _write_events_json(self) -> None:
+        """Write bifurcation and swap events to events.json sidecar."""
+        if self.run_folder is None or not os.path.isdir(self.run_folder):
+            return
+        events_data = {
+            "bifurcation_events": self._bifurcation_events,
+            "swap_events": self._swap_events,
+        }
+        events_path = os.path.join(self.run_folder, "events.json")
+        try:
+            with open(events_path, "w") as f:
+                json.dump(events_data, f, indent=2)
+        except OSError as exc:
+            logger.error(
+                "DataHandling: failed to write events.json to '%s': %s",
+                events_path, exc
+            )
 
     def save(self, shapes, spins, metadata, tick: int, ticks_per_second: int | None = None, force: bool = False):
         """Save value (override in subclasses)."""
