@@ -89,6 +89,13 @@ class Entity:
         """Return the name."""
         return self._entity_uid
 
+    def set_name(self, uid: str) -> None:
+        """Set the entity UID / label and keep shape metadata in sync."""
+        self._entity_uid = uid
+        shape = getattr(self, "shape", None)
+        if shape is not None and hasattr(shape, "metadata"):
+            shape.metadata["entity_name"] = uid
+
     def get_position_from_dict(self):
         """Return the position from dict."""
         return self.position_from_dict
