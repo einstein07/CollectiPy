@@ -159,6 +159,7 @@ class Config:
                             "time_limit": environment.get("time_limit", 0),
                             "num_runs": environment.get("num_runs", 1),
                             "target_position_swaps": environment.get("target_position_swaps", []),
+                            "post_bifurcation_swap": environment.get("post_bifurcation_swap"),
                             "termination": environment.get("termination", {}),
                             "results": environment.get("results", {}),
                             "logging": environment.get("logging") or {},
