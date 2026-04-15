@@ -20,6 +20,7 @@ Covers:
   test_no_bif_no_swap                  — no bifurcation means swap_events remains empty
   test_multi_pair_swap                 — multiple pairs all get swapped
   test_sweep_independence              — two runs with different delay_ticks are independent (SWAP-04)
+  test_execute_post_bif_swap_names    — names/IDs are exchanged (updated D-02)
 """
 
 import json
@@ -353,6 +354,31 @@ def test_execute_post_bif_swap_strength():
     # Strengths exchanged: A now has 0.5, B now has 2.0
     assert entity_a.strength == pytest.approx(0.5)
     assert entity_b.strength == pytest.approx(2.0)
+
+
+def test_execute_post_bif_swap_names():
+    """Entity labels/IDs are exchanged between target entities (updated D-02)."""
+    entity_a = _MockEntity("target_A", x=10.0, y=5.0, strength=2.0)
+    entity_b = _MockEntity("target_B", x=-10.0, y=5.0, strength=0.5)
+    objects = {"targets": ({"number": 2}, [entity_a, entity_b])}
+    dh = _MockDataHandling()
+    stub = _make_arena_stub(pairs=[["target_A", "target_B"]], objects=objects, data_handling=dh)
+    stub._post_bif_swap_event = {
+        "tick": 60,
+        "pairs": [("target_A", "target_B")],
+        "triggered_by_agent": "agent_0",
+        "bifurcation_tick": 50,
+    }
+
+    Arena._execute_post_bif_swap(stub, tick=60)
+
+    # Labels move with the swap: each entity now carries the other's original ID
+    assert entity_a.get_name() == "target_B", (
+        f"Expected entity_a name 'target_B', got '{entity_a.get_name()}'"
+    )
+    assert entity_b.get_name() == "target_A", (
+        f"Expected entity_b name 'target_A', got '{entity_b.get_name()}'"
+    )
 
 
 def test_execute_post_bif_swap_event_schema():
