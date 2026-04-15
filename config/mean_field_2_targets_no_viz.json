@@ -63,6 +63,7 @@
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
+                "ticks_per_second": 5,
                 "detection": {
                     "type": "GPS",
                     "range": 5.0,
@@ -74,7 +75,7 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
-                    "tau_adapt": 0.0,
+                    "tau_adapt": 3.2,
                     "g_adapt": 0.0,
                     "num_targets": 2,
                     "num_guards": 0,

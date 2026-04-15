@@ -6,8 +6,20 @@
             "file_level": "INFO"
         },
         "collisions": false,
-        "time_limit": 0,
+        "time_limit": 1000,
         "num_runs": 1,
+        "results":{ 
+            "base_path": "../data/", 
+            "agent_specs": ["base", "mean_field"],
+            "group_specs": [],
+            "snapshots_per_second": 1
+        },
+        "termination": {
+            "type": "proximity",
+            "target_ids": ["static_0.s#0", "static_1.s#0"],
+            "radius": 0.05,
+            "agent_ids": "any"
+        },
         "gui": {
             "_id": "2D",
             "on_click": [
@@ -17,7 +29,7 @@
         },
         "arenas": {
             "arena_0": {
-                "random_seed": 99991,
+                "random_seed": 9991,
                 "radius": 1,
                 "_id": "square",
                 "color": "gray"
@@ -43,9 +55,13 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "blue",
-                "strength": [5.0],
+                "strength": [1.0],
                 "uncertainty": [0]
             }    
+        },
+        "post_bifurcation_swap": {
+            "pairs": [["static_0.s#0", "static_1.s#0"]],
+            "delay_ticks": 1
         },
         "agents": {
             "movable_0": {
@@ -58,6 +74,7 @@
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
+                "ticks_per_second": 1,
                 "detection": {
                     "type": "GPS",
                     "range": 5.0,
@@ -82,13 +99,22 @@
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 10.0,
+                    "u": 6.156868,
                     "sigma": 1.5,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
                     "reference": "egocentric",
-                    "norm_scale": 1.0
+                    "norm_scale": 1.0,
+                    "bifurcation": {
+                        "mode": "behavioral",
+                        "lambda_threshold": -0.1,
+                        "spike_min_separation": 10,
+                        "alignment_tolerance_deg": 5.0,
+                        "alignment_consecutive_ticks": 5,
+                        "gradient_window": 5,
+                        "gradient_threshold": 0.005
+                    }
                 }
             }
         }

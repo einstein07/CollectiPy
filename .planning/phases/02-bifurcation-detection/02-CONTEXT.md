@@ -1,7 +1,11 @@
-# Phase 2: Bifurcation Detection - Context
+# Phase 2: Bifurcation Detection - Context (Revised)
 
 **Gathered:** 2026-04-10
-**Status:** Ready for planning
+**Revised:** 2026-04-12 — post-experimental review; two detection modes added; SFA Ω criterion added; gradient-based standard-model criterion added.
+
+**Revision trigger:** Experimental results showed (1) the λ₁ local-max + threshold criterion fires repeatedly once λ₁ plateaus above the threshold in the standard model; (2) the λ₁ signal is too noisy in the SFA model for threshold-based detection to be reliable. Phase 2 implementation is being updated to address both.
+
+---
 
 <domain>
 ## Phase Boundary
@@ -18,111 +22,193 @@ produces structured event data (events.json sidecar) consumed by Phase 3 (swap) 
 <decisions>
 ## Implementation Decisions
 
-### Detection Algorithm (BIF-01, BIF-02)
+---
 
-- **D-01:** Use the **Jacobian eigenvalue λ₁ approach** from the paper *"From Vision to Decision:
-  Neuromorphic Control for Autonomous Navigation and Tracking"* (arXiv:2602.05683). Compute
-  Re(λ₁) — the largest real part of the eigenvalues of the Jacobian of the neural dynamics —
-  at each tick. A bifurcation event is detected when λ₁ exhibits a local-maximum spike above a
-  configurable threshold.
+### Detection Modes (NEW — replaces original single-criterion D-03)
 
-- **D-02:** The Jacobian is the **z-subspace Jacobian** with the current adaptation variable `s`
-  plugged in:
-  ```
-  J(z) = -I + (u - s) · diag(sech²((u - s)·M @ z + b − β)) · M
-  ```
-  - Standard model: `s = 0` always → formula reduces to `J(z) = -I + u·diag(sech²(u·M@z + b − β))·M`
-  - SFA model: `s = self.adapt_ring` (current adaptation state) → same formula, same code path
-  - This means **BIF-02 is satisfied by a single implementation** — no separate criterion for SFA
+**D-01: Two named detection modes, selectable via JSON config.**
 
-- **D-03:** **Spike detection rule** (local maximum + threshold, 3-sample micro-buffer):
-  ```python
-  buffer = deque(maxlen=3)  # stores last 3 Re(λ₁) values
-  buffer.append(λ1_current)
-  if len(buffer) == 3:
-      prev, curr, nxt = buffer
-      if prev < curr > nxt and curr > lambda_threshold:
-          bifurcation_detected(tick=current_tick - 1)  # curr is from tick-1
-  ```
-  The `lambda_threshold` parameter is configurable (see D-07). Pre-bifurcation equilibrium has
-  λ₁ << 0 (typically -0.5 to -2.0). At the decision point λ₁ → 0. Typical threshold: -0.1.
+Every agent running a mean-field model picks one mode. The mode name is passed under
+`mean_field_model.bifurcation.mode`. Both modes write to `events.json` and are re-triggerable.
 
-### Fire Mode (BIF-01, multi-target extension)
+| Mode | Purpose | Criterion |
+|------|---------|-----------|
+| `"behavioral"` | Runtime agent-behavior trigger (Phase 3 swap) | Bump angle ≤ 5° from a target for ≥ 5 consecutive ticks |
+| `"analytical"` | Research-grade detection with model-specific metric | Standard: gradient of λ₁ local max; SFA: Ω threshold crossing |
 
-- **D-04:** The detector is **re-triggerable** — it can fire multiple times per run. This supports
-  experiments with more than two targets, where agents may commit sequentially to multiple
-  directions. After each detected bifurcation, the detector suppresses re-detection for
-  `spike_min_separation` ticks (configurable, default 10) to prevent double-firing on the
-  trailing edge of the same spike.
+Default if `mode` key is absent: `"behavioral"`.
 
-### Per-Agent Event Storage (BIF-03)
+---
 
-- **D-05:** Bifurcation is **detected and stored per agent independently**. Each agent's
-  `BifurcationDetector` appends to its own event list:
-  ```python
-  {"agent": "agent_0", "tick": 42, "lambda1": -0.03, "target": "A"}
-  ```
-  The `target` field is the ID of the nearest known target direction to the bump angle at the
-  detection tick (argmin |Δangle(bump_angle, target_angle)|).
+### Mode 1 — Behavioral Detection (BIF-BEHAV)
 
-  Run-level aggregation (e.g., first agent to commit, majority tick) is done in the Phase 4
-  analysis pipeline — not baked into the simulation.
+**D-02:** Fire a bifurcation event when the ring attractor bump angle is within
+`alignment_tolerance_deg` of any known target angle **for `alignment_consecutive_ticks`
+consecutive simulation ticks**.
 
-### Output Format (BIF-03)
+- Bump angle = `_last_bump_angle` from `MeanFieldMovementModel` (egocentric, radians)
+- Target angles come from the per-tick entity list, same as existing code path
+- Alignment check: `|Δangle(bump_angle, target_angle)| ≤ alignment_tolerance_deg * π/180`
+- Counter resets if the bump drifts out of the tolerance window
+- Re-triggerable: after firing for target A, a subsequent alignment with target B can fire again
+  (using `spike_min_separation` ticks as suppression between consecutive events)
+- Model-agnostic: works identically for standard and SFA ring attractors
 
-- **D-06:** Bifurcation events are written to an **`events.json` sidecar** in the run output
-  folder alongside existing pkl files:
-  ```json
-  {
-    "bifurcation_events": [
-      {"agent": "agent_0", "tick": 42, "lambda1": -0.03, "target": "A"},
-      {"agent": "agent_0", "tick": 91, "lambda1": -0.02, "target": "B"},
-      {"agent": "agent_1", "tick": 45, "lambda1": -0.05, "target": "A"}
-    ],
-    "swap_events": []
+Config defaults:
+```json
+"bifurcation": {
+  "mode": "behavioral",
+  "alignment_tolerance_deg": 5.0,
+  "alignment_consecutive_ticks": 5,
+  "spike_min_separation": 10
+}
+```
+
+---
+
+### Mode 2 — Analytical Detection (BIF-ANAL)
+
+#### Standard Ring Attractor (g_adapt == 0)
+
+**D-03:** Compute Re(λ₁) — the dominant Jacobian eigenvalue — at every tick (unchanged from
+original Phase 2). Replace the local-max + threshold spike criterion with a
+**gradient-of-λ₁ local-maximum** criterion:
+
+1. Maintain a rolling window of the last `gradient_window` λ₁ values.
+2. Compute the discrete first derivative: `dλ₁/dt ≈ (λ₁[t] - λ₁[t - gradient_window]) / gradient_window`
+3. Detect when `dλ₁/dt` itself is at a **local maximum** above `gradient_threshold`.
+   This fires at the steepest part of the λ₁ rise — the actual decision onset —
+   rather than at the plateau where the old threshold criterion kept re-firing.
+
+`gradient_window` and `gradient_threshold` are configurable. Defaults chosen by planner
+based on the experimental λ₁ curves (typical rise spans ~20 ticks in the standard model).
+
+**D-02 (Jacobian formula — unchanged):**
+```
+J(z) = -I + (u - s) · diag(sech²((u - s)·M @ z + b − β)) · M
+Standard model: s = 0
+```
+
+#### SFA Ring Attractor (g_adapt > 0)
+
+**D-04:** Use the **Ω criterion** from Ermentrout, Folias & Kilpatrick (2014),
+*"Spatiotemporal Pattern Formation in Neural Fields with Linear Adaptation"*,
+Chapter 4, Eq. 4.23 & 4.26.
+
+The characteristic equation for linear stability of the stationary bump under odd perturbations is:
+
+```
+λ² + [1 + α - (1+β)Ω]λ + α(1+β)(1-Ω) = 0
+where  Ω = (1+β)A / ((1+β)A + I₀)
+```
+
+A **Hopf bifurcation** occurs when `Ω = (1+α)/(1+β)` (Eq. 4.26).
+Detection fires when Ω **crosses** this threshold (transition from below to above, or above to below,
+depending on parameter regime — planner determines crossing direction from experimental data).
+
+**Mapping from paper notation to CollectiPy:**
+
+| Paper symbol | CollectiPy field |
+|-------------|-----------------|
+| β (adaptation strength) | `mf.g_adapt` |
+| α (adaptation rate, = 1/τ) | `1.0 / mf.tau_adapt` |
+| A (bump amplitude) | First Fourier mode magnitude of `neural_ring`: `\|∑ z_i exp(iθ_i)\| / (N/2)` |
+| I₀ (input amplitude) | First Fourier mode magnitude of `mean_field_perception` (the perception vector) |
+
+Bifurcation threshold:
+```python
+alpha_paper = 1.0 / mf.tau_adapt
+beta_paper  = mf.g_adapt
+threshold   = (1.0 + alpha_paper) / (1.0 + beta_paper)
+
+# Fourier mode amplitudes
+A  = np.abs(np.sum(mf.neural_ring * np.exp(1j * mf.theta))) / (mf.num_neurons / 2)
+I0 = np.abs(np.sum(perception_vec * np.exp(1j * mf.theta))) / (mf.num_neurons / 2)
+
+Omega = (1.0 + beta_paper) * A / ((1.0 + beta_paper) * A + I0 + 1e-12)  # guard /0
+
+# Event fires when Omega crosses threshold (3-sample buffer, same logic as λ₁ spike)
+```
+
+---
+
+### Per-Tick Metric Logging (BIF-LOG)
+
+**D-05:** Log the analytical metric to the spins pkl file every tick, regardless of detection mode.
+This ensures the full time-series is always available for post-processing.
+
+| Model type | New pkl key | Value |
+|-----------|------------|-------|
+| Standard (g_adapt == 0) | `mean_field_lambda1` | Re(λ₁), float or None if Jacobian failed |
+| SFA (g_adapt > 0) | `mean_field_omega` | Ω scalar ∈ [0, 1], or None if perception unavailable |
+
+Both are written by `MeanFieldMovementModel.get_spin_system_data()` into the dict returned to
+`DataHandling`, which writes it to `{agent_id}_spins.pkl` per tick.
+
+`mean_field_lambda1` is already implemented. `mean_field_omega` is new.
+
+Note: In `analytical` mode the detector also uses λ₁ / Ω to fire events. In `behavioral` mode
+the pkl logging still happens (always on) but the detector ignores the metric value.
+
+---
+
+### Fire Mode (unchanged)
+
+**D-06:** Re-triggerable — multiple bifurcation events per run supported. Suppression window
+`spike_min_separation` ticks (default 10) between consecutive fires.
+
+---
+
+### Per-Agent Event Storage (unchanged)
+
+**D-07:** Per-agent event list; each event dict:
+```python
+{"agent": "agent_0", "tick": 42, "metric": -0.03, "target": "A", "mode": "analytical"}
+```
+`metric` = λ₁ value (analytical/standard), Ω value (analytical/SFA), or bump alignment angle
+(behavioral). `mode` field added for downstream distinguishability.
+
+---
+
+### Output Format (unchanged)
+
+**D-08:** `events.json` sidecar in the run folder:
+```json
+{
+  "bifurcation_events": [
+    {"agent": "agent_0", "tick": 42, "metric": -0.03, "target": "A", "mode": "analytical"},
+    {"agent": "agent_1", "tick": 45, "metric": 0.71,  "target": "A", "mode": "analytical"}
+  ],
+  "swap_events": []
+}
+```
+
+---
+
+### Config Namespace (extended)
+
+**D-09:** All bifurcation parameters live under `mean_field_model.bifurcation`:
+
+```json
+"mean_field_model": {
+  "num_neurons": 100,
+  "bifurcation": {
+    "mode": "behavioral",
+
+    "alignment_tolerance_deg": 5.0,
+    "alignment_consecutive_ticks": 5,
+
+    "gradient_window": 5,
+    "gradient_threshold": 0.01,
+    "spike_min_separation": 10,
+
+    "lambda_threshold": -0.1
   }
-  ```
-  The `swap_events` key is reserved for Phase 3. Phase 2 always writes an empty list for it.
-  This shared sidecar format means Phase 3 only extends the same file, not creates a new one.
+}
+```
 
-### Config Namespace (BIF-04)
-
-- **D-07:** Detection parameters live **under `mean_field_model.bifurcation`** in the agent JSON
-  config (per-agent, consistent with where other mean-field params live):
-  ```json
-  "mean_field_model": {
-    "num_neurons": 100,
-    "bifurcation": {
-      "lambda_threshold": -0.1,
-      "spike_min_separation": 10
-    }
-  }
-  ```
-  Both parameters are optional with the above defaults. An agent with no `bifurcation` key
-  still detects bifurcations using defaults — no config required for basic use.
-
-### Claude's Discretion
-
-- **Detector class location:** A new `src/models/bifurcation.py` module with a `BifurcationDetector`
-  class. Consumed by `MeanFieldMovementModel` — the movement model creates a detector instance
-  per agent and calls it after each `mean_field_system.step()`. This keeps `MeanFieldSystem`
-  (ODE integration) free of detection logic.
-
-- **Jacobian computation:** Compute in NumPy (not Numba). The Jacobian is n×n (default n=100),
-  eigendecomposition via `np.linalg.eigvals` is O(n³) ≈ 10⁶ ops — negligible vs ODE integration.
-  For SFA, `adapt_ring` is the average of the adaptation variable across the agent's neurons
-  (or the full vector if the Jacobian is extended to 2n×2n — Claude decides based on accuracy
-  needed vs. cost).
-
-- **events.json write timing:** Written at the end of each run (not per-tick) by `DataHandling`
-  after the run loop completes. Matches existing pkl write pattern.
-
-- **No-bifurcation runs:** If no spike is detected, `events.json` is written with an empty
-  `bifurcation_events` list. This satisfies Phase 2 success criterion 4.
-
-- **Tests (TEST coverage for Phase 2):** Unit tests for `BifurcationDetector` with synthetic λ₁
-  sequences; integration test on a known 2-target configuration (standard model) that produces a
-  detectable spike; SFA integration test with known-oscillating parameters that eventually settle.
+`lambda_threshold` retained for backward compatibility with existing tests and run configs.
+Planner decides which params are active per mode (unused params silently ignored).
 
 </decisions>
 
@@ -131,95 +217,123 @@ produces structured event data (events.json sidecar) consumed by Phase 3 (swap) 
 
 **Downstream agents MUST read these before planning or implementing.**
 
-### Bifurcation Detection Theory
+### Bifurcation Theory — Standard Model
 - arXiv:2602.05683 — "From Vision to Decision: Neuromorphic Control for Autonomous Navigation
-  and Tracking". Section 4.4 (Methods) defines the Jacobian eigenvalue approach and spike
-  detection criterion. The CollectiPy dynamics differ from the paper's — derive the Jacobian
-  from CollectiPy's own ODE (D-02), not from the paper's equations verbatim.
+  and Tracking". Section 4.4 (Methods) defines the Jacobian eigenvalue λ₁ approach and the
+  original spike detection criterion. The gradient-based criterion (D-03) replaces the threshold
+  criterion from this paper for the standard model.
+
+### Bifurcation Theory — SFA Model
+- `Literature/Spatiotemporal Pattern Formation in Neural Fields with Linear Adaptation.pdf`
+  (Ermentrout, Folias & Kilpatrick, in *Neural Fields*, Springer 2014, DOI 10.1007/978-3-642-54593-1_4)
+  — Eq. 4.23 (characteristic equation), Eq. 4.26 (Hopf bifurcation condition: α_H = (1+β)Ω − 1).
+  This defines the Ω scalar and the bifurcation threshold (1+α)/(1+β). Section 4.3.2 gives the
+  full derivation of Ω from the stationary bump solution.
 
 ### Model Implementation
-- `src/models/mean_field_systems.py` — `MeanFieldSystem` class. Key fields: `self.u`, `self.b`,
-  `self.M`, `self.beta`, `self.neural_ring` (z), `self.adapt_ring` (s, SFA only),
-  `self.theta` (neuron angles). The Jacobian is computed from these at the current state.
-- `src/models/movement/mean_field_model.py` — `MeanFieldMovementModel`. This is where
-  `BifurcationDetector` will be instantiated and called. `step(agent, tick, ...)` receives the
-  arena tick — this is the tick stored in bifurcation events.
+- `src/models/mean_field_systems.py` — `MeanFieldSystem`. Key fields: `neural_ring` (z),
+  `adapt_ring` (s, SFA), `theta` (neuron angles), `g_adapt`, `tau_adapt`, `u`, `b`, `M`, `beta`.
+- `src/models/movement/mean_field_model.py` — `MeanFieldMovementModel`. Current integration
+  point for `BifurcationDetector`. `get_spin_system_data()` is where `mean_field_lambda1` is
+  added; `mean_field_omega` goes in the same dict.
+- `src/models/bifurcation.py` — `BifurcationDetector` (Phase 2 deliverable). Must be extended
+  to support both modes and Ω computation. `last_lambda1` attribute already exposed on the class.
 
 ### Output Infrastructure
-- `src/dataHandling.py` — `DataHandling` class. `new_run(run_id, ...)` and run-end logic.
-  `events.json` should be written here alongside existing pkl files using the run folder path.
-- `src/arena.py` — Arena main loop. `_prepare_target_position_swaps_for_run()` shows the pattern
-  for per-run event setup. The `run()` method drives the tick loop that calls agent steps.
+- `src/dataHandling.py` — `DataHandling`. `events.json` write pattern established.
+- `src/arena.py` — `Arena._collect_bifurcation_events()` established.
 
-### Phase 1 Context (decisions that carry forward)
-- `.planning/phases/01-foundation/01-CONTEXT.md` — D-01 through D-03 cover NaN/Inf detection
-  and logging patterns. The `sim.mean_field` logger is the correct logger to use for any
-  diagnostic output from `BifurcationDetector`.
+### Phase 1 Context
+- `.planning/phases/01-foundation/01-CONTEXT.md` — NaN/Inf logging patterns; `sim.mean_field`
+  logger namespace.
+
+### Experimental Results (read for context)
+- Run folder: `mean_field_2targets_runs_bifurcation_detection_test_20260411-110058`
+  Standard model: λ₁ rises smoothly, plateaus above threshold → gradient criterion needed.
+  SFA model: λ₁ is noisy and positive throughout → λ₁ approach unreliable; Ω criterion needed.
 
 </canonical_refs>
 
 <code_context>
 ## Existing Code Insights
 
-### Reusable Assets
-- `compute_center_of_mass(z, theta_i)` in `mean_field_systems.py` — already available; used to
-  get the current bump angle for "nearest target" assignment in bifurcation events.
-- `_delta_angle(a1, a2)` in `mean_field_systems.py` — angle difference helper; use for nearest
-  target assignment.
-- `MeanFieldMovementModel._last_bump_angle` — already stored per tick; can be reused to avoid
-  recomputing bump angle in the detector.
-- `logging.getLogger("sim.mean_field")` — existing logger; `BifurcationDetector` should use
-  this logger (or `sim.mean_field.bifurcation`).
+### Already Implemented (Phase 2 v1)
+- `BifurcationDetector` class: `compute_jacobian()`, `compute_lambda1()`, `_check_spike()`,
+  `update()`, `reset()`, `last_lambda1` attribute, `events` list.
+- `MeanFieldMovementModel.step()`: calls `self.bifurcation_detector.update(...)` after each tick.
+- `get_spin_system_data()`: already returns `"mean_field_lambda1"` in the dict.
+- `DataHandling.collect_bifurcation_events()` and `_write_events_json()`.
+- `Arena._collect_bifurcation_events()`.
 
-### Established Patterns
-- `mean_field_model` config key: agent JSON already has `mean_field_model: {...}`. The new
-  `bifurcation` subkey nests cleanly without breaking existing configs.
-- `DataHandling._write_mean_field_logs()`: per-tick pkl writes. The `events.json` write pattern
-  should follow the same `run_folder` path but write once at run end (not per tick).
-- `Arena._apply_due_target_position_swaps()`: existing per-tick event application; shows how
-  the arena loop dispatches timed events. Phase 3 will extend this pattern for swaps triggered
-  by bifurcation tick + N.
+### What Needs to Change
+1. **`BifurcationDetector`**: Add `mode` dispatch. For `behavioral` mode, add alignment-counter
+   logic (no Jacobian needed). For `analytical` mode, keep Jacobian path for standard model;
+   add Ω computation for SFA.
+2. **`BifurcationDetector._check_spike()`**: Replace/extend with gradient-of-λ₁ criterion for
+   analytical/standard mode. Add Ω threshold-crossing detector for analytical/SFA mode.
+3. **`MeanFieldMovementModel.get_spin_system_data()`**: Add `mean_field_omega` key (SFA only).
+   `mean_field_lambda1` remains for standard model.
+4. **Tests**: Update unit tests for new criterion logic; add Ω computation test.
 
-### Integration Points
-- `MeanFieldMovementModel.step()` — add detector call after the `mean_field_system.step()` loop
-  (lines ~192-201). Pass `tick`, current `bump_angle`, and current `target_angles` to the
-  detector.
-- `DataHandling` — add `write_events_json(run_folder, events)` method; call at run end.
-- No changes needed to `MeanFieldSystem` itself — all detection logic lives in the new
-  `BifurcationDetector` class.
+### Fourier Mode Computation (for Ω)
+`mf.theta` is the array of neuron preferred angles (radians). First Fourier mode magnitude:
+```python
+A = np.abs(np.dot(mf.neural_ring, np.exp(1j * mf.theta))) / (mf.num_neurons / 2)
+```
+This is equivalent to `2/N * |∑_i z_i exp(i θ_i)|`. Already used internally in
+`compute_center_of_mass()` for bump angle — can reuse the complex sum directly.
+
+### Behavioral Mode Alignment Check
+Bump angle is `self._last_bump_angle` (set in `step()` after `mean_field_system.step()`).
+Target angles come from `self._mf_entities["targets"]`, same source used by current detector.
+```python
+def _aligned_with_any_target(self, bump_angle, target_angles, tol_rad):
+    return any(
+        abs(((bump_angle - t + np.pi) % (2*np.pi)) - np.pi) <= tol_rad
+        for t in target_angles
+    )
+```
 
 </code_context>
 
 <specifics>
-## Specific Ideas
+## Specific Notes
 
-- **Reference paper equation (for deriving CollectiPy's Jacobian):** The paper uses a
-  simplex-constrained Jacobian. CollectiPy does NOT use the simplex constraint — use the
-  unconstrained z-subspace Jacobian from D-02 directly.
-- **SFA Jacobian recommendation:** Start with the z-subspace Jacobian with current `s` plugged
-  in (D-02). The full (z, s) Jacobian can be explored if the z-subspace misses SFA bifurcations
-  in testing — but this is a v2 refinement if needed.
-- **events.json is the Phase 3 contract:** Phase 3 (target swap) will write `swap_events` into
-  the same file. The schema defined in D-06 (`bifurcation_events`, `swap_events` keys) should be
-  treated as a cross-phase contract.
+- **Backward compatibility**: Existing run configs with no `mode` key default to `"behavioral"`.
+  Configs with `lambda_threshold` but no `mode` key also default to `"behavioral"` — the
+  threshold param is silently ignored (not an error).
+- **events.json `metric` field**: In behavioral mode, `metric` = the bump angle at the moment
+  of detection (float, radians). In analytical/standard, `metric` = λ₁ peak value. In
+  analytical/SFA, `metric` = Ω value at crossing tick.
+- **`mean_field_omega` always logged for SFA**: Even in behavioral mode, Ω is computed and
+  written to pkl every tick. This gives researchers the full Ω trace for post-hoc analysis
+  regardless of which mode triggered the event.
+- **Ω guard**: Add `+ 1e-12` to the denominator to prevent division by zero when both bump and
+  perception are near zero at simulation start.
+- **Paper's α/β notation**: In CollectiPy, `g_adapt` = paper's β (adaptation strength) and
+  `1/tau_adapt` = paper's α (adaptation rate). The bifurcation threshold is
+  `(1 + 1/tau_adapt) / (1 + g_adapt)`. Planner must verify sign conventions against
+  `mean_field_systems.py` SFA integration code.
 
 </specifics>
 
 <deferred>
 ## Deferred Ideas
 
-- **Full (z, s) Jacobian for SFA** — Using the 2n×2n block Jacobian that couples z and s
-  subspaces may be more accurate for the SFA model. Deferred to v2 (BIF-V2-01 area).
-- **Fourier-mode detection (BIF-V2-02)** — Alternative criterion: magnitude of first Fourier
-  mode of ring activity crosses threshold. Explicitly a v2 requirement.
-- **Pluggable criterion interface (BIF-V2-01)** — Full registry of user-defined criterion
-  functions. Phase 2 implements eigenvalue-only; the class structure should be designed to allow
-  this without a rewrite (clean `detect(tick, z, s, b, theta, target_angles) → event | None`
-  interface).
+- **Full (z, s) Jacobian for SFA** — 2n×2n block Jacobian coupling z and s subspaces.
+  May give a cleaner λ₁ signal for SFA. Deferred to v2 (BIF-V2-01).
+- **Fourier-mode detection (BIF-V2-02)** — Alternative: magnitude of first Fourier mode of ring
+  activity crosses a threshold. Related to A in the Ω computation but used directly.
+- **Pluggable criterion interface** — Full registry of user-defined criterion functions. Phase 2
+  handles the two named modes; a plugin system is a v2 refactor.
+- **Drift instability detection** — For SFA with I₀=0, the bifurcation is a pitchfork (drift
+  to traveling bump) rather than a Hopf. Eq. 4.24 gives this case (α = β). Separate detection
+  criterion if needed for input-free SFA experiments.
 
 </deferred>
 
 ---
 
 *Phase: 02-bifurcation-detection*
-*Context gathered: 2026-04-10*
+*Context originally gathered: 2026-04-10*
+*Revised: 2026-04-12*
