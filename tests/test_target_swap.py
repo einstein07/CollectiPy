@@ -69,6 +69,9 @@ class _MockEntity:
     def get_name(self) -> str:
         return self._name
 
+    def set_name(self, uid: str) -> None:
+        self._name = uid
+
     def entity(self) -> str:
         return "target"
 
