@@ -524,8 +524,11 @@ class Arena():
             self._swap_object_xy_positions(left_obj, right_obj)
             # Swap strength (== intensity seen by mean-field model, per D-02 and D-07)
             left_obj.strength, right_obj.strength = right_obj.strength, left_obj.strength
+            # Swap entity labels so agents tracking by name follow the correct target (updated D-02)
+            left_obj.set_name(right_id)
+            right_obj.set_name(left_id)
             logging.info(
-                "Post-bifurcation swap executed at tick %s: %s <-> %s (positions + strength)",
+                "Post-bifurcation swap executed at tick %s: %s <-> %s (positions + strength + names)",
                 tick, left_id, right_id,
             )
         if self.data_handling is not None:
