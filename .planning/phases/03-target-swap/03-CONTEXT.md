@@ -36,28 +36,26 @@ Implementation note: Arena must track a `_post_bif_swap_triggered: bool` flag pe
 
 ---
 
-### D-02: What Gets Swapped — Positions AND Quality (intensity)
+### D-02: What Gets Swapped — Positions, Quality (intensity), AND Labels
 
 Both the XY position **and** the `intensity` value are swapped between the two named targets.
-Target labels (IDs) remain fixed — only coordinates and intensity exchange.
+Target labels (IDs) are ALSO swapped — coordinates, intensity, AND entity names exchange.
+This ensures agents tracking a target by label continue to follow the correct physical target
+after the swap.
 
 ```
 Before swap:
-  target_A: pos=(10, 5),  intensity=2.0
-  target_B: pos=(-10, 5), intensity=0.5
+  target_A: pos=(10, 5),  intensity=2.0, name="target_A"
+  target_B: pos=(-10, 5), intensity=0.5, name="target_B"
 
 After swap:
-  target_A: pos=(-10, 5), intensity=0.5
-  target_B: pos=(10, 5),  intensity=2.0
+  entity at pos=(-10,5): intensity=0.5, name="target_A"
+  entity at pos=(10, 5): intensity=2.0, name="target_B"
 ```
 
-The existing `_swap_object_xy_positions()` handles coordinates. A new helper
-`_swap_object_intensity()` (or inline logic) handles the `intensity` attribute.
-
-How intensity is stored on entity objects must be confirmed by the planner from the entity
-data model. If `intensity` is not a direct attribute, the swap must go through whatever
-accessor the mean-field model uses (the `entry.get("intensity", 1.0)` path in
-`mean_field_model.py` line 391).
+The existing `_swap_object_xy_positions()` handles coordinates. The `strength` attribute
+is swapped inline. Name swap uses `Entity.set_name(uid)` which also updates
+`shape.metadata['entity_name']` for consistency with the collision/detection layer.
 
 ---
 
