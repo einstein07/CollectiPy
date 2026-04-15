@@ -464,13 +464,36 @@ class Arena():
                             earliest = ev
         return earliest
 
-    def _check_post_bif_swap(self, tick: int, agent_snapshots: list) -> None:
-        """Check for first bifurcation event and schedule/execute post-bifurcation swap."""
+    @staticmethod
+    def _rescue_bif_events_from_snapshot(snap: dict | None, dest: list) -> None:
+        """Extract new_bifurcation_events from a snapshot into dest before it is discarded."""
+        if not snap:
+            return
+        for spin_list in snap.get("agents_spins", {}).values():
+            if isinstance(spin_list, list):
+                for sd in spin_list:
+                    if isinstance(sd, dict):
+                        dest.extend(sd.get("new_bifurcation_events", []))
+
+    def _check_post_bif_swap(self, tick: int, agent_snapshots: list,
+                              rescued_bif_events: list | None = None) -> None:
+        """Check for first bifurcation event and schedule/execute post-bifurcation swap.
+
+        ``rescued_bif_events`` carries events that were extracted from snapshots
+        replaced during the tick's IPC drain loop — they would otherwise be lost
+        because the Arena always keeps only the *latest* snapshot per manager.
+        """
         if self._post_bif_swap_cfg is None:
             return
         # Phase 1: If swap not yet triggered, scan for first bifurcation event
         if not self._post_bif_swap_triggered:
             bif_event = self._find_first_bifurcation_in_snapshots(agent_snapshots)
+            # Also check rescued events (from snapshots that were overwritten mid-tick)
+            if bif_event is None and rescued_bif_events:
+                for ev in rescued_bif_events:
+                    if isinstance(ev, dict):
+                        if bif_event is None or ev.get("tick", float("inf")) < bif_event.get("tick", float("inf")):
+                            bif_event = ev
             if bif_event is not None:
                 self._post_bif_swap_triggered = True
                 swap_tick = bif_event["tick"] + self._post_bif_swap_cfg["delay_ticks"]
@@ -485,9 +508,9 @@ class Arena():
                     swap_tick, bif_event["tick"], self._post_bif_swap_cfg["delay_ticks"],
                     bif_event.get("agent", "unknown"),
                 )
-                # Also forward bifurcation events to DataHandling for events.json
+                # Forward all bifurcation events to DataHandling for events.json
                 if self.data_handling is not None:
-                    all_bif_events = []
+                    all_bif_events = list(rescued_bif_events) if rescued_bif_events else []
                     for snap in agent_snapshots:
                         if not snap:
                             continue
@@ -522,13 +545,16 @@ class Arena():
                 )
                 continue
             self._swap_object_xy_positions(left_obj, right_obj)
-            # Swap strength (== intensity seen by mean-field model, per D-02 and D-07)
+            # Swap all identity-bearing attributes so targets fully exchange roles
             left_obj.strength, right_obj.strength = right_obj.strength, left_obj.strength
-            # Swap entity labels so agents tracking by name follow the correct target (updated D-02)
+            left_obj.uncertainty, right_obj.uncertainty = right_obj.uncertainty, left_obj.uncertainty
+            left_obj.color, right_obj.color = right_obj.color, left_obj.color
+            # Swap entity labels so agents tracking by name follow the correct target
             left_obj.set_name(right_id)
             right_obj.set_name(left_id)
             logging.info(
-                "Post-bifurcation swap executed at tick %s: %s <-> %s (positions + strength + names)",
+                "Post-bifurcation swap executed at tick %s: %s <-> %s "
+                "(position + strength + uncertainty + color + name)",
                 tick, left_id, right_id,
             )
         if self.data_handling is not None:
@@ -1072,10 +1098,18 @@ class SolidArena(Arena):
                     for q in arena_queues:
                         q.put(arena_data)
                     ready = [False] * n_managers
+                    # Accumulate bifurcation events from EVERY snapshot read this tick.
+                    # The Arena keeps only the *latest* snapshot per manager for position
+                    # data, so any snapshot that gets overwritten would silently drop its
+                    # new_bifurcation_events.  We rescue them here and forward them to
+                    # _check_post_bif_swap so the swap trigger is never missed.
+                    _rescued_bif_events: list = []
                     while not all(ready):
                         for idx, q in enumerate(agents_queues):
                             candidate = self._maybe_get(q, timeout=0.01)
                             if candidate is not None:
+                                # Rescue events from the snapshot we are about to discard
+                                self._rescue_bif_events_from_snapshot(latest_agent_data[idx], _rescued_bif_events)
                                 latest_agent_data[idx] = candidate
                         for idx, snap in enumerate(latest_agent_data):
                             ready[idx] = bool(snap and snap["status"][0]/snap["status"][1] >= t/self.ticks_per_second)
@@ -1092,6 +1126,8 @@ class SolidArena(Arena):
                     for idx, q in enumerate(agents_queues):
                         latest = self._maybe_get(q, timeout=0.0)
                         if latest is not None:
+                            # Rescue events before final overwrite too
+                            self._rescue_bif_events_from_snapshot(latest_agent_data[idx], _rescued_bif_events)
                             latest_agent_data[idx] = latest
                     self.agents_shapes, self.agents_spins, self.agents_metadata = _combine_agent_snapshots(
                         latest_agent_data,
@@ -1099,7 +1135,7 @@ class SolidArena(Arena):
                         self.agents_spins,
                         self.agents_metadata
                     )
-                    self._check_post_bif_swap(t, latest_agent_data)
+                    self._check_post_bif_swap(t, latest_agent_data, rescued_bif_events=_rescued_bif_events)
                     if self.data_handling is not None:
                         tick_stamp = arena_data.get("status", [t, self.ticks_per_second])[0]
                         tick_rate = arena_data.get("status", [tick_stamp, self.ticks_per_second])[1]

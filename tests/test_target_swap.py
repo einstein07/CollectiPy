@@ -56,10 +56,13 @@ class _MockEntity:
     Arena._execute_post_bif_swap.
     """
 
-    def __init__(self, name: str, x: float, y: float, strength: float, z: float = 0.0):
+    def __init__(self, name: str, x: float, y: float, strength: float,
+                 z: float = 0.0, uncertainty: float = 0.0, color: str = "blue"):
         self._name = name
         self._pos = Vector3D(x, y, z)
         self.strength = strength
+        self.uncertainty = uncertainty
+        self.color = color
 
     def get_position(self) -> Vector3D:
         return self._pos
