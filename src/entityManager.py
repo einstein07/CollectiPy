@@ -293,7 +293,7 @@ class EntityManager:
                 "status": [0, ticks_per_second],
                 "agents_shapes": self.get_agent_shapes(),
                 "agents_spins": self.get_agent_spins(),
-                "agents_metadata": metadata_snapshot
+                "agents_metadata": metadata_snapshot,
             }
             agents_queue.put(agents_data)
             t = 1
@@ -344,7 +344,7 @@ class EntityManager:
                             "status": [t, ticks_per_second],
                             "agents_shapes": self.get_agent_shapes(),
                             "agents_spins": self.get_agent_spins(),
-                            "agents_metadata": self.get_agent_metadata()
+                            "agents_metadata": self.get_agent_metadata(),
                         }
                         if agents_queue.qsize() == 0:
                             agents_queue.put(agents_data)
@@ -383,7 +383,7 @@ class EntityManager:
                 agents_data = {
                     "status": [t, ticks_per_second],
                     "agents_shapes": self.get_agent_shapes(),
-                    "agents_spins": self.get_agent_spins()
+                    "agents_spins": self.get_agent_spins(),
                 }
                 if not metadata_sent:
                     agents_data["agents_metadata"] = metadata_snapshot
@@ -653,6 +653,7 @@ class EntityManager:
         for _, entities in self.agents.values():
             spins[entities[0].entity()] = [entity.get_spin_system_data() for entity in entities]
         return spins
+
 
     def get_agent_metadata(self) -> dict:
         """Return per-agent metadata used by the GUI."""

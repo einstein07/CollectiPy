@@ -505,17 +505,24 @@ class SpaceDataHandling(DataHandling):
         modulated_target_qualities_str = json.dumps(modulated_target_qualities)
         channel = spin_values.get("channel") or ""
 
+        lambda1 = spin_values.get("mean_field_lambda1")  # Re(λ₁) from BifurcationDetector; None before first tick
+        omega = spin_values.get("mean_field_omega")     # Ω from BifurcationDetector (SFA model); None for standard model
+
         neural_entry = files.get("neural")
         if neural_entry:
             if not neural_entry["header_written"]:
                 header = ["tick"]
                 header.extend(f"neuron_{i}" for i in range(len(state_values)))
                 header.append("norm_z")
+                header.append("lambda1")
+                header.append("omega")
                 neural_entry["writer"].writerow(header)
                 neural_entry["header_written"] = True
             row = [tick]
             row.extend(state_values)
             row.append(norm_z)
+            row.append("" if lambda1 is None else lambda1)
+            row.append("" if omega is None else omega)
             neural_entry["writer"].writerow(row)
 
         perception_entry = files.get("perception")
