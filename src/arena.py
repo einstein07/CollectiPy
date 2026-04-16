@@ -202,13 +202,10 @@ class Arena():
     def close(self):
         """Close the component resources."""
         self._collect_bifurcation_events()
-<<<<<<< HEAD
-=======
         # Flush queue-received bifurcation events before writing events.json (IPC path).
         if self.data_handling is not None and self._latest_queue_bif_events:
             self.data_handling.collect_bifurcation_events(self._latest_queue_bif_events)
             self._latest_queue_bif_events = []
->>>>>>> 0076a64 (feat(03-01): Arena post-bifurcation swap config, scheduling, and execution)
         for (config,entities) in self.objects.values():
             for n in range(len(entities)):
                 entities[n].close()
@@ -1199,15 +1196,11 @@ class SolidArena(Arena):
         min_v = self.shape.min_vert()
         max_v = self.shape.max_vert()
         rng = self.random_generator
-<<<<<<< HEAD
-        self._collect_bifurcation_events()
-=======
         # Flush bifurcation events and write events.json before closing the run
         self._collect_bifurcation_events()
         if self.data_handling is not None and self._latest_queue_bif_events:
             self.data_handling.collect_bifurcation_events(self._latest_queue_bif_events)
             self._latest_queue_bif_events = []
->>>>>>> 0076a64 (feat(03-01): Arena post-bifurcation swap config, scheduling, and execution)
         if self.data_handling is not None: self.data_handling.close(self.agents_shapes)
         # Reset post-bifurcation swap state for next run
         self._post_bif_swap_triggered = False
