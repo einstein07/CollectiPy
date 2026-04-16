@@ -545,16 +545,8 @@ class Arena():
                 )
                 continue
             self._swap_object_xy_positions(left_obj, right_obj)
-            # Swap all identity-bearing attributes so targets fully exchange roles
-            left_obj.strength, right_obj.strength = right_obj.strength, left_obj.strength
-            left_obj.uncertainty, right_obj.uncertainty = right_obj.uncertainty, left_obj.uncertainty
-            left_obj.color, right_obj.color = right_obj.color, left_obj.color
-            # Swap entity labels so agents tracking by name follow the correct target
-            left_obj.set_name(right_id)
-            right_obj.set_name(left_id)
             logging.info(
-                "Post-bifurcation swap executed at tick %s: %s <-> %s "
-                "(position + strength + uncertainty + color + name)",
+                "Post-bifurcation swap executed at tick %s: %s <-> %s (position)",
                 tick, left_id, right_id,
             )
         if self.data_handling is not None:
