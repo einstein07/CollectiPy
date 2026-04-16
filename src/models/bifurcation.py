@@ -98,10 +98,7 @@ class BifurcationDetector:
         self._last_fire_tick: Optional[int] = None
         self.events: list[dict] = []
         self.last_lambda1: Optional[float] = None  # last successfully computed Re(lambda_1)
-<<<<<<< HEAD
-=======
         self.retrigger = False  # whether to allow re-triggering after firing (resets alignment counter)
->>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
 
         # Mode configuration
         self.mode = mode  # "behavioral" or "analytical"
@@ -380,31 +377,21 @@ class BifurcationDetector:
                 self._alignment_counter += 1
             else:
                 # Switched to a different target — reset counter
-<<<<<<< HEAD
-=======
                 if self._alignment_target is not None:
                     self.retrigger = True  # allow re-triggering if we switch targets
->>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
                 self._alignment_target = aligned_target_id
                 self._alignment_counter = 1
         else:
             # Not aligned with any target — reset
             self._alignment_counter = 0
             self._alignment_target = None
-<<<<<<< HEAD
-=======
             self.retrigger = False  # reset re-trigger flag when losing alignment
->>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
             return None
 
         if self._alignment_counter >= self.alignment_consecutive_ticks:
             # Suppression check
             if (self._last_fire_tick is not None
-<<<<<<< HEAD
-                    and tick - self._last_fire_tick < self.spike_min_separation):
-=======
                     and tick - self._last_fire_tick < self.spike_min_separation or self._last_fire_tick is not None and not self.retrigger):
->>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
                 return None
 
             event = {
@@ -426,8 +413,6 @@ class BifurcationDetector:
         return None
 
     # ------------------------------------------------------------------
-<<<<<<< HEAD
-=======
     # Behavioral mode — agent heading angle criterion
     # ------------------------------------------------------------------
 
@@ -508,7 +493,6 @@ class BifurcationDetector:
         return None
 
     # ------------------------------------------------------------------
->>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
     # Analytical mode — gradient criterion (standard model, D-03)
     # ------------------------------------------------------------------
 
@@ -713,10 +697,7 @@ class BifurcationDetector:
         target_angles: list[float],
         target_ids: list[str],
         perception_vec=None,
-<<<<<<< HEAD
-=======
         agent_angle: Optional[float] = None,
->>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
     ) -> Optional[dict]:
         """Check for a bifurcation event at this tick.
 
@@ -749,12 +730,8 @@ class BifurcationDetector:
 
         # Dispatch to mode-specific detection
         if self.mode == "behavioral":
-<<<<<<< HEAD
-            return self._update_behavioral(tick, bump_angle, target_angles, target_ids)
-=======
             #return self._update_behavioral(tick, bump_angle, target_angles, target_ids)
             return self._update_behavioral_agent_angle(tick, agent_angle, target_angles, target_ids)
->>>>>>> 4e59663 (feat(03-01): propagate bifurcation events through agent snapshots (Path A D-06))
         elif self.mode == "analytical":
             if is_sfa:
                 if self.last_omega is None:
