@@ -29,7 +29,7 @@
         },
         "arenas": {
             "arena_0": {
-                "random_seed": 9991,
+                "random_seed": 81,
                 "radius": 1,
                 "_id": "square",
                 "color": "gray"
@@ -44,7 +44,7 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "green",
-                "strength": [5.0],
+                "strength": [0.01],
                 "uncertainty": [0]
             },
             "static_1": {
@@ -55,7 +55,7 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "blue",
-                "strength": [1.0],
+                "strength": [0.0101],
                 "uncertainty": [0]
             }    
         },
@@ -99,8 +99,8 @@
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 6.156868,
-                    "sigma": 1.5,
+                    "u": 6.2,
+                    "sigma": 0.001,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
@@ -110,8 +110,8 @@
                         "mode": "behavioral",
                         "lambda_threshold": -0.1,
                         "spike_min_separation": 10,
-                        "alignment_tolerance_deg": 5.0,
-                        "alignment_consecutive_ticks": 5,
+                        "alignment_tolerance_deg":5.0,
+                        "alignment_consecutive_ticks": 1,
                         "gradient_window": 5,
                         "gradient_threshold": 0.005
                     }
