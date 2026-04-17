@@ -36,26 +36,27 @@ Implementation note: Arena must track a `_post_bif_swap_triggered: bool` flag pe
 
 ---
 
-### D-02: What Gets Swapped — Positions, Quality (intensity), AND Labels
+### D-02: What Gets Swapped — XY Positions Only
 
-Both the XY position **and** the `intensity` value are swapped between the two named targets.
-Target labels (IDs) are ALSO swapped — coordinates, intensity, AND entity names exchange.
-This ensures agents tracking a target by label continue to follow the correct physical target
-after the swap.
+Only the XY positions of the two named targets are swapped. All other attributes (strength,
+uncertainty, color, name/ID) remain with their original entity objects.
+
+Rationale: swapping both position and strength together is a no-op from the agent's perspective
+— the spatial quality distribution is unchanged. Swapping positions only moves the strong target
+to a new location, creating a genuine perturbation that the agent's attractor must respond to.
+This mirrors the original `target_position_swaps` implementation (commit `0526bff`).
 
 ```
 Before swap:
-  target_A: pos=(10, 5),  intensity=2.0, name="target_A"
-  target_B: pos=(-10, 5), intensity=0.5, name="target_B"
+  target_A: pos=(10, 5),  strength=2.0
+  target_B: pos=(-10, 5), strength=0.5
 
 After swap:
-  entity at pos=(-10,5): intensity=0.5, name="target_A"
-  entity at pos=(10, 5): intensity=2.0, name="target_B"
+  target_A: pos=(-10, 5), strength=2.0   ← strong target has moved
+  target_B: pos=(10, 5),  strength=0.5
 ```
 
-The existing `_swap_object_xy_positions()` handles coordinates. The `strength` attribute
-is swapped inline. Name swap uses `Entity.set_name(uid)` which also updates
-`shape.metadata['entity_name']` for consistency with the collision/detection layer.
+Implementation: `_swap_object_xy_positions(left_obj, right_obj)` only.
 
 ---
 
