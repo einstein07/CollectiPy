@@ -382,6 +382,7 @@ class EntityManager:
                         self._clamp_to_arena(entity)
                 agents_data = {
                     "status": [t, ticks_per_second],
+                    "run_complete": True,
                     "agents_shapes": self.get_agent_shapes(),
                     "agents_spins": self.get_agent_spins(),
                 }
