@@ -1101,7 +1101,7 @@ class SolidArena(Arena):
                                 self._rescue_bif_events_from_snapshot(latest_agent_data[idx], _rescued_bif_events)
                                 latest_agent_data[idx] = candidate
                         for idx, snap in enumerate(latest_agent_data):
-                            ready[idx] = bool(snap and snap["status"][0]/snap["status"][1] >= t/self.ticks_per_second)
+                            ready[idx] = bool(snap and snap.get("run_complete") and snap["status"][0]/snap["status"][1] >= t/self.ticks_per_second)
                         detector_data = {
                             "objects": self.pack_detector_data()
                         }
