@@ -29,7 +29,7 @@
         },
         "arenas": {
             "arena_0": {
-                "random_seed": 81,
+                "random_seed": 24353453,
                 "radius": 1,
                 "_id": "square",
                 "color": "gray"
@@ -44,7 +44,7 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "green",
-                "strength": [0.01],
+                "strength": [5.0],
                 "uncertainty": [0]
             },
             "static_1": {
@@ -55,17 +55,14 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "blue",
-                "strength": [0.0101],
+                "strength": [5.0],
                 "uncertainty": [0]
             }    
         },
-        "post_bifurcation_swap": {
-            "pairs": [["static_0.s#0", "static_1.s#0"]],
-            "delay_ticks": 1
-        },
+        
         "agents": {
             "movable_0": {
-                "position": [[0.0,0.00,0]],
+                "position": [[0.316,0.00,0]],
                 "orientation": [[0, 0, 0]],
                 "number": [1],
                 "shape": "cylinder",
@@ -99,8 +96,8 @@
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 6.2,
-                    "sigma": 0.001,
+                    "u": 5,
+                    "sigma": 1.5,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
