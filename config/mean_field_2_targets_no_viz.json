@@ -88,7 +88,7 @@
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 8.0,
+                    "u": 6.156868,
                     "sigma": 1.5,
                     "beta": 1.0,
                     "integration_time": 50,
