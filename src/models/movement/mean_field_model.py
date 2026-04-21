@@ -248,6 +248,9 @@ class MeanFieldMovementModel(MovementModel):
                     target_ids=self.target_ids,
                     perception_vec=self.perception,
                     agent_angle=0.0,  # egocentric frame: agent heading is always 0
+                    agent_x=float(self.agent.position.x),
+                    agent_y=float(self.agent.position.y),
+                    agent_orientation=float(self.agent.orientation.z),
                 )
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(

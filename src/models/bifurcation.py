@@ -319,6 +319,9 @@ class BifurcationDetector:
                 "tick": int(t_peak),   # tick when peak occurred (one tick before detection)
                 "lambda1": float(round(v_peak, 6)),
                 "target": nearest_target,
+                "x": self._agent_x,
+                "y": self._agent_y,
+                "orientation": self._agent_orientation,
             }
             self.events.append(event)
             self._last_fire_tick = t_peak
@@ -400,6 +403,9 @@ class BifurcationDetector:
                 "metric": float(bump_angle),
                 "target": aligned_target_id,
                 "mode": "behavioral",
+                "x": self._agent_x,
+                "y": self._agent_y,
+                "orientation": self._agent_orientation,
             }
             self.events.append(event)
             self._last_fire_tick = tick
@@ -480,6 +486,9 @@ class BifurcationDetector:
                 "metric": float(agent_angle),
                 "target": aligned_target_id,
                 "mode": "behavioral_agent_angle",
+                "x": self._agent_x,
+                "y": self._agent_y,
+                "orientation": self._agent_orientation,
             }
             self.events.append(event)
             self._last_fire_tick = tick
@@ -556,6 +565,9 @@ class BifurcationDetector:
                 "metric": float(round(l_new, 6)),
                 "target": nearest_target,
                 "mode": "analytical",
+                "x": self._agent_x,
+                "y": self._agent_y,
+                "orientation": self._agent_orientation,
             }
             self.events.append(event)
             self._last_fire_tick = t_peak
@@ -630,6 +642,9 @@ class BifurcationDetector:
             "metric": float(round(o_prev, 6)),
             "target": nearest_target,
             "mode": "analytical",
+            "x": self._agent_x,
+            "y": self._agent_y,
+            "orientation": self._agent_orientation,
         }
         self.events.append(event)
         self._last_fire_tick = t_cross
@@ -698,6 +713,9 @@ class BifurcationDetector:
         target_ids: list[str],
         perception_vec=None,
         agent_angle: Optional[float] = None,
+        agent_x: Optional[float] = None,
+        agent_y: Optional[float] = None,
+        agent_orientation: Optional[float] = None,
     ) -> Optional[dict]:
         """Check for a bifurcation event at this tick.
 
@@ -718,6 +736,10 @@ class BifurcationDetector:
         Returns:
             Event dict if a bifurcation was detected, otherwise None.
         """
+        self._agent_x = agent_x
+        self._agent_y = agent_y
+        self._agent_orientation = agent_orientation
+
         # Always compute the analytical metric for pkl logging (D-05)
         is_sfa = mf.g_adapt > 0.0
         if is_sfa:
