@@ -472,6 +472,25 @@ class Arena():
                     if isinstance(sd, dict):
                         dest.extend(sd.get("new_bifurcation_events", []))
 
+    def _collect_bif_events_from_snapshots(self, agent_snapshots: list,
+                                             rescued_bif_events: list | None = None) -> None:
+        """Forward all bifurcation events from snapshots to DataHandling unconditionally."""
+        if self.data_handling is None:
+            return
+        all_bif_events = list(rescued_bif_events) if rescued_bif_events else []
+        for snap in agent_snapshots:
+            if not snap:
+                continue
+            for spin_list in snap.get("agents_spins", {}).values():
+                if isinstance(spin_list, list):
+                    for sd in spin_list:
+                        if isinstance(sd, dict):
+                            evts = sd.get("new_bifurcation_events", [])
+                            if evts:
+                                all_bif_events.extend(evts)
+        if all_bif_events:
+            self.data_handling.collect_bifurcation_events(all_bif_events)
+
     def _check_post_bif_swap(self, tick: int, agent_snapshots: list,
                               rescued_bif_events: list | None = None) -> None:
         """Check for first bifurcation event and schedule/execute post-bifurcation swap.
@@ -505,23 +524,6 @@ class Arena():
                     swap_tick, bif_event["tick"], self._post_bif_swap_cfg["delay_ticks"],
                     bif_event.get("agent", "unknown"),
                 )
-                # Forward all bifurcation events to DataHandling for events.json
-                if self.data_handling is not None:
-                    all_bif_events = list(rescued_bif_events) if rescued_bif_events else []
-                    for snap in agent_snapshots:
-                        if not snap:
-                            continue
-                        for _grp, spin_list in snap.get("agents_spins", {}).items():
-                            if not isinstance(spin_list, list):
-                                continue
-                            for spin_data in spin_list:
-                                if not isinstance(spin_data, dict):
-                                    continue
-                                evts = spin_data.get("new_bifurcation_events", [])
-                                if evts:
-                                    all_bif_events.extend(evts)
-                    if all_bif_events:
-                        self.data_handling.collect_bifurcation_events(all_bif_events)
         # Phase 2: If swap is scheduled and due, execute it
         if self._post_bif_swap_event is not None and tick >= self._post_bif_swap_event["tick"]:
             self._execute_post_bif_swap(tick)
@@ -1124,6 +1126,7 @@ class SolidArena(Arena):
                         self.agents_spins,
                         self.agents_metadata
                     )
+                    self._collect_bif_events_from_snapshots(latest_agent_data, rescued_bif_events=_rescued_bif_events)
                     self._check_post_bif_swap(t, latest_agent_data, rescued_bif_events=_rescued_bif_events)
                     if self.data_handling is not None:
                         tick_stamp = arena_data.get("status", [t, self.ticks_per_second])[0]
