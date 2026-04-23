@@ -721,6 +721,41 @@ class GUI_2D(QWidget):
                     continue
                 self._append_input_history_sample((group_key, idx), snapshot)
 
+    def _extract_bump_strength(self, spin: dict) -> float | None:
+        """Return the peak neural activation from the spin dict using the best available source."""
+        # Preferred: raw state vector — max(z) is the true bump peak
+        raw_state = spin.get("mean_field_state")
+        if raw_state is not None:
+            try:
+                arr = np.asarray(raw_state, dtype=float).ravel()
+                if arr.size > 0 and not np.all(np.isnan(arr)):
+                    return float(np.nanmax(arr))
+            except Exception:
+                pass
+        # Fallback 1: the pre-computed L2 norm stored as a plain float
+        norm = spin.get("mean_field_norm")
+        if norm is not None:
+            try:
+                return float(norm)
+            except Exception:
+                pass
+        # Fallback 2: normalised display states — compute the order parameter
+        # (vector strength in [0,1]) which at least varies with bump formation
+        states = spin.get("states")
+        angles_data = spin.get("angles")
+        if states is not None and angles_data is not None:
+            try:
+                arr = np.asarray(states, dtype=float).ravel()
+                angles_flat, num_groups, n_per = angles_data
+                angles = np.asarray(angles_flat, dtype=float)[::n_per]
+                group_z = arr.reshape(num_groups, n_per).mean(axis=1)
+                group_z = group_z * 2.0 - 1.0  # map [0,1] → [-1,1]
+                order = float(abs(np.mean(group_z * np.exp(1j * angles))))
+                return order
+            except Exception:
+                pass
+        return None
+
     def _update_bump_strength_histories(self) -> None:
         """Capture live max-neural-activation samples for all agents in the GUI snapshot."""
         if not self.agents_spins:
@@ -731,12 +766,11 @@ class GUI_2D(QWidget):
             for idx, spin in enumerate(spins):
                 if not isinstance(spin, dict):
                     continue
-                raw_state = spin.get("mean_field_state")
-                if raw_state is None:
+                max_activation = self._extract_bump_strength(spin)
+                if max_activation is None:
                     continue
                 try:
                     current_time = float(spin.get("mean_field_sensory_time", self.time))
-                    max_activation = float(np.asarray(raw_state, dtype=float).max())
                 except Exception:
                     continue
                 self._append_bump_strength_sample((group_key, idx), max(0.0, current_time), max_activation)
