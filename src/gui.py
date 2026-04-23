@@ -748,20 +748,19 @@ class GUI_2D(QWidget):
             return
         self.bump_ax.clear()
         times = list(history["times"])
-        self.bump_ax.plot(times, list(history["max_activation"]), color="#1f77b4", linewidth=2.0)
+        self.bump_ax.plot(times, list(history["max_activation"]), color="steelblue", linewidth=2.0)
         x_max = times[-1]
         x_min = max(0.0, x_max - self.input_history_seconds)
         if math.isclose(x_min, x_max, rel_tol=0.0, abs_tol=1e-9):
             x_min = min(times[0], x_max)
             x_max = x_min + 1e-6
         self.bump_ax.set_xlim(x_min, x_max)
-        self.bump_ax.set_ylim(0.0, 1.0)
         self.bump_ax.set_title("Bump Strength", fontsize=11)
         self.bump_ax.set_xlabel("Sensory time (s)")
         self.bump_ax.set_ylabel("Max activation")
         self.bump_ax.grid(True, alpha=0.25)
-        self.bump_ax.margins(x=0.02, y=0.05)
-        self.bump_ax.axhline(0.5, color="#444444", linewidth=0.8, alpha=0.4)
+        self.bump_ax.margins(x=0.02, y=0.1)
+        self.bump_ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.4)
 
     def _update_input_plot(self, spin) -> None:
         """Render the live mean-field target inputs for the currently selected agent."""
@@ -1669,7 +1668,12 @@ class GUI_2D(QWidget):
         self.ax.set_title(self.clicked_spin[0]+" "+str(self.clicked_spin[1]), fontsize=12, y=1.15)
         try:
             current_time = float(spin.get("mean_field_sensory_time", self.time)) if isinstance(spin, dict) else float(self.time)
-            self._append_bump_strength_sample(self.clicked_spin, max(0.0, current_time), float(group_mean_spins.max()))
+            raw_state = spin.get("mean_field_state") if isinstance(spin, dict) else None
+            if raw_state is not None:
+                max_activation = float(np.asarray(raw_state, dtype=float).max())
+            else:
+                max_activation = float(group_mean_spins.max())
+            self._append_bump_strength_sample(self.clicked_spin, max(0.0, current_time), max_activation)
         except Exception:
             pass
         self._update_input_plot(spin)
