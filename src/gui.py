@@ -201,8 +201,10 @@ class GUI_2D(QWidget):
         self.input_plot_show_base = bool(inputs_plot_cfg.get("show_base", True))
         self.input_plot_show_modulated = bool(inputs_plot_cfg.get("show_modulated", True))
         self.input_ax = None
+        self.bump_ax = None
         self._input_panel_visible = False
         self._input_histories = {}
+        self._bump_strength_history = {}
         self.spin_window = None
         self.spin_panel_visible = False
         self.abstract_dot_items = []
@@ -213,8 +215,9 @@ class GUI_2D(QWidget):
         self.abstract_dot_default_color = markers_cfg.get("default_color", "black")
         if self.show_spins_enabled:
             self.figure = plt.figure(figsize=(5.2, 6.4))
-            self.ax = self.figure.add_subplot(211, projection="polar")
-            self.input_ax = self.figure.add_subplot(212)
+            self.ax = self.figure.add_subplot(311, projection="polar")
+            self.input_ax = self.figure.add_subplot(312)
+            self.bump_ax = self.figure.add_subplot(313)
             self.canvas = FigureCanvas(self.figure)
             self.canvas.setMinimumSize(420, 560)
             self.spin_window = DetachedPanelWindow("Activity Inspector", close_callback=self._on_spin_window_closed)
@@ -570,13 +573,19 @@ class GUI_2D(QWidget):
             return
         self._input_panel_visible = bool(visible)
         if self._input_panel_visible:
-            self.ax.set_position([0.12, 0.56, 0.76, 0.31])
-            self.input_ax.set_position([0.12, 0.10, 0.82, 0.30])
+            self.ax.set_position([0.12, 0.60, 0.76, 0.30])
+            self.input_ax.set_position([0.12, 0.34, 0.82, 0.20])
             self.input_ax.set_visible(True)
+            if self.bump_ax is not None:
+                self.bump_ax.set_position([0.12, 0.08, 0.82, 0.20])
+                self.bump_ax.set_visible(True)
             return
         self.ax.set_position([0.12, 0.12, 0.76, 0.72])
         self.input_ax.clear()
         self.input_ax.set_visible(False)
+        if self.bump_ax is not None:
+            self.bump_ax.clear()
+            self.bump_ax.set_visible(False)
 
     def _update_spin_window_title(self, spin) -> None:
         """Reflect the active model in the detached inspector title."""
@@ -590,6 +599,7 @@ class GUI_2D(QWidget):
     def _reset_input_histories(self) -> None:
         """Forget all live mean-field input traces."""
         self._input_histories = {}
+        self._bump_strength_history = {}
 
     def _extract_mean_field_input_snapshot(self, spin):
         """Return normalized mean-field target signals from the latest agent payload."""
@@ -710,6 +720,48 @@ class GUI_2D(QWidget):
                 if snapshot is None:
                     continue
                 self._append_input_history_sample((group_key, idx), snapshot)
+
+    def _append_bump_strength_sample(self, agent_key, current_time: float, max_activation: float) -> None:
+        """Append one max-activation sample for the bump strength time series."""
+        history = self._bump_strength_history.get(agent_key)
+        if history is None or (
+            history.get("last_time") is not None and current_time < float(history["last_time"])
+        ):
+            history = {"times": deque(), "max_activation": deque(), "last_time": None}
+            self._bump_strength_history[agent_key] = history
+        last_time = history.get("last_time")
+        if last_time is not None and math.isclose(current_time, float(last_time), rel_tol=0.0, abs_tol=1e-9):
+            return
+        history["times"].append(current_time)
+        history["max_activation"].append(max_activation)
+        history["last_time"] = current_time
+        while history["times"] and current_time - history["times"][0] > self.input_history_seconds:
+            history["times"].popleft()
+            history["max_activation"].popleft()
+
+    def _update_bump_strength_plot(self) -> None:
+        """Render the max neural activation over time for the currently selected agent."""
+        if not self.show_spins_enabled or self.bump_ax is None:
+            return
+        history = self._bump_strength_history.get(self.clicked_spin) if self.clicked_spin else None
+        if history is None or not history.get("times"):
+            return
+        self.bump_ax.clear()
+        times = list(history["times"])
+        self.bump_ax.plot(times, list(history["max_activation"]), color="#1f77b4", linewidth=2.0)
+        x_max = times[-1]
+        x_min = max(0.0, x_max - self.input_history_seconds)
+        if math.isclose(x_min, x_max, rel_tol=0.0, abs_tol=1e-9):
+            x_min = min(times[0], x_max)
+            x_max = x_min + 1e-6
+        self.bump_ax.set_xlim(x_min, x_max)
+        self.bump_ax.set_ylim(0.0, 1.0)
+        self.bump_ax.set_title("Bump Strength", fontsize=11)
+        self.bump_ax.set_xlabel("Sensory time (s)")
+        self.bump_ax.set_ylabel("Max activation")
+        self.bump_ax.grid(True, alpha=0.25)
+        self.bump_ax.margins(x=0.02, y=0.05)
+        self.bump_ax.axhline(0.5, color="#444444", linewidth=0.8, alpha=0.4)
 
     def _update_input_plot(self, spin) -> None:
         """Render the live mean-field target inputs for the currently selected agent."""
@@ -1616,7 +1668,13 @@ class GUI_2D(QWidget):
             self.arrow.remove()
             self.arrow = None
         self.ax.set_title(self.clicked_spin[0]+" "+str(self.clicked_spin[1]), fontsize=12, y=1.15)
+        try:
+            current_time = float(spin.get("mean_field_sensory_time", self.time)) if isinstance(spin, dict) else float(self.time)
+            self._append_bump_strength_sample(self.clicked_spin, max(0.0, current_time), float(group_mean_spins.max()))
+        except Exception:
+            pass
         self._update_input_plot(spin)
+        self._update_bump_strength_plot()
         self.canvas.draw_idle()
 
     def update_data(self):
