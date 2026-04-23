@@ -721,6 +721,26 @@ class GUI_2D(QWidget):
                     continue
                 self._append_input_history_sample((group_key, idx), snapshot)
 
+    def _update_bump_strength_histories(self) -> None:
+        """Capture live max-neural-activation samples for all agents in the GUI snapshot."""
+        if not self.agents_spins:
+            return
+        for group_key, spins in self.agents_spins.items():
+            if not isinstance(spins, list):
+                continue
+            for idx, spin in enumerate(spins):
+                if not isinstance(spin, dict):
+                    continue
+                raw_state = spin.get("mean_field_state")
+                if raw_state is None:
+                    continue
+                try:
+                    current_time = float(spin.get("mean_field_sensory_time", self.time))
+                    max_activation = float(np.asarray(raw_state, dtype=float).max())
+                except Exception:
+                    continue
+                self._append_bump_strength_sample((group_key, idx), max(0.0, current_time), max_activation)
+
     def _append_bump_strength_sample(self, agent_key, current_time: float, max_activation: float) -> None:
         """Append one max-activation sample for the bump strength time series."""
         history = self._bump_strength_history.get(agent_key)
@@ -1666,16 +1686,6 @@ class GUI_2D(QWidget):
             self.arrow.remove()
             self.arrow = None
         self.ax.set_title(self.clicked_spin[0]+" "+str(self.clicked_spin[1]), fontsize=12, y=1.15)
-        try:
-            current_time = float(spin.get("mean_field_sensory_time", self.time)) if isinstance(spin, dict) else float(self.time)
-            raw_state = spin.get("mean_field_state") if isinstance(spin, dict) else None
-            if raw_state is not None:
-                max_activation = float(np.asarray(raw_state, dtype=float).max())
-            else:
-                max_activation = float(group_mean_spins.max())
-            self._append_bump_strength_sample(self.clicked_spin, max(0.0, current_time), max_activation)
-        except Exception:
-            pass
         self._update_input_plot(spin)
         self._update_bump_strength_plot()
         self.canvas.draw_idle()
@@ -1693,6 +1703,7 @@ class GUI_2D(QWidget):
                 self.agents_shapes = data["agents_shapes"]
                 self.agents_spins = data["agents_spins"]
                 self._update_input_histories()
+                self._update_bump_strength_histories()
                 self._refresh_agent_centers()
                 if self.connection_features_enabled:
                     self.agents_metadata = data.get("agents_metadata", {})
