@@ -574,7 +574,7 @@ class GUI_2D(QWidget):
         self._input_panel_visible = bool(visible)
         if self._input_panel_visible:
             self.ax.set_position([0.12, 0.60, 0.76, 0.30])
-            self.input_ax.set_position([0.12, 0.34, 0.82, 0.20])
+            self.input_ax.set_position([0.12, 0.37, 0.82, 0.18])
             self.input_ax.set_visible(True)
             if self.bump_ax is not None:
                 self.bump_ax.set_position([0.12, 0.08, 0.82, 0.20])
@@ -810,7 +810,6 @@ class GUI_2D(QWidget):
             x_max = x_min + 1e-6
         self.input_ax.set_xlim(x_min, x_max)
         self.input_ax.set_title("Target Inputs", fontsize=11)
-        self.input_ax.set_xlabel("Sensory time (s)")
         self.input_ax.set_ylabel("Quality")
         self.input_ax.grid(True, alpha=0.25)
         self.input_ax.margins(x=0.02, y=0.15)
