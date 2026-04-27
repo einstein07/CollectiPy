@@ -1189,14 +1189,14 @@ class StaticAgent(Agent):
         if temp_position != None:
             self.position_from_dict = True
             try:
-                self.start_position = Vector3D(temp_position[0],temp_position[1],temp_position[2])
+                self.start_position = Vector3D(temp_position[_id][0],temp_position[_id][1],temp_position[_id][2])
             except:
                 self.start_position = Vector3D(temp_position[-1][0],temp_position[-1][1],temp_position[-1][2])
         temp_orientation = config_elem.get("orientation", None)
         if temp_orientation != None:
             self.orientation_from_dict = True
             try:
-                self.start_orientation = Vector3D(temp_orientation[0],temp_orientation[1],temp_orientation[2])
+                self.start_orientation = Vector3D(temp_orientation[_id][0],temp_orientation[_id][1],temp_orientation[_id][2])
             except:
                 self.start_orientation = Vector3D(temp_orientation[-1][0],temp_orientation[-1][1],temp_orientation[-1][2])
             self.orientation = self.start_orientation
