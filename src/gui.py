@@ -12,6 +12,7 @@ from collections import deque
 import logging, math, time
 from typing import Any, Optional, cast
 import matplotlib.pyplot as plt
+import numpy as np
 from geometry_utils.vector3D import Vector3D
 from config import Config
 from matplotlib import cm
@@ -203,6 +204,7 @@ class GUI_2D(QWidget):
         self.input_ax = None
         self.bump_ax = None
         self._input_panel_visible = False
+        self._bump_panel_visible = False
         self._input_histories = {}
         self._bump_strength_history = {}
         self.spin_window = None
@@ -567,17 +569,34 @@ class GUI_2D(QWidget):
         self.spin_panel_visible = False
         self._update_side_container_visibility()
 
-    def _set_input_panel_visible(self, visible: bool):
-        """Resize the detached inspector depending on whether the input chart is needed."""
+    def _update_inspector_panel_layout(self) -> None:
+        """Resize the detached inspector according to the active auxiliary plots."""
         if not self.show_spins_enabled or self.ax is None or self.input_ax is None:
             return
-        self._input_panel_visible = bool(visible)
-        if self._input_panel_visible:
-            self.ax.set_position([0.12, 0.60, 0.76, 0.30])
-            self.input_ax.set_position([0.12, 0.37, 0.82, 0.18])
+        show_input = self._input_panel_visible
+        show_bump = self._bump_panel_visible and self.bump_ax is not None
+        if show_input and show_bump:
+            self.ax.set_position([0.12, 0.61, 0.76, 0.29])
+            self.input_ax.set_position([0.16, 0.34, 0.78, 0.18])
             self.input_ax.set_visible(True)
             if self.bump_ax is not None:
-                self.bump_ax.set_position([0.12, 0.08, 0.82, 0.20])
+                self.bump_ax.set_position([0.16, 0.07, 0.78, 0.20])
+                self.bump_ax.set_visible(True)
+            return
+        if show_input:
+            self.ax.set_position([0.12, 0.56, 0.76, 0.34])
+            self.input_ax.set_position([0.16, 0.12, 0.78, 0.28])
+            self.input_ax.set_visible(True)
+            if self.bump_ax is not None:
+                self.bump_ax.clear()
+                self.bump_ax.set_visible(False)
+            return
+        if show_bump:
+            self.ax.set_position([0.12, 0.56, 0.76, 0.34])
+            self.input_ax.clear()
+            self.input_ax.set_visible(False)
+            if self.bump_ax is not None:
+                self.bump_ax.set_position([0.16, 0.12, 0.78, 0.28])
                 self.bump_ax.set_visible(True)
             return
         self.ax.set_position([0.12, 0.12, 0.76, 0.72])
@@ -586,6 +605,16 @@ class GUI_2D(QWidget):
         if self.bump_ax is not None:
             self.bump_ax.clear()
             self.bump_ax.set_visible(False)
+
+    def _set_input_panel_visible(self, visible: bool):
+        """Show or hide the live target-input chart."""
+        self._input_panel_visible = bool(visible)
+        self._update_inspector_panel_layout()
+
+    def _set_bump_panel_visible(self, visible: bool):
+        """Show or hide the max-activation history chart."""
+        self._bump_panel_visible = bool(visible)
+        self._update_inspector_panel_layout()
 
     def _update_spin_window_title(self, spin) -> None:
         """Reflect the active model in the detached inspector title."""
@@ -597,7 +626,7 @@ class GUI_2D(QWidget):
         self.spin_window.setWindowTitle(title)
 
     def _reset_input_histories(self) -> None:
-        """Forget all live mean-field input traces."""
+        """Forget all live mean-field history traces."""
         self._input_histories = {}
         self._bump_strength_history = {}
 
@@ -651,12 +680,8 @@ class GUI_2D(QWidget):
             )
         if not normalized_targets:
             return None
-        try:
-            current_time = float(spin.get("mean_field_sensory_time", self.time))
-        except (TypeError, ValueError):
-            current_time = float(self.time)
         return {
-            "time": max(0.0, current_time),
+            "time": float(self.time),
             "targets": normalized_targets,
         }
 
@@ -722,39 +747,20 @@ class GUI_2D(QWidget):
                 self._append_input_history_sample((group_key, idx), snapshot)
 
     def _extract_bump_strength(self, spin: dict) -> float | None:
-        """Return the peak neural activation from the spin dict using the best available source."""
-        # Preferred: raw state vector — max(z) is the true bump peak
+        """Return the peak neural activation from the raw mean-field state."""
         raw_state = spin.get("mean_field_state")
-        if raw_state is not None:
-            try:
-                arr = np.asarray(raw_state, dtype=float).ravel()
-                if arr.size > 0 and not np.all(np.isnan(arr)):
-                    return float(np.nanmax(arr))
-            except Exception:
-                pass
-        # Fallback 1: the pre-computed L2 norm stored as a plain float
-        norm = spin.get("mean_field_norm")
-        if norm is not None:
-            try:
-                return float(norm)
-            except Exception:
-                pass
-        # Fallback 2: normalised display states — compute the order parameter
-        # (vector strength in [0,1]) which at least varies with bump formation
-        states = spin.get("states")
-        angles_data = spin.get("angles")
-        if states is not None and angles_data is not None:
-            try:
-                arr = np.asarray(states, dtype=float).ravel()
-                angles_flat, num_groups, n_per = angles_data
-                angles = np.asarray(angles_flat, dtype=float)[::n_per]
-                group_z = arr.reshape(num_groups, n_per).mean(axis=1)
-                group_z = group_z * 2.0 - 1.0  # map [0,1] → [-1,1]
-                order = float(abs(np.mean(group_z * np.exp(1j * angles))))
-                return order
-            except Exception:
-                pass
-        return None
+        if raw_state is None:
+            return None
+        try:
+            arr = np.asarray(raw_state, dtype=float).reshape(-1)
+        except Exception:
+            return None
+        if arr.size == 0:
+            return None
+        finite_values = arr[np.isfinite(arr)]
+        if finite_values.size == 0:
+            return None
+        return float(finite_values.max())
 
     def _update_bump_strength_histories(self) -> None:
         """Capture live max-neural-activation samples for all agents in the GUI snapshot."""
@@ -769,11 +775,7 @@ class GUI_2D(QWidget):
                 max_activation = self._extract_bump_strength(spin)
                 if max_activation is None:
                     continue
-                try:
-                    current_time = float(spin.get("mean_field_sensory_time", self.time))
-                except Exception:
-                    continue
-                self._append_bump_strength_sample((group_key, idx), max(0.0, current_time), max_activation)
+                self._append_bump_strength_sample((group_key, idx), float(self.time), max_activation)
 
     def _append_bump_strength_sample(self, agent_key, current_time: float, max_activation: float) -> None:
         """Append one max-activation sample for the bump strength time series."""
@@ -799,7 +801,9 @@ class GUI_2D(QWidget):
             return
         history = self._bump_strength_history.get(self.clicked_spin) if self.clicked_spin else None
         if history is None or not history.get("times"):
+            self._set_bump_panel_visible(False)
             return
+        self._set_bump_panel_visible(True)
         self.bump_ax.clear()
         times = list(history["times"])
         self.bump_ax.plot(times, list(history["max_activation"]), color="steelblue", linewidth=2.0)
@@ -809,8 +813,8 @@ class GUI_2D(QWidget):
             x_min = min(times[0], x_max)
             x_max = x_min + 1e-6
         self.bump_ax.set_xlim(x_min, x_max)
-        self.bump_ax.set_title("Bump Strength", fontsize=11)
-        self.bump_ax.set_xlabel("Sensory time (s)")
+        self.bump_ax.set_title("Max Neural Activation", fontsize=11)
+        self.bump_ax.set_xlabel("Simulation tick")
         self.bump_ax.set_ylabel("Max activation")
         self.bump_ax.grid(True, alpha=0.25)
         self.bump_ax.margins(x=0.02, y=0.1)
@@ -862,7 +866,7 @@ class GUI_2D(QWidget):
             x_min = min(times[0], x_max)
             x_max = x_min + 1e-6
         self.input_ax.set_xlim(x_min, x_max)
-        self.input_ax.set_title("Target Inputs", fontsize=11)
+        self.input_ax.set_title("Target Inputs", fontsize=11, pad=2)
         self.input_ax.set_ylabel("Quality")
         self.input_ax.grid(True, alpha=0.25)
         self.input_ax.margins(x=0.02, y=0.15)
@@ -1767,6 +1771,7 @@ class GUI_2D(QWidget):
             self._view_initialized = False
             self._reset_input_histories()
             self._set_input_panel_visible(False)
+            self._set_bump_panel_visible(False)
             self._update_spin_window_title(None)
             self._clear_connection_caches()
             self._update_graph_views()
