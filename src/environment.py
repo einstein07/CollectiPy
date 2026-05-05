@@ -273,7 +273,7 @@ class Environment():
                 if proc and proc.pid is not None:
                     proc.join(timeout=timeout)
 
-            dec_arena_in = _PipeQueue(ctx)
+            dec_arena_in = None if self.collisions else _PipeQueue(ctx)
             gui_in_queue = _PipeQueue(ctx)
             gui_control_queue = _PipeQueue(ctx)
             arena = self.arena_init(exp)
