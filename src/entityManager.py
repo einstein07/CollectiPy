@@ -398,7 +398,7 @@ class EntityManager:
                     break
                 dec_data_in = {}
                 if self.collisions and self._detector and t % self.snapshot_stride == 0:
-                    dec_data_in = self._detector.compute_corrections(detector_data["agents"], data_in.get("objects"))
+                    dec_data_in = self._detector.compute_corrections(detector_data["agents"], None)
                 elif dec_agents_in is not None and dec_agents_out is not None and t % self.snapshot_stride == 0:
                     dec_agents_in.put(detector_data)
                     dec_data_in = self._maybe_get(dec_agents_out, timeout=0.05) or {}
@@ -644,6 +644,7 @@ class EntityManager:
                     shape.metadata["hierarchy_node"] = getattr(entity, "hierarchy_node", None)
                     shape.metadata["linear_velocity_cmd"] = float(getattr(entity, "linear_velocity_cmd", 0.0))
                     shape.metadata["angular_velocity_cmd"] = float(getattr(entity, "angular_velocity_cmd", 0.0))
+                    shape.metadata["orientation_z"] = float(entity.orientation.z) if hasattr(entity, "orientation") else 0.0
                 group_shapes.append(shape)
             shapes[group_key] = group_shapes
         return shapes
