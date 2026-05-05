@@ -1414,8 +1414,8 @@ class MovableAgent(StaticAgent):
 
     def post_step(self,position_correction:Vector3D):
         """Post step."""
-        if position_correction != None:
-            self.position = position_correction
+        if position_correction is not None:
+            self.position = self.position + position_correction
             self.shape.translate(self.position)
             self.shape.translate_attachments(self.orientation.z)
             if logger.isEnabledFor(logging.DEBUG):
