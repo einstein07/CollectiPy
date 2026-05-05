@@ -81,7 +81,8 @@ class CollisionDetector:
                 try:
                     payload = dec_arena_in.get()
                     if payload:
-                        self.objects = payload["objects"]
+                        raw = payload["objects"]
+                        self.objects = {k: (v[0], v[1]) for k, v in raw.items()}
                         idle = False
                         logger.debug("Objects updated (%d groups)", len(self.objects))
                 except EOFError:
@@ -170,7 +171,8 @@ class CollisionDetector:
         EntityManager.pack_detector_data(): {club: (shapes, velocities, vectors, positions, names)}.
         """
         self.agents = agents_payload or {}
-        self.objects = objects_payload or {}
+        raw_objects = objects_payload or {}
+        self.objects = {k: (v[0], v[1]) for k, v in raw_objects.items()}
         out: Dict[str, List[Optional[Vector3D]]] = {}
         for club, (shapes, velocities, vectors, positions, names) in self.agents.items():
             n_shapes = len(shapes)
@@ -214,7 +216,6 @@ class CollisionDetector:
                     correction = Vector3D()
                     for resp in responses:
                         correction += resp
-                    correction = correction / len(responses)
                     out_tmp[idx] = correction
             out[club] = out_tmp
         return out
@@ -231,6 +232,7 @@ class CollisionDetector:
     ) -> List[Vector3D]:
         """Resolve the agent collisions."""
         responses: List[Vector3D] = []
+        max_velocity = forward_vector.magnitude() if forward_vector.magnitude() > 0 else 0.01
         for other_shapes, _, other_vectors, other_positions, other_names in self.agents.values():
             for idx, other_shape in enumerate(other_shapes):
                 other_name = other_names[idx]
@@ -249,10 +251,17 @@ class CollisionDetector:
                 if not overlap[0]:
                     continue
                 normal = delta.normalize()
-                penetration_depth = sum_radius - actual_distance + 1e-3
-                response = normal * penetration_depth
+                penetration_depth = sum_radius - actual_distance
+                other_vector = other_vectors[idx]
+                relative_velocity = forward_vector - other_vector
+                approach_speed = max(0.0, -relative_velocity.dot(normal))
+                # Cap push to the agent's own speed so the correction never
+                # moves the agent further in one tick than normal locomotion
+                # would, which is what causes the visible "jump".
+                push = min(penetration_depth + approach_speed, max_velocity)
+                response = normal * push
                 responses.append(response)
-                logger.info("Collision agent-agent: %s <-> %s depth=%.4f", name, other_name, penetration_depth)
+                logger.debug("Collision agent-agent: %s <-> %s depth=%.4f", name, other_name, push)
         return responses
 
     def _resolve_object_collisions(
@@ -279,10 +288,12 @@ class CollisionDetector:
                 if not overlap[0]:
                     continue
                 normal = delta.normalize()
-                penetration_depth = sum_radius - actual_distance + 1e-3
+                penetration_depth = sum_radius - actual_distance
+                approach_speed = max(0.0, -forward_vector.dot(normal))
+                penetration_depth = penetration_depth * 2.0 + approach_speed
                 response = normal * penetration_depth
                 responses.append(response)
-                logger.info("Collision agent-object: %s -> %s depth=%.4f", name, obj_id, penetration_depth)
+                logger.debug("Collision agent-object: %s -> %s depth=%.4f", name, obj_id, penetration_depth)
         return responses
 
     def _resolve_arena_collision(
@@ -315,7 +326,7 @@ class CollisionDetector:
         if push.x == 0 and push.y == 0:
             return None
 
-        logger.info("Collision arena-boundary for shape id=%s", shape._id)
+        logger.debug("Collision arena-boundary for shape id=%s", shape._id)
         return push
 
     def _compute_bounce_response(
