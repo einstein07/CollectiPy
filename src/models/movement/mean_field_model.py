@@ -62,6 +62,7 @@ class MeanFieldMovementModel(MovementModel):
             self.params.get("target_quality_modulations")
         )
         self.guard_decay_rate = float(self.params.get("guard_decay_rate", self.params.get("spatial_decay", 2.0)))
+        self.alpha = float(self.params.get("alpha", 0.0))
         self.perception = None
         self._active_perception_channel = "objects"
         self._mf_entities = {"targets": [], "guards": []}
@@ -200,6 +201,20 @@ class MeanFieldMovementModel(MovementModel):
                 self._last_norm = 0.0
                 return
             target_ids, targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
+            if self.alpha > 0.0 and qualities.size > 0:
+                neighbor_ids, neighbor_angles, n_neighbors = self._collect_neighbor_targets(agents)
+                if n_neighbors > 0:
+                    neighbor_strength = (float(np.mean(qualities)) * self.alpha) / n_neighbors
+                    target_ids = target_ids + neighbor_ids
+                    targets = np.concatenate([targets, neighbor_angles])
+                    qualities = np.concatenate([qualities, np.full(n_neighbors, neighbor_strength)])
+                    for nid, nangle in zip(neighbor_ids, neighbor_angles):
+                        self._mf_entities["targets"].append({
+                            "id": nid,
+                            "angle": float(nangle),
+                            "distance": 0.0,
+                            "intensity": neighbor_strength,
+                        })
             self.mean_field_system.num_targets = len(targets)
             self.mean_field_system.num_guards = len(guard_angles) if guard_angles is not None else 0
             neural_field = None
@@ -382,6 +397,30 @@ class MeanFieldMovementModel(MovementModel):
                 "psi": float(params.get("psi", 0.0)),
             }
         return normalized
+
+    def _collect_neighbor_targets(
+        self, agents: dict
+    ) -> Tuple[list[str], np.ndarray, int]:
+        """Return spatial angles and count of all neighbor agents (no range filter)."""
+        neighbor_ids: list[str] = []
+        neighbor_angles: list[float] = []
+        my_name = self.agent.get_name()
+        for club, agent_shapes in agents.items():
+            for n, shape in enumerate(agent_shapes):
+                meta = getattr(shape, "metadata", {}) if hasattr(shape, "metadata") else {}
+                entity_name = meta.get("entity_name") or f"{club}_{n}"
+                if entity_name == my_name:
+                    continue
+                pos = shape.center_of_mass()
+                dx = pos.x - self.agent.position.x
+                dy = pos.y - self.agent.position.y
+                angle_deg = math.degrees(math.atan2(-dy, dx))
+                if self.reference == "egocentric":
+                    angle_deg -= self.agent.orientation.z
+                angle_rad = math.radians(normalize_angle(angle_deg))
+                neighbor_ids.append(entity_name)
+                neighbor_angles.append(angle_rad)
+        return neighbor_ids, np.array(neighbor_angles, dtype=float), len(neighbor_ids)
 
     def _convert_perception_to_targets(
         self,
