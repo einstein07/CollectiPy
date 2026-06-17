@@ -16,6 +16,9 @@ import numpy as np
 from geometry_utils.vector3D import Vector3D
 from config import Config
 from matplotlib import cm
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
+from matplotlib.gridspec import GridSpec
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QGraphicsView, QGraphicsScene, QPushButton, QHBoxLayout, QSizePolicy, QComboBox, QToolButton, QFrame
 from PySide6.QtCore import QTimer, Qt, QPointF, QEvent, QRectF, Signal
@@ -189,6 +192,17 @@ class GUI_2D(QWidget):
         self.clicked_spin = None
         self.spins_bars = None
         self.perception_bars = None
+        self.tanh_bars = None
+        self.b_bars = None
+        self.state_cbar = None
+        self.perception_cbar = None
+        self.tanh_cbar = None
+        self.b_cbar = None
+        self._tanh_norm = None
+        self._b_norm = None
+        self._b_vmax = None
+        self._perc_norm = None
+        self._perc_vmax = None
         self.arrow = None
         self.angle_labels = []
         inputs_plot_cfg = config_elem.get("inputs_plot", {})
@@ -216,12 +230,23 @@ class GUI_2D(QWidget):
         self.abstract_dot_margin = max(0, int(markers_cfg.get("margin", 10)))
         self.abstract_dot_default_color = markers_cfg.get("default_color", "black")
         if self.show_spins_enabled:
-            self.figure = plt.figure(figsize=(5.2, 6.4))
-            self.ax = self.figure.add_subplot(311, projection="polar")
-            self.input_ax = self.figure.add_subplot(312)
-            self.bump_ax = self.figure.add_subplot(313)
+            self.figure = plt.figure(figsize=(5.2, 8))
+            gs = GridSpec(4, 2, figure=self.figure,
+                          height_ratios=[3, 0.1, 0.1, 2],
+                          width_ratios=[1, 1],
+                          top=0.95, bottom=0.06, hspace=0.5, wspace=0.5)
+            self.ax             = self.figure.add_subplot(gs[0, :], projection="polar")
+            self.cax_state      = self.figure.add_subplot(gs[1, 0])
+            self.cax_perception = self.figure.add_subplot(gs[1, 1])
+            self.cax_tanh       = self.figure.add_subplot(gs[2, 0])
+            self.cax_b_ax       = self.figure.add_subplot(gs[2, 1])
+            self.input_ax       = None
+            self.bump_ax        = self.figure.add_subplot(gs[3, :])
+            for _cax in (self.cax_state, self.cax_perception,
+                         self.cax_tanh, self.cax_b_ax):
+                _cax.set_visible(False)
             self.canvas = FigureCanvas(self.figure)
-            self.canvas.setMinimumSize(420, 560)
+            self.canvas.setMinimumSize(420, 820)
             self.spin_window = DetachedPanelWindow("Activity Inspector", close_callback=self._on_spin_window_closed)
             self.spin_window.setFocusPolicy(Qt.NoFocus)
             self.spin_window.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
@@ -1682,16 +1707,59 @@ class GUI_2D(QWidget):
             self._clear_selection(update_view=False)
             return
         self._show_spin_canvas()
+
+        # --- Band 1 & 2: neural state and detection perception ---
         cmap = cm.get_cmap("coolwarm")
+        cmap_seq = cmap
         group_mean_spins = display_states.mean(axis=1)
         colors_spins = cmap(group_mean_spins)
-        group_mean_perception = display_field.reshape(display_angles[1], display_angles[2]).mean(axis=1)
-        normalized_perception = (group_mean_perception + 1) * 0.5
-        colors_perception = cmap(normalized_perception)
+        num_groups = display_angles[1]
+        group_mean_perception = display_field.reshape(num_groups, display_angles[2]).mean(axis=1)
+        perc_clipped = np.clip(group_mean_perception, 0.0, None)
+        if self._perc_vmax is None:
+            self._perc_vmax = max(float(perc_clipped.max()), 1e-9)
+            self._perc_norm = Normalize(vmin=0.0, vmax=self._perc_vmax)
+        colors_perception = cmap_seq(self._perc_norm(perc_clipped))
         angles = display_angles[0][::display_angles[2]]
-        width = 2 * math.pi / display_angles[1]
-        if self.spins_bars is None or self.perception_bars is None:
+        width = 2 * math.pi / num_groups
+
+        # --- Band 3 & 4: tanh(b-β)-tanh(-β) and raw b ---
+        b_raw = None
+        beta = 1.0
+        if isinstance(spin, dict):
+            b_data = spin.get("mean_field_sensory_map")
+            beta = float(spin.get("mean_field_beta", 1.0))
+            if b_data is not None:
+                b_arr = np.asarray(b_data, dtype=float).reshape(-1)
+                if b_arr.size == num_groups:
+                    b_raw = b_arr
+
+        tanh_per_group = None
+        b_per_group = None
+        colors_tanh = None
+        colors_b = None
+        if b_raw is not None:
+            b_phys = b_raw * math.sqrt(num_groups)
+            tanh_per_group = np.tanh(b_phys - beta) - np.tanh(-beta)
+            b_per_group = b_phys
+            tanh_vmax = max(float(1.0 - np.tanh(-beta)), 1e-9)
+            if self._tanh_norm is None:
+                self._tanh_norm = Normalize(vmin=0.0, vmax=tanh_vmax)
+            if self._b_vmax is None:
+                self._b_vmax = max(float(b_phys.max()), 1e-9)
+                self._b_norm = Normalize(vmin=0.0, vmax=self._b_vmax)
+            colors_tanh = cmap_seq(self._tanh_norm(tanh_per_group))
+            colors_b = cmap_seq(self._b_norm(b_per_group))
+
+        # --- Initialization (first call, or new bands just became available) ---
+        need_init = (
+            self.spins_bars is None
+            or self.perception_bars is None
+            or (colors_tanh is not None and self.tanh_bars is None)
+        )
+        if need_init:
             self.ax.clear()
+            self.arrow = None
             self.spins_bars = self.ax.bar(
                 angles, 0.75, width=width, bottom=0.75,
                 color=colors_spins, edgecolor="black", alpha=0.9
@@ -1700,10 +1768,67 @@ class GUI_2D(QWidget):
                 angles, 0.5, width=width, bottom=1.6,
                 color=colors_perception, edgecolor="black", alpha=0.9
             )
+            # Colorbars for bands 1 and 2 — always present, fixed coolwarm scale
+            if self.state_cbar is not None:
+                self.state_cbar.remove()
+                self.state_cbar = None
+            if self.perception_cbar is not None:
+                self.perception_cbar.remove()
+                self.perception_cbar = None
+            norm_coolwarm = Normalize(vmin=-1, vmax=1)
+            self.cax_state.set_visible(True)
+            self.cax_state.cla()
+            sm_state = ScalarMappable(cmap=cmap, norm=norm_coolwarm)
+            sm_state.set_array([])
+            self.state_cbar = self.figure.colorbar(
+                sm_state, cax=self.cax_state, orientation="horizontal",
+                label="z (neural state)"
+            )
+            self.cax_perception.set_visible(True)
+            self.cax_perception.cla()
+            sm_perc = ScalarMappable(cmap=cmap_seq, norm=self._perc_norm)
+            sm_perc.set_array([])
+            self.perception_cbar = self.figure.colorbar(
+                sm_perc, cax=self.cax_perception, orientation="horizontal",
+                label="detection perception"
+            )
+            label_r = 2.8
+            if colors_tanh is not None:
+                self.tanh_bars = self.ax.bar(
+                    angles, 0.5, width=width, bottom=2.20,
+                    color=colors_tanh, edgecolor="black", alpha=0.9
+                )
+                self.b_bars = self.ax.bar(
+                    angles, 0.5, width=width, bottom=2.85,
+                    color=colors_b, edgecolor="black", alpha=0.9
+                )
+                label_r = 4.2
+                if self.tanh_cbar is not None:
+                    self.tanh_cbar.remove()
+                    self.tanh_cbar = None
+                if self.b_cbar is not None:
+                    self.b_cbar.remove()
+                    self.b_cbar = None
+                self.cax_tanh.set_visible(True)
+                self.cax_tanh.cla()
+                sm_tanh = ScalarMappable(cmap=cmap_seq, norm=self._tanh_norm)
+                sm_tanh.set_array([])
+                self.tanh_cbar = self.figure.colorbar(
+                    sm_tanh, cax=self.cax_tanh, orientation="horizontal",
+                    label="tanh(b − β) − tanh(−β)"
+                )
+                self.cax_b_ax.set_visible(True)
+                self.cax_b_ax.cla()
+                sm_b = ScalarMappable(cmap=cmap_seq, norm=self._b_norm)
+                sm_b.set_array([])
+                self.b_cbar = self.figure.colorbar(
+                    sm_b, cax=self.cax_b_ax, orientation="horizontal",
+                    label="b (sensory map)"
+                )
             self.angle_labels = []
-            for deg, label in zip([0, 90, 180, 270], ["0°", "90°", "180°", "270°"]):
+            for deg, lbl in zip([0, 90, 180, 270], ["0°", "90°", "180°", "270°"]):
                 rad = math.radians(deg)
-                txt = self.ax.text(rad, 2.5, label, ha="center", va="center", fontsize=10)
+                txt = self.ax.text(rad, label_r, lbl, ha="center", va="center", fontsize=8)
                 self.angle_labels.append(txt)
             self.ax.set_yticklabels([])
             self.ax.set_xticks([])
@@ -1713,6 +1838,13 @@ class GUI_2D(QWidget):
                 bar.set_color(color)
             for bar, color in zip(self.perception_bars, colors_perception):
                 bar.set_color(color)
+            if self.tanh_bars is not None and colors_tanh is not None:
+                for bar, color in zip(self.tanh_bars, colors_tanh):
+                    bar.set_color(color)
+            if self.b_bars is not None and b_per_group is not None:
+                for bar, color in zip(self.b_bars, colors_b):
+                    bar.set_color(color)
+
         if avg_angle is not None:
             if self.arrow is not None:
                 self.arrow.remove()
