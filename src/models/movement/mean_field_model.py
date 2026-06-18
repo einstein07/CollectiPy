@@ -157,6 +157,7 @@ class MeanFieldMovementModel(MovementModel):
             sensory_dt=self.sensory_dt,
             g_adapt=self.g_adapt,
             tau_adapt=self.tau_adapt,
+            g_threshold=float(self.params.get("g_threshold", 1.4)),
         )
         if hasattr(self, 'bifurcation_detector'):
             self.bifurcation_detector.reset()
@@ -243,10 +244,14 @@ class MeanFieldMovementModel(MovementModel):
                 angle_rad = angle_rad - math.radians(self.agent.orientation.z)
             angle_deg = normalize_angle(math.degrees(angle_rad))
             angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
-            norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
-            self._last_norm = norm
-            scaling = np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
+            """Changed since speaking to Alessio, brings us closer to neuromorphic control"""
+            #norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
+            #self._last_norm = norm
+            #scaling = np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
+            norm = final_norm
+            scaling = norm
             self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
+            logger.debug("%s mean-field raw command -> angle=%.2f norm=%.3f scaling=%.3f", self.agent.get_name(), angle_deg, norm, scaling)
             self.agent.angular_velocity_cmd = angle_deg
             self._last_bump_angle = angle_rad
             # Bifurcation detection: check after this tick
@@ -496,17 +501,11 @@ class MeanFieldMovementModel(MovementModel):
         }
 
     def _normalize_state_for_display(self, values: np.ndarray) -> np.ndarray:
-        """Map neural field values to [0, 1] for GUI coloring."""
+        """Map neural field values to [0, 1] for GUI coloring using absolute scale."""
         matrix = np.asarray(values, dtype=float).reshape(self.num_neurons, 1)
         if matrix.size == 0:
             return matrix
-        max_abs = float(np.max(np.abs(matrix))) if matrix.size else 0.0
-        if not math.isfinite(max_abs) or max_abs <= 1e-9:
-            normalized = np.zeros_like(matrix)
-        else:
-            normalized = matrix / max_abs
-        normalized = np.clip((normalized + 1.0) * 0.5, 0.0, 1.0)
-        return normalized
+        return np.clip((matrix + 1.0) * 0.5, 0.0, 1.0)
 
     def _prepare_perception_vector(self, length: int) -> np.ndarray:
         """Flatten perception into a vector consumed by the GUI plot."""
@@ -572,6 +571,7 @@ class MeanFieldMovementModel(MovementModel):
             "mean_field_sensory_time": float(snapshot.get("sensory_time", 0.0)),
             "mean_field_entities": entities_copy,
             "mean_field_norm": self._last_norm,
+            "mean_field_beta": float(self.mean_field_system.beta),
             "mean_field_lambda1": (
                 self.bifurcation_detector.last_lambda1
                 if hasattr(self, "bifurcation_detector")
