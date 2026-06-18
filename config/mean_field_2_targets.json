@@ -8,7 +8,8 @@
         "collisions": false,
         "time_limit": 1000,
         "num_runs": 1,
-        "post_bifurcation_swap": {
+        "target_position_swaps": [],
+            "post_bifurcation_swap": {
                 "pairs": [
                     [
                         "static_0.s#0",
@@ -17,6 +18,12 @@
                 ],
                 "delay_ticks": 1
             },
+        "termination": {
+            "type": "proximity",
+            "target_ids": ["static_0.s#0", "static_1.s#0"],
+            "radius": 0.1,
+            "agent_ids": "any"
+        },
         "results":{ 
             "base_path": "../data/", 
             "agent_specs": ["base", "mean_field"],
@@ -24,12 +31,6 @@
             "snapshots_per_second": 1
         },
         
-        "termination": {
-            "type": "proximity",
-            "target_ids": ["static_0.s#0", "static_1.s#0"],
-            "radius": 0.05,
-            "agent_ids": "any"
-        },
         "gui": {
             "_id": "2D",
             "on_click": [
@@ -39,7 +40,7 @@
         },
         "arenas": {
             "arena_0": {
-                "random_seed": 24353453,
+                "random_seed": 232961375,
                 "radius": 1,
                 "_id": "square",
                 "color": "gray"
@@ -64,8 +65,8 @@
                 "shape": "cylinder",
                 "height": 0.2,
                 "diameter": 0.05,
-                "color": "blue",
-                "strength": [5.0],
+                "color": "red",
+                "strength": [4.5],
                 "uncertainty": [0]
             }    
         },
@@ -76,7 +77,7 @@
                 "orientation": [[0, 0, 0]],
                 "number": [1],
                 "shape": "cylinder",
-                "linear_velocity": 0.01,
+                "linear_velocity": 0.001,
                 "angular_velocity": 10,
                 "height": 0.02,
                 "diameter": 0.033,
@@ -93,8 +94,9 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
-                    "tau_adapt": 3.2,
-                    "g_adapt": 0.8,
+                    "g_threshold": 2.0,
+                    "tau_adapt": 7.5,
+                    "g_adapt": 0,
                     "num_targets": 2,
                     "num_guards": 0,
                     "guard_qualities": [],
@@ -106,7 +108,7 @@
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 7.5,
+                    "u": 6.2,
                     "sigma": 1.5,
                     "beta": 1.0,
                     "integration_time": 50,

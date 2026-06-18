@@ -6,7 +6,7 @@
             "file_level": "INFO"
         },
         "collisions": false,
-        "time_limit": 1000,
+        "time_limit": 500,
         "num_runs": 1,
         "results":{ 
             "base_path": "../data/", 
@@ -58,7 +58,7 @@
                 "orientation": [[0, 0, 0]],
                 "number": [1],
                 "shape": "cylinder",
-                "linear_velocity": 0.01,
+                "linear_velocity": 0.001,
                 "angular_velocity": 10,
                 "height": 0.02,
                 "diameter": 0.033,
@@ -75,11 +75,11 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
+                    "g_threshold": 1.4,
                     "tau_adapt": 3.2,
                     "g_adapt": 0.0,
                     "num_targets": 2,
                     "num_guards": 0,
-                    "guard_qualities": [],
                     "target_ids": [
                         "static_0.s#0",
                         "static_1.s#0"
@@ -88,7 +88,7 @@
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 6.156868,
+                    "u": 6.2,
                     "sigma": 1.5,
                     "beta": 1.0,
                     "integration_time": 50,
