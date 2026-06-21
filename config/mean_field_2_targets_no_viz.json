@@ -6,7 +6,7 @@
             "file_level": "INFO"
         },
         "collisions": false,
-        "time_limit": 500,
+        "time_limit": 2000,
         "num_runs": 1,
         "results":{ 
             "base_path": "../data/", 
@@ -19,6 +19,16 @@
             "target_ids": ["static_0.s#0", "static_1.s#0"],
             "radius": 0.05,
             "agent_ids": "any"
+        },
+        "target_position_swaps": [],
+        "post_bifurcation_swap": {
+            "pairs": [
+                [
+                    "static_0.s#0",
+                    "static_1.s#0"
+                ]
+            ],
+            "delay_ticks": 1
         },
         "arenas": {
             "arena_0": {
