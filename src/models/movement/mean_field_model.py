@@ -151,6 +151,7 @@ class MeanFieldMovementModel(MovementModel):
             guard_qualities=self.params.get("guard_qualities"),
             target_quality_modulations=self.target_quality_modulations,
             sigma=float(self.params.get("sigma", 0.01)),
+            sigma_s=float(self.params.get("sigma_s", 0.0)),
             dt=self.integration_dt,
             integration_time=self.integration_time,
             sensory_time_mode=self.sensory_time_mode,
