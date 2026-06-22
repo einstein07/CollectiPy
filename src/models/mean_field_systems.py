@@ -67,6 +67,7 @@ class MeanFieldSystem:
         guard_qualities: Iterable[float] | None = None,
         target_quality_modulations: Mapping[str, Mapping[str, float]] | None = None,
         sigma: float = 0.01,
+        sigma_s: float = 0.0,
         dt: float = 0.1,
         integration_time: float = 50.0,
         sensory_time_mode: str = "world_time",
@@ -88,6 +89,9 @@ class MeanFieldSystem:
             kappa: Concentration for sensory von Mises inputs.
             spatial_decay: Spatial decay rate for guard influence.
             sigma: Noise standard deviation (added to z dynamics, scaled by sqrt(n)).
+            sigma_s: Static sensory noise std. A frozen noise vector drawn once at reset
+                and added to b on every compute_sensory_map call, modelling a fixed
+                sensor distortion rather than noise that averages out.
             dt: Integration time step.
             initial_state: Optional initial state vector z.
             external_input: Optional initial external input vector b.
@@ -104,6 +108,7 @@ class MeanFieldSystem:
         self.kappa = float(kappa)
         self.spatial_decay = spatial_decay
         self.sigma = float(sigma)
+        self.sigma_s = float(sigma_s)
         self.dt = float(dt)
         self.integration_time = float(integration_time)
         self.sensory_time_mode = self._normalize_sensory_time_mode(sensory_time_mode)
@@ -148,6 +153,13 @@ class MeanFieldSystem:
 
         if self.b.shape[0] != self.num_neurons:
             raise ValueError("external_input dimension must match num_neurons")
+
+        # Frozen sensory noise: drawn once here, redrawn on reset()
+        self._b_noise: np.ndarray = (
+            self.rng.standard_normal(self.num_neurons) * self.sigma_s
+            if self.sigma_s > 0.0
+            else np.zeros(self.num_neurons, dtype=float)
+        )
 
         self.g_adapt = float(g_adapt)
         self.tau_adapt = float(tau_adapt)
@@ -312,6 +324,7 @@ class MeanFieldSystem:
                     ),
                 )
 
+        b += self._b_noise
         b /= math.sqrt(self.num_neurons)
         self.b = b
         return self.b
@@ -354,6 +367,11 @@ class MeanFieldSystem:
         self.last_target_ids = []
         self.last_target_base_qualities = np.array([], dtype=float)
         self.last_modulated_target_qualities = np.array([], dtype=float)
+        self._b_noise = (
+            self.rng.standard_normal(self.num_neurons) * self.sigma_s
+            if self.sigma_s > 0.0
+            else np.zeros(self.num_neurons, dtype=float)
+        )
 
     @staticmethod
     def euler_integrate_sfa(y0, t_eval, u, b, M, beta, n, sigma, g_adapt, tau_adapt, randn_like_func):
