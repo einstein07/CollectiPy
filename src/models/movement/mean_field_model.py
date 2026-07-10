@@ -82,6 +82,7 @@ class MeanFieldMovementModel(MovementModel):
             gradient_window=int(bif_cfg.get("gradient_window", 5)),
             gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
+        self.use_thresholding = bool(self.params.get("use_thresholding", True))
         self.reset()
         logger.info(
             "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f)",
@@ -158,7 +159,8 @@ class MeanFieldMovementModel(MovementModel):
             sensory_dt=self.sensory_dt,
             g_adapt=self.g_adapt,
             tau_adapt=self.tau_adapt,
-            g_threshold=float(self.params.get("g_threshold", 1.4)),
+            g_threshold=float(self.params.get("g_threshold", 0.6)),
+            use_thresholding=bool(self.params.get("use_thresholding", True)),
         )
         if hasattr(self, 'bifurcation_detector'):
             self.bifurcation_detector.reset()
@@ -246,11 +248,13 @@ class MeanFieldMovementModel(MovementModel):
             angle_deg = normalize_angle(math.degrees(angle_rad))
             angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
             """Changed since speaking to Alessio, brings us closer to neuromorphic control"""
-            #norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
-            #self._last_norm = norm
-            #scaling = np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
-            norm = final_norm
-            scaling = norm
+            if not self.use_thresholding:
+                norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
+                self._last_norm = norm
+                scaling = np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
+            else:
+                norm = final_norm
+                scaling = norm
             self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
             logger.debug("%s mean-field raw command -> angle=%.2f norm=%.3f scaling=%.3f", self.agent.get_name(), angle_deg, norm, scaling)
             self.agent.angular_velocity_cmd = angle_deg

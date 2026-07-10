@@ -28,7 +28,7 @@ def compute_center_of_mass(z, theta_i):
     cos_sum = np.sum(z * np.cos(theta_i))
     return np.arctan2(sin_sum, cos_sum)
 # Helper with thresholding
-def compute_command(z, theta_i, peak_frac=0.5, g_threshold=1.4):
+def compute_command(z, theta_i, peak_frac=0.5, g_threshold=0.6):
     z = np.asarray(z, dtype=float)
 
     z_tilde = np.where(z > g_threshold, z, 0.0)
@@ -76,7 +76,9 @@ class MeanFieldSystem:
         # SFA parameters
         g_adapt: float = 0.0, # set > 0 to enable SFA
         tau_adapt: float = 0.0, # adaptation time constant
-        g_threshold: float = 1.4,
+        # Thresholding parameters
+        g_threshold: float = 0.6,
+        use_thresholding: bool = True,
     ):
         """
         Initialize the mean-field system.
@@ -98,6 +100,8 @@ class MeanFieldSystem:
             rng: Optional numpy random generator for reproducibility.
             g_adapt: Adaptation strength (set > 0 to enable spike-frequency adaptation).
             tau_adapt: Adaptation time constant (used when g_adapt > 0).
+            g_threshold: Threshold parameter for thresholding.
+            use_thresholding: Whether to use thresholding.
         """
         if num_neurons <= 0:
             raise ValueError("num_neurons must be positive")
@@ -164,6 +168,7 @@ class MeanFieldSystem:
         self.g_adapt = float(g_adapt)
         self.tau_adapt = float(tau_adapt)
         self.g_threshold = float(g_threshold)
+        self.use_thresholding = bool(use_thresholding)
         if self.g_adapt > 0.0 and self.tau_adapt <= 0.0:
             raise ValueError("tau_adapt must be positive when g_adapt > 0")
         
@@ -414,6 +419,10 @@ class MeanFieldSystem:
     
     @staticmethod
     def randn_like(y, sigma, inv_sqrt_n):
+        #out = np.empty_like(y)
+        #for i in prange(y.size):
+        #    out[i] = np.random.normal(0.0, sigma) * inv_sqrt_n
+        #return out
         return np.random.normal(0.0, sigma * inv_sqrt_n, size=y.shape)
     
 
@@ -455,11 +464,12 @@ class MeanFieldSystem:
         times = t_eval
 
         """ Comented out after chat with Alessio, this keeps us closer to neuromorphic control"""
-        #bump_positions = np.array([compute_center_of_mass(z_t, self.theta) for z_t in z_traj])
-        #final_norm = np.linalg.norm(z_traj[-1])
-        bump_positions, magnitudes, _ = np.array([compute_command(z_t, self.theta, g_threshold=self.g_threshold) for z_t in z_traj]).T
-        final_norm = magnitudes[-1]
-        
+        if not self.use_thresholding:
+            bump_positions = np.array([compute_center_of_mass(z_t, self.theta) for z_t in z_traj])
+            final_norm = np.linalg.norm(z_traj[-1])
+        else:
+            bump_positions, magnitudes, _ = np.array([compute_command(z_t, self.theta, g_threshold=self.g_threshold) for z_t in z_traj]).T
+            final_norm = magnitudes[-1]
 
         # Update internal states
         self.neural_ring = z_traj[-1]
