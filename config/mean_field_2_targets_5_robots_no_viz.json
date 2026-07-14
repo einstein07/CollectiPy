@@ -11,16 +11,15 @@
         "termination": {
             "type": "proximity",
             "target_ids": ["static_0.s#0", "static_1.s#0"],
-            "radius": 1.00,
+            "radius": 0.1,
             "agent_ids": "any",
             "mode": "all"
         },
-        "gui": {
-            "_id": "2D",
-            "on_click": [
-                "show_spins", "detection"
-            ],
-            "view": ["detection"]
+        "results":{ 
+            "base_path": "../data/", 
+            "agent_specs": ["base", "mean_field"],
+            "group_specs": [],
+            "snapshots_per_second": 1
         },
         "arenas": {
             "arena_0": {
