@@ -17,7 +17,7 @@
         "termination": {
             "type": "proximity",
             "target_ids": ["static_0.s#0", "static_1.s#0", "static_2.s#0"],
-            "radius": 0.025,
+            "radius": 0.1,
             "agent_ids": "any"
         },
         "arenas": {
@@ -69,7 +69,7 @@
                 "orientation": [[0, 0, 0]],
                 "number": [1],
                 "shape": "cylinder",
-                "linear_velocity": 0.01,
+                "linear_velocity": 0.001,
                 "angular_velocity": 10,
                 "height": 0.02,
                 "diameter": 0.033,
@@ -85,8 +85,9 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
-                    "tau_adapt": 0.0,
-                    "g_adapt": 0.0,
+                    "tau_adapt": 3.2,
+                    "g_adapt": 0.8,
+                    "g_threshold": 0.6,
                     "num_targets": 3,
                     "num_guards": 0,
                     "guard_qualities": [],
@@ -98,12 +99,22 @@
                     "guard_ids": [],
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 10.0,
+                    "u": 7.5,
                     "sigma": 1.5,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
-                    "reference": "egocentric"
+                    "reference": "egocentric",
+                    "norm_scale": 1.0,
+                    "bifurcation": {
+                        "mode": "behavioral",
+                        "lambda_threshold": -0.1,
+                        "spike_min_separation": 10,
+                        "alignment_tolerance_deg":5.0,
+                        "alignment_consecutive_ticks": 1,
+                        "gradient_window": 5,
+                        "gradient_threshold": 0.005
+                    }
                 }
             }
         }

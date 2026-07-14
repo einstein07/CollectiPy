@@ -5,7 +5,7 @@
             "console_level": "INFO",
             "file_level": "INFO"
         },
-        "collisions": false,
+        "collisions": true,
         "time_limit": 1000,
         "num_runs": 1,
         "results":{ 
@@ -30,7 +30,7 @@
         },
         "arenas": {
             "arena_0": {
-                "random_seed": 24353453,
+                "random_seed": 976,
                 "radius": 1,
                 "_id": "square",
                 "color": "gray"
@@ -80,12 +80,13 @@
                 },
                 "moving_behavior": "mean_field",
                 "mean_field_model": {
+                    "task": "combined",
                     "steps_per_tick": 1,
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
                     "tau_adapt": 3.2,
-                    "g_adapt": 0.8,
+                    "g_adapt": 0.0,
                     "num_targets": 2,
                     "num_guards": 0,
                     "guard_qualities": [],
@@ -98,12 +99,13 @@
                     "kappa": 20,
                     "v": 0.5,
                     "u": 8.3,
-                    "sigma": 0.0001,
+                    "sigma": 1.5,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
                     "reference": "egocentric",
                     "norm_scale": 1.0,
+                    "alpha": 3.8,
                     "bifurcation": {
                         "mode": "behavioral",
                         "lambda_threshold": -0.1,
