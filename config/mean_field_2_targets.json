@@ -21,15 +21,10 @@
         "termination": {
             "type": "proximity",
             "target_ids": ["static_0.s#0", "static_1.s#0"],
-            "radius": 0.1,
+            "radius": 0.05,
             "agent_ids": "any"
         },
-        "results":{ 
-            "base_path": "../data/", 
-            "agent_specs": ["base", "mean_field"],
-            "group_specs": [],
-            "snapshots_per_second": 1
-        },
+        
         
         "gui": {
             "_id": "2D",
@@ -41,7 +36,7 @@
         "arenas": {
             "arena_0": {
                 "random_seed": 232961375,
-                "radius": 1,
+                "side": 2,
                 "_id": "square",
                 "color": "gray"
             }
@@ -66,7 +61,7 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "red",
-                "strength": [4.5],
+                "strength": [4.0],
                 "uncertainty": [0]
             }    
         },
@@ -94,7 +89,8 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
-                    "g_threshold": 2.0,
+                    "use_thresholding": true,
+                    "g_threshold": 0.6,
                     "tau_adapt": 7.5,
                     "g_adapt": 0,
                     "num_targets": 2,
@@ -110,6 +106,7 @@
                     "v": 0.5,
                     "u": 6.2,
                     "sigma": 1.5,
+                    "sigma_s": 0.0,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,

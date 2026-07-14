@@ -8,6 +8,16 @@
         "collisions": false,
         "time_limit": 2000,
         "num_runs": 1,
+        "target_position_swaps": [],
+        "post_bifurcation_swap": {
+            "pairs": [
+                [
+                    "static_0.s#0",
+                    "static_1.s#0"
+                ]
+            ],
+            "delay_ticks": 1
+        },
         "results":{ 
             "base_path": "../data/", 
             "agent_specs": ["base", "mean_field"],
@@ -19,16 +29,6 @@
             "target_ids": ["static_0.s#0", "static_1.s#0"],
             "radius": 0.05,
             "agent_ids": "any"
-        },
-        "target_position_swaps": [],
-        "post_bifurcation_swap": {
-            "pairs": [
-                [
-                    "static_0.s#0",
-                    "static_1.s#0"
-                ]
-            ],
-            "delay_ticks": 1
         },
         "arenas": {
             "arena_0": {
@@ -85,7 +85,8 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
-                    "g_threshold": 1.4,
+                    "use_thresholding": true,
+                    "g_threshold": 0.6,
                     "tau_adapt": 3.2,
                     "g_adapt": 0.0,
                     "num_targets": 2,
@@ -100,6 +101,7 @@
                     "v": 0.5,
                     "u": 6.2,
                     "sigma": 1.5,
+                    "sigma_s": 0.0,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
