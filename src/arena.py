@@ -87,6 +87,7 @@ class Arena():
         self.termination_config = self._normalize_termination_config(
             config_elem.environment.get("termination", {}) if config_elem else {}
         )
+        self._termination_agents_reached = set()
         self._target_position_swap_specs = self._normalize_target_position_swaps(
             config_elem.environment.get("target_position_swaps", []) if config_elem else []
         )
@@ -263,7 +264,8 @@ class Arena():
             normalized["agent_ids"] = [str(x) for x in agent_ids if str(x)]
         else:
             normalized["agent_ids"] = None
-        normalized["mode"] = str(normalized.get("mode", "any") or "any").strip().lower()
+        mode = str(normalized.get("mode", "any") or "any").strip().lower()
+        normalized["mode"] = mode if mode in ("any", "all") else "any"
         return normalized
 
     @staticmethod
@@ -650,7 +652,8 @@ class Arena():
         target_positions = self._collect_target_positions(objects_data, agents_shapes, target_ids)
         if not target_positions:
             return False
-        for _, agent_pos in agent_positions.items():
+        require_all = cfg.get("mode") == "all"
+        for agent_id, agent_pos in agent_positions.items():
             if agent_pos is None:
                 continue
             for target_id in target_ids:
@@ -660,7 +663,12 @@ class Arena():
                 dx = float(target_pos.x - agent_pos.x)
                 dy = float(target_pos.y - agent_pos.y)
                 if math.hypot(dx, dy) <= radius:
-                    return True
+                    if not require_all:
+                        return True
+                    self._termination_agents_reached.add(agent_id)
+                    break
+        if require_all:
+            return self._termination_agents_reached.issuperset(agent_positions.keys())
         return False
 
     def _collect_agent_positions(self, agents_shapes: dict, agent_filter) -> dict:
@@ -1022,6 +1030,7 @@ class SolidArena(Arena):
         while run < num_runs + 1:
             logging.info(f"Run number {run} started")
             self._prepare_target_position_swaps_for_run()
+            self._termination_agents_reached = set()
             # Reset post-bifurcation swap state for this run (D-04: once per run)
             self._post_bif_swap_triggered = False
             self._post_bif_swap_event = None
