@@ -208,7 +208,7 @@ class MeanFieldMovementModel(MovementModel):
             if self.alpha > 0.0 and qualities.size > 0:
                 neighbor_ids, neighbor_angles, n_neighbors = self._collect_neighbor_targets(agents)
                 if n_neighbors > 0:
-                    neighbor_strength = (float(np.mean(qualities)) * self.alpha) / n_neighbors
+                    neighbor_strength = (float(np.max(qualities)) * self.alpha) / n_neighbors
                     target_ids = target_ids + neighbor_ids
                     targets = np.concatenate([targets, neighbor_angles])
                     qualities = np.concatenate([qualities, np.full(n_neighbors, neighbor_strength)])
