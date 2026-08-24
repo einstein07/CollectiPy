@@ -13,26 +13,27 @@ import copy
 import logging
 import math
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 
 from models.bifurcation import BifurcationDetector
+from models.egocentric_target_model import TargetModel
 from models.mean_field_systems import MeanFieldSystem
-from models.bifurcation import BifurcationDetector
 from models.utils import normalize_angle
-from plugin_base import MovementModel
-from plugin_registry import (
-    get_detection_model,
-    register_movement_model,
-)
+from plugin_registry import register_movement_model
 
 logger = logging.getLogger("sim.mean_field")
 logger.setLevel(logging.DEBUG)
 
 
-class MeanFieldMovementModel(MovementModel):
-    """Movement model driven by the MeanFieldSystem."""
+class MeanFieldMovementModel(TargetModel):
+    """Movement model driven by the MeanFieldSystem.
+
+    Inherits the shared perception/detection spine from `TargetModel`; the methods that
+    used to live here (`_update_perception`, `_convert_perception_to_targets`, ...) are
+    now inherited unchanged so the embodied DDM sees the world identically.
+    """
 
     def __init__(self, agent):
         """Initialize the instance."""
@@ -83,6 +84,10 @@ class MeanFieldMovementModel(MovementModel):
             gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
         self.use_thresholding = bool(self.params.get("use_thresholding", True))
+        # Which readout order parameter drives forward speed (Task 0.4). Default is the
+        # bounded "concentration"; "magnitude"/"norm" reproduce the legacy behaviour of
+        # use_thresholding True/False respectively.
+        self.scaling_mode = str(self.params.get("scaling_mode", "concentration"))
         self.reset()
         logger.info(
             "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f)",
@@ -92,48 +97,6 @@ class MeanFieldMovementModel(MovementModel):
             self.sensory_time_mode,
             self.sensory_dt,
         )
-
-    def _resolve_agent_tick_rate(self) -> float:
-        """Return the effective agent update rate used by the simulator."""
-        if hasattr(self.agent, "ticks"):
-            try:
-                ticks = float(self.agent.ticks())
-                if ticks > 0.0:
-                    return ticks
-            except (TypeError, ValueError):
-                pass
-        ticks = getattr(self.agent, "ticks_per_second", 1)
-        try:
-            ticks = float(ticks)
-        except (TypeError, ValueError):
-            ticks = 1.0
-        return max(1.0, ticks)
-
-    def _resolve_sensory_dt(self) -> float:
-        """Resolve how much simulated time the modulation clock advances per internal update."""
-        mode = str(self.sensory_time_mode or "world_time").strip().lower()
-        if "sensory_dt" in self.params:
-            return float(self.params.get("sensory_dt", 0.0))
-        if mode in {"integration", "integration_time", "legacy"}:
-            return self.integration_time
-        return 1.0 / (self._resolve_agent_tick_rate() * self.steps_per_tick)
-
-    def _create_detection_model(self):
-        """Create detection model matching the mean-field layout."""
-        context = {
-            "num_groups": self.num_neurons,
-            "num_spins_per_group": 1,
-            "perception_width": self.perception_width,
-            "group_angles": self.group_angles,
-            "reference": self.reference,
-            "perception_global_inhibition": self.perception_global_inhibition,
-            "max_detection_distance": self.perception_range,
-            "detection_config": getattr(self.agent, "detection_config", {}),
-            "mean_field_target_ids": self.target_ids,
-            "mean_field_guard_ids": self.guard_ids,
-        }
-        detection_name = getattr(self.agent, "detection", None) or self.agent.config_elem.get("detection", "GPS")
-        return get_detection_model(detection_name, self.agent, context)
 
     def reset(self) -> None:
         """Reset the mean-field state."""
@@ -146,7 +109,7 @@ class MeanFieldMovementModel(MovementModel):
             v=float(self.params.get("v", 0.5)),
             kappa=float(self.params.get("kappa", 20.0)),
             spatial_decay=float(self.params.get("spatial_decay", 2.0)),
-            num_targets=int(self.params.get("num_targets", self.num_neurons)),
+            num_targets=int(self.params.get("num_targets", 0)),
             num_guards=int(self.params.get("num_guards", 0)),
             target_qualities=self.params.get("target_qualities"),
             guard_qualities=self.params.get("guard_qualities"),
@@ -161,6 +124,7 @@ class MeanFieldMovementModel(MovementModel):
             tau_adapt=self.tau_adapt,
             g_threshold=float(self.params.get("g_threshold", 0.6)),
             use_thresholding=bool(self.params.get("use_thresholding", True)),
+            scaling_mode=self.scaling_mode,
         )
         if hasattr(self, 'bifurcation_detector'):
             self.bifurcation_detector.reset()
@@ -247,15 +211,23 @@ class MeanFieldMovementModel(MovementModel):
                 angle_rad = angle_rad - math.radians(self.agent.orientation.z)
             angle_deg = normalize_angle(math.degrees(angle_rad))
             angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
-            """Changed since speaking to Alessio, brings us closer to neuromorphic control"""
-            if not self.use_thresholding:
-                norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
-                self._last_norm = norm
-                scaling = np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
-            else:
-                norm = final_norm
+            # Forward speed is gated by the readout order parameter chosen by
+            # scaling_mode (Task 0.4). "concentration" (default) is bounded in [0, 1] so
+            # an undecided agent physically slows down; "norm" reproduces the legacy
+            # use_thresholding=False clip; "magnitude" reproduces the legacy
+            # use_thresholding=True (unbounded) behaviour.
+            mf = self.mean_field_system
+            if self.scaling_mode == "norm":
+                norm = float(np.linalg.norm(neural_field)) if neural_field is not None else float(mf.last_l2)
+                scaling = float(np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0))
+            elif self.scaling_mode == "magnitude":
+                norm = float(mf.last_magnitude)
                 scaling = norm
-            self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
+            else:  # "concentration"
+                norm = float(mf.last_concentration)
+                scaling = float(np.clip(norm, 0.0, 1.0))
+            self._last_norm = norm
+            self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling
             logger.debug("%s mean-field raw command -> angle=%.2f norm=%.3f scaling=%.3f", self.agent.get_name(), angle_deg, norm, scaling)
             self.agent.angular_velocity_cmd = angle_deg
             self._last_bump_angle = angle_rad
@@ -290,169 +262,6 @@ class MeanFieldMovementModel(MovementModel):
             if logger.isEnabledFor(logging.DEBUG):
                 elapsed_ms = (time.perf_counter() - start_time) * 1000.0
                 logger.debug("----------------------------%s mean-field step duration = %.3f ms-----------------------------------", self.agent.get_name(), elapsed_ms)
-
-    def _update_perception(self, objects: dict, agents: dict, tick: int | None = None, arena_shape=None) -> None:
-        """Update sensory perception from detections."""
-        if self.detection_model is None:
-            self.perception = None
-            return
-        if tick is not None and hasattr(self.agent, "should_sample_detection"):
-            if not self.agent.should_sample_detection(tick):
-                return
-        snapshot = self.detection_model.sense(self.agent, objects, agents, arena_shape)
-        if snapshot is None:
-            self.perception = None
-            return
-        if isinstance(snapshot, dict):
-            selected, channel_name = self._select_perception_channel(snapshot)
-        else:
-            selected, channel_name = snapshot, "raw"
-        self.perception = selected
-        self._active_perception_channel = channel_name
-        self._mf_entities = snapshot.get("mean_field_entities") or {"targets": [], "guards": []}
-        if logger.isEnabledFor(logging.DEBUG):
-            max_val = float(np.max(self.perception)) if self.perception is not None else 0.0
-            logger.debug(
-                "%s perception channel=%s max=%.4f",
-                self.agent.get_name(),
-                channel_name,
-                max_val,
-            )
-        logger.debug("%s mean-field entities=%r", self.agent.get_name(), self._mf_entities)
-
-    def _select_perception_channel(self, snapshot: dict[str, np.ndarray]) -> tuple[np.ndarray, str]:
-        """Select a perception channel depending on the configured task."""
-        task_name = (self.agent.get_task() or self.task or "selection").lower()
-        objects_channel = snapshot.get("objects")
-        agents_channel = snapshot.get("agents")
-        combined_channel = snapshot.get("combined")
-        if task_name in ("selection", "objects"):
-            return self._channel_with_fallback(
-                (objects_channel, "objects"),
-                (combined_channel, "combined"),
-                (agents_channel, "agents"),
-            )
-        if task_name in ("flocking", "agents"):
-            return self._channel_with_fallback(
-                (agents_channel, "agents"),
-                (combined_channel, "combined"),
-                (objects_channel, "objects"),
-            )
-        return self._channel_with_fallback(
-            (combined_channel, "combined"),
-            (objects_channel, "objects"),
-            (agents_channel, "agents"),
-        )
-
-    def _channel_with_fallback(
-        self,
-        primary: tuple[np.ndarray | None, str],
-        secondary: tuple[np.ndarray | None, str],
-        tertiary: tuple[np.ndarray | None, str],
-    ) -> tuple[np.ndarray, str]:
-        """Return the first available perception channel."""
-        for channel, name in (primary, secondary, tertiary):
-            if channel is not None:
-                return channel, name
-        raise ValueError("Detection model did not provide any perception channels")
-
-    def _resolve_detection_range(self) -> float:
-        """Resolve the maximum detection radius from the agent configuration."""
-        if hasattr(self.agent, "get_detection_range"):
-            try:
-                return float(self.agent.get_detection_range())
-            except (TypeError, ValueError):
-                logger.warning(
-                    "%s provided invalid detection range via accessor; falling back to legacy config",
-                    self.agent.get_name()
-                )
-        config_elem = getattr(self.agent, "config_elem", {})
-        settings = {}
-        if isinstance(config_elem, dict):
-            settings = config_elem.get("detection_settings", {}) or {}
-        range_candidate = None
-        if isinstance(settings, dict):
-            range_candidate = settings.get("range", settings.get("distance"))
-        if range_candidate is None and isinstance(config_elem, dict):
-            range_candidate = config_elem.get("perception_distance")
-        if range_candidate is None and hasattr(self.agent, "perception_distance"):
-            range_candidate = self.agent.perception_distance
-        if range_candidate is None:
-            return 0.1
-        try:
-            value = float(range_candidate)
-        except (TypeError, ValueError):
-            logger.warning("%s invalid detection range '%s', using default 0.1", self.agent.get_name(), range_candidate)
-            return 0.1
-        if value <= 0:
-            return 0.1
-        return value
-
-    def _normalize_target_quality_modulations(self, raw_config) -> dict[str, dict[str, float]]:
-        """Normalize modulation settings keyed by target ID."""
-        if not raw_config:
-            return {}
-        if not isinstance(raw_config, dict):
-            raise ValueError("target_quality_modulations must be a mapping keyed by target ID")
-
-        normalized: dict[str, dict[str, float]] = {}
-        for target_id, params in raw_config.items():
-            if not isinstance(params, dict):
-                raise ValueError(
-                    f"target_quality_modulations['{target_id}'] must be a mapping"
-                )
-            normalized[str(target_id)] = {
-                "epsilon": float(params.get("epsilon", 0.0)),
-                "omega": float(params.get("omega", 0.0)),
-                "psi": float(params.get("psi", 0.0)),
-            }
-        return normalized
-
-    def _collect_neighbor_targets(
-        self, agents: dict
-    ) -> Tuple[list[str], np.ndarray, int]:
-        """Return spatial angles and count of all neighbor agents (no range filter)."""
-        neighbor_ids: list[str] = []
-        neighbor_angles: list[float] = []
-        my_name = self.agent.get_name()
-        for club, agent_shapes in agents.items():
-            for n, shape in enumerate(agent_shapes):
-                meta = getattr(shape, "metadata", {}) if hasattr(shape, "metadata") else {}
-                entity_name = meta.get("entity_name") or f"{club}_{n}"
-                if entity_name == my_name:
-                    continue
-                pos = shape.center_of_mass()
-                dx = pos.x - self.agent.position.x
-                dy = pos.y - self.agent.position.y
-                angle_deg = math.degrees(math.atan2(-dy, dx))
-                if self.reference == "egocentric":
-                    angle_deg -= self.agent.orientation.z
-                angle_rad = math.radians(normalize_angle(angle_deg))
-                neighbor_ids.append(entity_name)
-                neighbor_angles.append(angle_rad)
-        return neighbor_ids, np.array(neighbor_angles, dtype=float), len(neighbor_ids)
-
-    def _convert_perception_to_targets(
-        self,
-    ) -> Tuple[list[str], np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-        """Convert detection metadata into target and guard descriptors."""
-        meta = self._mf_entities or {"targets": [], "guards": []}
-        target_entries = meta.get("targets") or []
-        guard_entries = meta.get("guards") or []
-        if target_entries:
-            target_ids = [str(entry.get("id", "")) for entry in target_entries]
-            target_angles = np.array([entry.get("angle", 0.0) for entry in target_entries], dtype=float)
-            target_qualities = np.array([entry.get("intensity", 1.0) for entry in target_entries], dtype=float)
-        else:
-            target_ids = []
-            target_angles = np.array([], dtype=float)
-            target_qualities = np.array([], dtype=float)
-        guard_angles = guard_qualities = guard_distances = None
-        if guard_entries:
-            guard_angles = np.array([entry.get("angle", 0.0) for entry in guard_entries], dtype=float)
-            guard_qualities = np.array([entry.get("intensity", 1.0) for entry in guard_entries], dtype=float)
-            guard_distances = np.array([entry.get("distance", 0.0) for entry in guard_entries], dtype=float)
-        return target_ids, target_angles, target_qualities, guard_angles, guard_qualities, guard_distances
 
     def _build_target_signal_snapshot(
         self,
@@ -588,16 +397,6 @@ class MeanFieldMovementModel(MovementModel):
                 else None
             ),
             "channel": snapshot.get("channel"),
-            "mean_field_lambda1": (
-                self.bifurcation_detector.last_lambda1
-                if hasattr(self, "bifurcation_detector")
-                else None
-            ),
-            "mean_field_omega": (
-                self.bifurcation_detector.last_omega
-                if hasattr(self, "bifurcation_detector") and self.g_adapt > 0.0
-                else None
-            ),
         }
         # Drain new bifurcation events detected this tick (Path A IPC: events flow
         # through per-tick spin data from agent process to Arena).

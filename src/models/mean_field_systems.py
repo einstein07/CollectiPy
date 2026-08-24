@@ -16,6 +16,8 @@ from typing import Iterable, Mapping
 from numba import njit, prange
 import numpy as np
 
+from models.readout import circular_readout
+
 #====================== Helper Functions ======================
 # === Helper: find angular distance between two angles ===
 def _delta_angle(a1: np.ndarray, a2: np.ndarray) -> np.ndarray:
@@ -27,19 +29,10 @@ def compute_center_of_mass(z, theta_i):
     sin_sum = np.sum(z * np.sin(theta_i))
     cos_sum = np.sum(z * np.cos(theta_i))
     return np.arctan2(sin_sum, cos_sum)
-# Helper with thresholding
-def compute_command(z, theta_i, peak_frac=0.5, g_threshold=0.6):
-    z = np.asarray(z, dtype=float)
-
-    z_tilde = np.where(z > g_threshold, z, 0.0)
-
-    sin_sum = np.sum(z_tilde * np.sin(theta_i))
-    cos_sum = np.sum(z_tilde * np.cos(theta_i))
-
-    heading = np.arctan2(sin_sum, cos_sum)
-    magnitude = np.hypot(sin_sum, cos_sum) 
-    concentration = np.hypot(sin_sum, cos_sum) / (np.sum(z_tilde) + 1e-12)  # concentration ∈ [0,1]
-    return heading, magnitude, concentration
+# The thresholded circular readout formerly named `compute_command` now lives in
+# models.readout.circular_readout so that the embodied accumulator can call the exact
+# same code path. `circular_readout(z, theta, threshold=g_threshold)` is byte-identical
+# to the old `compute_command(z, theta, g_threshold=g_threshold)`.
 
 logger = logging.getLogger("sim.mean_field")
 logger.setLevel(logging.DEBUG)
@@ -49,7 +42,7 @@ class MeanFieldSystem:
     Phenomenological spiking ring attractor (mean-field version).
 
     Core dynamics:
-        z_dot = -z + tanh((u0 - s) * M @ z + b - beta) - tanh(beta) + noise
+        z_dot = -z + tanh((u0 - s) * M @ z + b - beta) - tanh(-beta) + noise
         tau * s_dot = -s + k * ||z||^4 => necessary for spiking behavior. right now not included
     """
 
@@ -79,6 +72,11 @@ class MeanFieldSystem:
         # Thresholding parameters
         g_threshold: float = 0.6,
         use_thresholding: bool = True,
+        # Readout scaling: which order parameter drives forward speed.
+        #   "concentration" (default) -> angular coherence in [0, 1], bounded.
+        #   "magnitude"               -> raw readout magnitude (legacy use_thresholding=True).
+        #   "norm"                    -> L2 norm of z (legacy use_thresholding=False).
+        scaling_mode: str = "concentration",
     ):
         """
         Initialize the mean-field system.
@@ -169,6 +167,11 @@ class MeanFieldSystem:
         self.tau_adapt = float(tau_adapt)
         self.g_threshold = float(g_threshold)
         self.use_thresholding = bool(use_thresholding)
+        self.scaling_mode = str(scaling_mode)
+        # Readout order parameters, refreshed every compute_dynamics() call.
+        self.last_magnitude = 0.0
+        self.last_concentration = 0.0
+        self.last_l2 = 0.0
         if self.g_adapt > 0.0 and self.tau_adapt <= 0.0:
             raise ValueError("tau_adapt must be positive when g_adapt > 0")
         
@@ -394,14 +397,17 @@ class MeanFieldSystem:
             z_prev = y[i-1, :N]
             a_prev = y[i-1, N:]
 
-            noise = randn_like_func(z_prev, sigma * np.sqrt(dt), 1.0 / np.sqrt(N))
+            # Euler-Maruyama: noise increment scales as sqrt(dt), applied OUTSIDE the
+            # drift so it is not multiplied by dt again (see Task 0.1). The adaptation
+            # equation `a` is deterministic and takes no noise term.
+            noise = randn_like_func(z_prev, sigma, 1.0 / np.sqrt(N)) * np.sqrt(dt)
 
             drive = u * (M @ z_prev) + b - beta - (g_adapt * a_prev)
-            z_dot = -z_prev + np.tanh(drive) - np.tanh(-beta) + noise
+            z_dot = -z_prev + np.tanh(drive) - np.tanh(-beta)
 
             a_dot = (-a_prev + z_prev) / tau_adapt
 
-            y[i, :N] = z_prev + dt * z_dot
+            y[i, :N] = z_prev + dt * z_dot + noise
             y[i, N:] = a_prev + dt * a_dot
 
         return y
@@ -412,9 +418,11 @@ class MeanFieldSystem:
         y = np.zeros((len(t_eval), len(y0)))
         y[0] = y0
         for i in range(1, len(t_eval)):
-            noise = randn_like_func(y[i-1], sigma * np.sqrt(dt), 1.0 / np.sqrt(n))
-            dydt = -y[i-1] + np.tanh(u * M @ y[i-1] + b - beta) - np.tanh(-beta) + noise
-            y[i] = y[i-1] + dt * dydt
+            # Euler-Maruyama: noise increment ~ sigma*sqrt(dt), applied OUTSIDE the drift
+            # so it is not multiplied by dt a second time (see Task 0.1).
+            noise = randn_like_func(y[i-1], sigma, 1.0 / np.sqrt(n)) * np.sqrt(dt)
+            dydt = -y[i-1] + np.tanh(u * M @ y[i-1] + b - beta) - np.tanh(-beta)
+            y[i] = y[i-1] + dt * dydt + noise
         return y
     
     @staticmethod
@@ -463,13 +471,28 @@ class MeanFieldSystem:
 
         times = t_eval
 
-        """ Comented out after chat with Alessio, this keeps us closer to neuromorphic control"""
+        # Bump heading trajectory. `use_thresholding` still selects how the heading is
+        # read (raw circular mean vs thresholded circular readout), preserving existing
+        # bump semantics. The three order parameters below are computed regardless and
+        # exposed for the configurable scaling_mode readout (Task 0.4): `concentration`
+        # is bounded in [0, 1] and is the default forward-speed driver, while
+        # `magnitude` reproduces the legacy (unbounded) behaviour on request.
         if not self.use_thresholding:
             bump_positions = np.array([compute_center_of_mass(z_t, self.theta) for z_t in z_traj])
-            final_norm = np.linalg.norm(z_traj[-1])
         else:
-            bump_positions, magnitudes, _ = np.array([compute_command(z_t, self.theta, g_threshold=self.g_threshold) for z_t in z_traj]).T
-            final_norm = magnitudes[-1]
+            readout = np.array([circular_readout(z_t, self.theta, threshold=self.g_threshold) for z_t in z_traj])
+            bump_positions = readout[:, 0]
+
+        _, final_magnitude, final_concentration = circular_readout(
+            z_traj[-1], self.theta, threshold=self.g_threshold
+        )
+        self.last_magnitude = float(final_magnitude)
+        self.last_concentration = float(final_concentration)
+        self.last_l2 = float(np.linalg.norm(z_traj[-1]))
+
+        # Backward-compatible 3rd return value: readout magnitude when thresholding
+        # (legacy use_thresholding=True), L2 norm otherwise (legacy False).
+        final_norm = self.last_magnitude if self.use_thresholding else self.last_l2
 
         # Update internal states
         self.neural_ring = z_traj[-1]

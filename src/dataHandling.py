@@ -104,12 +104,19 @@ class DataHandling():
         return specs
 
     def _parse_snapshot_rate(self, value):
-        """Return a valid snapshot count per simulated second."""
+        """Return a valid snapshot count per simulated second.
+
+        The cap used to be 2/s, which silently made any decision shorter than ~1 s
+        unplottable: a 0.6 s first passage produced barely one logged sample and looked
+        like instantaneous commitment. `_build_snapshot_offsets` dedupes offsets against
+        the tick rate, so requesting more snapshots than there are ticks simply saturates
+        at one sample per tick.
+        """
         try:
             rate = int(value)
         except (TypeError, ValueError):
             rate = 1
-        return max(1, min(2, rate))
+        return max(1, min(1000, rate))
 
     def _sanitize_tick_rate(self, ticks_per_second):
         """Ensure ticks per second is a positive integer."""
@@ -570,6 +577,97 @@ class SpaceDataHandling(DataHandling):
             row = [tick, com.x, com.y, com.z]
             position_entry["writer"].writerow(row)
 
+        self._write_ddm_row(files.get("ddm"), spin_values, tick)
+        self._write_ddm_transitions(files.get("ddm_transitions"), spin_values)
+
+    @staticmethod
+    def _write_ddm_row(ddm_entry, spin_values: dict, tick: int) -> None:
+        """Persist the pure DDM decision variable and its boundary for this tick.
+
+        The ring-shaped CSVs carry nothing for the pure DDM — its `mean_field_state` is a
+        placeholder of zeros — so without this the decision variable is lost and figures
+        such as x(t) against +/-z(t) cannot be reconstructed after the fact. Written only
+        when the payload actually comes from the pure DDM.
+
+        Note `p_first` is the belief in the FIRST configured target (`target_ids[0]`),
+        the one that +z favours; it is the value the model reports as `pure_ddm_p1`.
+        """
+        if not ddm_entry or spin_values.get("decision_model") != "embodied_pure_ddm":
+            return
+        columns = [
+            ("tick", tick),
+            ("x", spin_values.get("pure_ddm_x")),
+            ("z", spin_values.get("pure_ddm_z")),
+            ("t_evidence", spin_values.get("pure_ddm_t_evidence")),
+            ("A_hat", spin_values.get("pure_ddm_A_hat")),
+            ("A_true", spin_values.get("pure_ddm_A_true")),
+            ("c", spin_values.get("pure_ddm_c")),
+            ("p_first", spin_values.get("pure_ddm_p1")),
+            ("committed", spin_values.get("pure_ddm_committed")),
+            ("committed_id", spin_values.get("pure_ddm_committed_id")),
+            ("rt", spin_values.get("pure_ddm_rt")),
+            ("R_geom", spin_values.get("pure_ddm_R_geom")),
+            ("bisector_guard_fired", spin_values.get("pure_ddm_bisector_guard_fired")),
+            ("z_floor_analytic", spin_values.get("pure_ddm_z_floor_analytic")),
+            ("rho", spin_values.get("pure_ddm_rho")),
+            ("delta", spin_values.get("pure_ddm_delta")),
+            # c_tau carries all the angular dependence: a CONSTANT c_tau column
+            # across a run is the direct signature of the collapse being lost.
+            ("c_tau", spin_values.get("pure_ddm_c_tau")),
+            ("a_star", spin_values.get("pure_ddm_a_star")),
+            ("z_star", spin_values.get("pure_ddm_z_star")),
+            ("geometric_error_mode", spin_values.get("pure_ddm_geometric_error_mode")),
+            ("cost_ratio_used", spin_values.get("pure_ddm_cost_ratio_used")),
+            # --- post-commitment flexibility ---
+            ("x_over_z", spin_values.get("pure_ddm_x_over_z")),
+            ("n_commits", spin_values.get("pure_ddm_n_commits")),
+            ("n_releases", spin_values.get("pure_ddm_n_releases")),
+            ("n_reversals", spin_values.get("pure_ddm_n_reversals")),
+            ("t_first_commit", spin_values.get("pure_ddm_t_first_commit")),
+            ("final_target", spin_values.get("pure_ddm_final_target")),
+            ("t_swap", spin_values.get("pure_ddm_t_swap")),
+            ("x_at_swap", spin_values.get("pure_ddm_x_at_swap")),
+            ("dwell_before_swap", spin_values.get("pure_ddm_dwell_before_swap")),
+            ("release_latency", spin_values.get("pure_ddm_release_latency")),
+            ("recommit_latency", spin_values.get("pure_ddm_recommit_latency")),
+            ("total_path_length", spin_values.get("pure_ddm_total_path_length")),
+            ("arrived_before_reversal", spin_values.get("pure_ddm_arrived_before_reversal")),
+        ]
+        if not ddm_entry["header_written"]:
+            ddm_entry["writer"].writerow([name for name, _ in columns])
+            ddm_entry["header_written"] = True
+        ddm_entry["writer"].writerow(
+            ["" if value is None else value for _, value in columns]
+        )
+
+    @staticmethod
+    def _write_ddm_transitions(entry, spin_values: dict) -> None:
+        """Append commit/release events not yet written.
+
+        The model exposes the CUMULATIVE transition list, because snapshots are sampled
+        rather than taken every tick and an event-per-snapshot scheme would silently
+        drop transitions between samples. Tracking a write cursor keeps the file both
+        complete and free of duplicates.
+        """
+        if not entry or spin_values.get("decision_model") != "embodied_pure_ddm":
+            return
+        transitions = spin_values.get("pure_ddm_transitions") or []
+        already = entry.get("rows_written", 0)
+        if len(transitions) <= already:
+            return
+        columns = [
+            "t", "tick", "type", "committed_target", "x", "z", "a_star", "delta",
+            "d1", "d2", "agent_x", "agent_y", "time_since_last_transition",
+        ]
+        if not entry["header_written"]:
+            entry["writer"].writerow(columns)
+            entry["header_written"] = True
+        for row in transitions[already:]:
+            entry["writer"].writerow(
+                ["" if row.get(name) is None else row.get(name) for name in columns]
+            )
+        entry["rows_written"] = len(transitions)
+
     def _ensure_mean_field_files(self, key, idx, shape_obj):
         """Return or create the CSV writers used for mean-field logging."""
         if not self.run_folder:
@@ -586,17 +684,31 @@ class SpaceDataHandling(DataHandling):
         sensory_path = os.path.join(self.run_folder, f"{agent_id}_sensory.csv")
         targets_path = os.path.join(self.run_folder, f"{agent_id}_targets.csv")
         position_path = os.path.join(self.run_folder, f"{agent_id}_position.csv")
+        ddm_path = os.path.join(self.run_folder, f"{agent_id}_ddm.csv")
+        ddm_tr_path = os.path.join(self.run_folder, f"{agent_id}_ddm_transitions.csv")
         neural_handle = open(neural_path, "w", newline="")
         perception_handle = open(perception_path, "w", newline="")
         sensory_handle = open(sensory_path, "w", newline="")
         targets_handle = open(targets_path, "w", newline="")
         position_handle = open(position_path, "w", newline="")
+        ddm_handle = open(ddm_path, "w", newline="")
+        ddm_tr_handle = open(ddm_tr_path, "w", newline="")
         entry = {
             "neural": {"handle": neural_handle, "writer": csv.writer(neural_handle), "header_written": False},
             "perception": {"handle": perception_handle, "writer": csv.writer(perception_handle), "header_written": False},
             "sensory": {"handle": sensory_handle, "writer": csv.writer(sensory_handle), "header_written": False},
             "targets": {"handle": targets_handle, "writer": csv.writer(targets_handle), "header_written": False},
             "position": {"handle": position_handle, "writer": csv.writer(position_handle), "header_written": False},
+            # Decision-variable trace for the pure DDM. The ring-shaped CSVs above carry
+            # nothing for that model (its mean_field_state is a placeholder), so without
+            # this the decision variable x(t) and its boundary z(t) are never persisted.
+            "ddm": {"handle": ddm_handle, "writer": csv.writer(ddm_handle), "header_written": False},
+            # Event log for post-commitment flexibility: one row per commit/release.
+            # `rows_written` is the append cursor into the model's cumulative list.
+            "ddm_transitions": {
+                "handle": ddm_tr_handle, "writer": csv.writer(ddm_tr_handle),
+                "header_written": False, "rows_written": 0,
+            },
         }
         self.mean_field_files[(key, idx)] = entry
         return entry
