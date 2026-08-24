@@ -83,6 +83,10 @@ class MeanFieldMovementModel(MovementModel):
             gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
         self.use_thresholding = bool(self.params.get("use_thresholding", True))
+        # Whether the forward speed is gated by the readout order parameter at all.
+        # False -> constant speed (max_absolute_velocity * norm_scale); the readout
+        # still governs the heading, so use_thresholding/g_threshold are unaffected.
+        self.scale_velocity = bool(self.params.get("scale_velocity", True))
         self.reset()
         logger.info(
             "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f)",
@@ -248,14 +252,25 @@ class MeanFieldMovementModel(MovementModel):
             angle_deg = normalize_angle(math.degrees(angle_rad))
             angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
             """Changed since speaking to Alessio, brings us closer to neuromorphic control"""
+            # use_thresholding picks the readout and therefore which order parameter comes
+            # out; scale_velocity decides whether that order parameter gates the speed.
             if not self.use_thresholding:
                 norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
-                self._last_norm = norm
-                scaling = np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0)
+                gate = float(np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0))
             else:
-                norm = final_norm
-                scaling = norm
-            self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling #self.agent.max_absolute_velocity   
+                norm = float(final_norm)
+                gate = norm
+            self._last_norm = norm
+            # No gating: constant speed at norm_scale from the first tick a bump exists.
+            # norm == 0 still means "no bump to steer by", and the heading is arbitrary
+            # there, so the agent must not cruise on it. Under use_thresholding that test
+            # is exact (no neuron above g_threshold); without it, only a literally zero
+            # field is caught, so prefer use_thresholding when running constant speed.
+            if self.scale_velocity:
+                scaling = gate
+            else:
+                scaling = self.norm_scale if norm > 0.0 else 0.0
+            self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling
             logger.debug("%s mean-field raw command -> angle=%.2f norm=%.3f scaling=%.3f", self.agent.get_name(), angle_deg, norm, scaling)
             self.agent.angular_velocity_cmd = angle_deg
             self._last_bump_angle = angle_rad
