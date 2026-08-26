@@ -84,7 +84,19 @@ class MeanFieldMovementModel(TargetModel):
             gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
         self.use_thresholding = bool(self.params.get("use_thresholding", True))
-        # Whether the forward speed is gated by the readout order parameter at all.
+        # Which readout order parameter gates the forward speed:
+        #   "concentration" -> angular coherence, bounded in [0, 1]; an undecided agent
+        #                      physically slows down.
+        #   "magnitude"     -> raw thresholded readout magnitude (unbounded).
+        #   "norm"          -> L2 norm of z, clipped by norm_scale / sqrt(num_neurons).
+        # When unset the legacy mapping is used, so use_thresholding alone selects the
+        # order parameter exactly as it did before the feature/ddm merge.
+        self.scaling_mode = str(
+            self.params.get("scaling_mode", "magnitude" if self.use_thresholding else "norm")
+        ).strip().lower()
+        if self.scaling_mode not in {"concentration", "magnitude", "norm"}:
+            raise ValueError("scaling_mode must be 'concentration', 'magnitude' or 'norm'")
+        # Whether the forward speed is gated by that order parameter at all.
         # False -> constant speed (max_absolute_velocity * norm_scale); the readout
         # still governs the heading, so use_thresholding/g_threshold are unaffected.
         self.scale_velocity = bool(self.params.get("scale_velocity", True))
@@ -123,7 +135,7 @@ class MeanFieldMovementModel(TargetModel):
             g_adapt=self.g_adapt,
             tau_adapt=self.tau_adapt,
             g_threshold=float(self.params.get("g_threshold", 0.6)),
-            use_thresholding=bool(self.params.get("use_thresholding", True)),
+            use_thresholding=self.use_thresholding,
             scaling_mode=self.scaling_mode,
         )
         if hasattr(self, 'bifurcation_detector'):
@@ -212,13 +224,20 @@ class MeanFieldMovementModel(TargetModel):
             angle_deg = normalize_angle(math.degrees(angle_rad))
             angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
             """Changed since speaking to Alessio, brings us closer to neuromorphic control"""
-            # use_thresholding picks the readout and therefore which order parameter comes
-            # out; scale_velocity decides whether that order parameter gates the speed.
-            if not self.use_thresholding:
-                norm = float(np.linalg.norm(neural_field)) if neural_field is not None else final_norm
+            # scaling_mode picks which order parameter comes out (defaulting to the
+            # legacy use_thresholding mapping); scale_velocity decides whether that
+            # order parameter gates the speed at all.
+            mf = self.mean_field_system
+            if self.scaling_mode == "norm":
+                norm = float(np.linalg.norm(neural_field)) if neural_field is not None else float(mf.last_l2)
                 gate = float(np.clip(self.norm_scale * norm / max(1.0, math.sqrt(self.num_neurons)), 0.0, 1.0))
-            else:
-                norm = float(final_norm)
+            elif self.scaling_mode == "concentration":
+                norm = float(mf.last_concentration)
+                gate = float(np.clip(norm, 0.0, 1.0))
+            else:  # "magnitude"
+                # last_magnitude is computed regardless of use_thresholding, and equals
+                # the returned final_norm whenever use_thresholding is True.
+                norm = float(mf.last_magnitude)
                 gate = norm
             self._last_norm = norm
             # No gating: constant speed at norm_scale from the first tick a bump exists.
