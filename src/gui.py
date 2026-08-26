@@ -221,6 +221,12 @@ class GUI_2D(QWidget):
         self._bump_panel_visible = False
         self._input_histories = {}
         self._bump_strength_history = {}
+        # Embodied-DDM inspector: per-target evidence y_i(t) and drift mu_i(t) traces,
+        # plus lazily-created cartesian axes that replace the polar ring bands.
+        self._ddm_histories = {}
+        self._pure_ddm_histories = {}
+        self.ddm_evidence_ax = None
+        self.ddm_input_ax = None
         self.spin_window = None
         self.spin_panel_visible = False
         self.abstract_dot_items = []
@@ -646,7 +652,11 @@ class GUI_2D(QWidget):
         if not self.spin_window:
             return
         title = "Spin Model"
-        if isinstance(spin, dict) and spin.get("model") == "mean_field":
+        if isinstance(spin, dict) and spin.get("decision_model") == "embodied_pure_ddm":
+            title = "Embodied Pure DDM Inspector"
+        elif isinstance(spin, dict) and spin.get("decision_model") == "embodied_ddm":
+            title = "Embodied DDM Inspector"
+        elif isinstance(spin, dict) and spin.get("model") == "mean_field":
             title = "Mean-Field Inspector"
         self.spin_window.setWindowTitle(title)
 
@@ -654,6 +664,8 @@ class GUI_2D(QWidget):
         """Forget all live mean-field history traces."""
         self._input_histories = {}
         self._bump_strength_history = {}
+        self._ddm_histories = {}
+        self._pure_ddm_histories = {}
 
     def _extract_mean_field_input_snapshot(self, spin):
         """Return normalized mean-field target signals from the latest agent payload."""
@@ -899,6 +911,369 @@ class GUI_2D(QWidget):
         handles, labels = self.input_ax.get_legend_handles_labels()
         if handles and labels:
             self.input_ax.legend(loc="upper right", fontsize=8, frameon=False)
+
+    # ------------------------------------------------------------------
+    # Embodied-DDM inspector
+    #
+    # For an accumulator agent the polar ring bands and "max neural activation" trace
+    # are meaningless. Instead we show two cartesian time-series that make the decision
+    # legible: how evidence integrates per target (y_i over time) and the final sensory
+    # drive entering the model (mu_i over time). The ring-attractor inspector is left
+    # entirely untouched.
+    # ------------------------------------------------------------------
+    def _ensure_ddm_axes(self) -> None:
+        """Lazily create the two cartesian axes used by the DDM inspector."""
+        if self.ddm_evidence_ax is None and self.figure is not None:
+            self.ddm_evidence_ax = self.figure.add_axes([0.15, 0.56, 0.80, 0.36])
+            self.ddm_input_ax = self.figure.add_axes([0.15, 0.09, 0.80, 0.34])
+            self.ddm_evidence_ax.set_visible(False)
+            self.ddm_input_ax.set_visible(False)
+
+    def _set_ring_bands_visible(self, visible: bool) -> None:
+        """Show/hide the ring-attractor polar bands and their colorbars."""
+        if self.ax is not None:
+            self.ax.set_visible(visible)
+        for cax in (self.cax_state, self.cax_perception, self.cax_tanh, self.cax_b_ax):
+            if cax is None:
+                continue
+            has_cbar = (
+                (cax is self.cax_state and self.state_cbar is not None)
+                or (cax is self.cax_perception and self.perception_cbar is not None)
+                or (cax is self.cax_tanh and self.tanh_cbar is not None)
+                or (cax is self.cax_b_ax and self.b_cbar is not None)
+            )
+            cax.set_visible(bool(visible and has_cbar))
+
+    def _extract_ddm_snapshot(self, spin):
+        """Return per-target evidence/drift for an embodied-DDM payload, or None."""
+        if not isinstance(spin, dict) or spin.get("decision_model") != "embodied_ddm":
+            return None
+        signals = spin.get("mean_field_target_signals") or []
+        targets = []
+        for idx, entry in enumerate(signals):
+            if not isinstance(entry, dict):
+                continue
+            tid = str(entry.get("id") or entry.get("label") or f"target_{idx}")
+            targets.append(
+                {
+                    "id": tid,
+                    "label": str(entry.get("label") or tid),
+                    "y": float(entry.get("accumulator", 0.0)),
+                    "mu": float(entry.get("drift", 0.0)),
+                }
+            )
+        if not targets:
+            return None
+        return {
+            "time": float(self.time),
+            "targets": targets,
+            "committed_id": spin.get("accumulator_committed_id"),
+            "commitment_mode": spin.get("accumulator_commitment_mode"),
+            "Z": spin.get("accumulator_Z"),
+            "concentration": float(spin.get("accumulator_concentration", 0.0)),
+        }
+
+    def _append_ddm_sample(self, agent_key, snapshot) -> None:
+        """Append one evidence/drift sample to the rolling DDM history."""
+        if snapshot is None:
+            return
+        current_time = float(snapshot.get("time", self.time))
+        entries = snapshot.get("targets") or []
+        history = self._ddm_histories.get(agent_key)
+        if history is None or (
+            history.get("last_time") is not None and current_time < float(history["last_time"])
+        ):
+            history = {"times": deque(), "targets": {}, "last_time": None}
+            self._ddm_histories[agent_key] = history
+        last_time = history.get("last_time")
+        if last_time is not None and math.isclose(current_time, float(last_time), rel_tol=0.0, abs_tol=1e-9):
+            return
+        target_map = {str(e["id"]): e for e in entries if isinstance(e, dict) and e.get("id")}
+        existing = len(history["times"])
+        for tid, entry in target_map.items():
+            if tid not in history["targets"]:
+                history["targets"][tid] = {
+                    "label": entry.get("label", tid),
+                    "y": deque([float("nan")] * existing),
+                    "mu": deque([float("nan")] * existing),
+                }
+        history["times"].append(current_time)
+        for tid, series in history["targets"].items():
+            entry = target_map.get(tid)
+            series["y"].append(float(entry["y"]) if entry else float("nan"))
+            series["mu"].append(float(entry["mu"]) if entry else float("nan"))
+        history["last_time"] = current_time
+        while history["times"] and current_time - history["times"][0] > self.input_history_seconds:
+            history["times"].popleft()
+            for series in history["targets"].values():
+                if series["y"]:
+                    series["y"].popleft()
+                if series["mu"]:
+                    series["mu"].popleft()
+
+    def _update_ddm_histories(self) -> None:
+        """Capture evidence/drift traces for all DDM agents in the current snapshot."""
+        if not self.agents_spins:
+            return
+        for group_key, spins in self.agents_spins.items():
+            if not isinstance(spins, list):
+                continue
+            for idx, spin in enumerate(spins):
+                snapshot = self._extract_ddm_snapshot(spin)
+                if snapshot is None:
+                    continue
+                self._append_ddm_sample((group_key, idx), snapshot)
+
+    def _update_ddm_inspector(self, spin) -> None:
+        """Render the accumulator inspector: evidence y_i(t) and sensory drive mu_i(t)."""
+        self._show_spin_canvas()
+        self._ensure_ddm_axes()
+        # Hide the ring-attractor widgets for this agent.
+        self._set_ring_bands_visible(False)
+        if self.bump_ax is not None:
+            self.bump_ax.set_visible(False)
+        if self.input_ax is not None:
+            self.input_ax.set_visible(False)
+        self.ddm_evidence_ax.set_visible(True)
+        self.ddm_input_ax.set_visible(True)
+        self._draw_ddm_series(spin)
+        self.canvas.draw_idle()
+
+    def _draw_ddm_series(self, spin) -> None:
+        """Draw the two DDM time-series from the rolling history."""
+        ev_ax = self.ddm_evidence_ax
+        in_ax = self.ddm_input_ax
+        ev_ax.clear()
+        in_ax.clear()
+        history = self._ddm_histories.get(self.clicked_spin) if self.clicked_spin else None
+        committed_id = spin.get("accumulator_committed_id") if isinstance(spin, dict) else None
+        commitment_mode = spin.get("accumulator_commitment_mode") if isinstance(spin, dict) else None
+        concentration = float(spin.get("accumulator_concentration", 0.0)) if isinstance(spin, dict) else 0.0
+
+        if history and history.get("times"):
+            times = list(history["times"])
+            cmap = plt.get_cmap("tab10")
+            for idx, (tid, series) in enumerate(history["targets"].items()):
+                color = cmap(idx % cmap.N)
+                label = str(series.get("label", tid))
+                is_winner = committed_id is not None and str(tid) == str(committed_id)
+                ev_ax.plot(
+                    times, list(series["y"]), color=color,
+                    linewidth=3.0 if is_winner else 1.8,
+                    label=(label + "  ◀ committed") if is_winner else label,
+                )
+                in_ax.plot(times, list(series["mu"]), color=color, linewidth=1.8, label=label)
+            x_max = times[-1]
+            x_min = max(0.0, x_max - self.input_history_seconds)
+            if math.isclose(x_min, x_max, rel_tol=0.0, abs_tol=1e-9):
+                x_min = min(times[0], x_max)
+                x_max = x_min + 1e-6
+            ev_ax.set_xlim(x_min, x_max)
+            in_ax.set_xlim(x_min, x_max)
+            # Commitment threshold reference (only meaningful in threshold mode).
+            if commitment_mode == "threshold" and spin.get("accumulator_Z") is not None:
+                ev_ax.axhline(float(spin["accumulator_Z"]), color="#c0392b",
+                              linewidth=1.0, linestyle="--", alpha=0.7, label="Z (threshold)")
+            handles, labels = ev_ax.get_legend_handles_labels()
+            if handles:
+                ev_ax.legend(loc="upper left", fontsize=8, frameon=False)
+            in_handles, in_labels = in_ax.get_legend_handles_labels()
+            if in_handles:
+                in_ax.legend(loc="upper left", fontsize=8, frameon=False)
+
+        commit_txt = f"committed: {committed_id}" if committed_id else "deliberating"
+        ev_ax.set_title(
+            f"Evidence accumulation  yᵢ(t)",
+            fontsize=11,
+        )
+        ev_ax.set_ylabel("Accumulated evidence yᵢ")
+        ev_ax.grid(True, alpha=0.25)
+        ev_ax.margins(x=0.02, y=0.12)
+        ev_ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.4)
+
+        in_ax.set_title("Sensory input to model  μᵢ(t)", fontsize=11, pad=2)
+        in_ax.set_xlabel("Simulation time")
+        in_ax.set_ylabel("Drift μᵢ")
+        in_ax.grid(True, alpha=0.25)
+        in_ax.margins(x=0.02, y=0.15)
+        in_ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.4)
+
+    # ------------------------------------------------------------------
+    # Embodied pure-DDM inspector
+    #
+    # The pure DDM has a single scalar decision variable rather than one accumulator per
+    # target, so the natural view is x(t) inside the +/-z(t) boundary envelope — which
+    # also makes a collapsing boundary directly visible. Reuses the same two cartesian
+    # axes as the LCA inspector.
+    # ------------------------------------------------------------------
+    def _extract_pure_ddm_snapshot(self, spin):
+        """Return decision variable, boundary and sensory input for a pure-DDM payload."""
+        if not isinstance(spin, dict) or spin.get("decision_model") != "embodied_pure_ddm":
+            return None
+        labels = spin.get("pure_ddm_labels") or ["target 0", "target 1"]
+        q = np.asarray(spin.get("pure_ddm_q", [0.0, 0.0]), dtype=float).reshape(-1)
+        q_hat = np.asarray(spin.get("pure_ddm_q_hat", [0.0, 0.0]), dtype=float).reshape(-1)
+        if q.size < 2:
+            q = np.zeros(2)
+        if q_hat.size < 2:
+            q_hat = np.zeros(2)
+        return {
+            "time": float(self.time),
+            "x": float(spin.get("pure_ddm_x", 0.0)),
+            "z": float(spin.get("pure_ddm_z", 0.0)),
+            "q": q[:2],
+            "q_hat": q_hat[:2],
+            "labels": [str(l) for l in labels[:2]],
+            "committed": spin.get("pure_ddm_committed"),
+            "committed_id": spin.get("pure_ddm_committed_id"),
+            "policy": spin.get("pure_ddm_threshold_policy"),
+            "boundary_mode": spin.get("pure_ddm_boundary_mode"),
+            "incoherent": bool(spin.get("boundary_policy_incoherent", False)),
+            "rt": spin.get("pure_ddm_rt"),
+        }
+
+    def _append_pure_ddm_sample(self, agent_key, snapshot) -> None:
+        """Append one x/z/sensory sample to the rolling pure-DDM history."""
+        if snapshot is None:
+            return
+        current_time = float(snapshot.get("time", self.time))
+        history = self._pure_ddm_histories.get(agent_key)
+        if history is None or (
+            history.get("last_time") is not None and current_time < float(history["last_time"])
+        ):
+            history = {
+                "times": deque(), "x": deque(), "z": deque(),
+                "q0": deque(), "q1": deque(), "qh0": deque(), "qh1": deque(),
+                "labels": snapshot.get("labels", ["target 0", "target 1"]),
+                "commit_time": None, "last_time": None,
+            }
+            self._pure_ddm_histories[agent_key] = history
+        last_time = history.get("last_time")
+        if last_time is not None and math.isclose(current_time, float(last_time), rel_tol=0.0, abs_tol=1e-9):
+            return
+        history["times"].append(current_time)
+        history["x"].append(float(snapshot["x"]))
+        history["z"].append(float(snapshot["z"]))
+        history["q0"].append(float(snapshot["q"][0]))
+        history["q1"].append(float(snapshot["q"][1]))
+        history["qh0"].append(float(snapshot["q_hat"][0]))
+        history["qh1"].append(float(snapshot["q_hat"][1]))
+        history["labels"] = snapshot.get("labels", history["labels"])
+        if history["commit_time"] is None and snapshot.get("committed") is not None:
+            history["commit_time"] = current_time
+        history["last_time"] = current_time
+        while history["times"] and current_time - history["times"][0] > self.input_history_seconds:
+            history["times"].popleft()
+            for key in ("x", "z", "q0", "q1", "qh0", "qh1"):
+                if history[key]:
+                    history[key].popleft()
+
+    def _update_pure_ddm_histories(self) -> None:
+        """Capture x/z/sensory traces for all pure-DDM agents in the current snapshot."""
+        if not self.agents_spins:
+            return
+        for group_key, spins in self.agents_spins.items():
+            if not isinstance(spins, list):
+                continue
+            for idx, spin in enumerate(spins):
+                snapshot = self._extract_pure_ddm_snapshot(spin)
+                if snapshot is None:
+                    continue
+                self._append_pure_ddm_sample((group_key, idx), snapshot)
+
+    def _update_pure_ddm_inspector(self, spin) -> None:
+        """Render the pure-DDM inspector: x(t) inside +/-z(t), plus the sensory input."""
+        self._show_spin_canvas()
+        self._ensure_ddm_axes()
+        self._set_ring_bands_visible(False)
+        if self.bump_ax is not None:
+            self.bump_ax.set_visible(False)
+        if self.input_ax is not None:
+            self.input_ax.set_visible(False)
+        self.ddm_evidence_ax.set_visible(True)
+        self.ddm_input_ax.set_visible(True)
+        self._draw_pure_ddm_series(spin)
+        self.canvas.draw_idle()
+
+    def _draw_pure_ddm_series(self, spin) -> None:
+        """Draw x(t) with the boundary envelope, and the per-target sensory input."""
+        ev_ax = self.ddm_evidence_ax
+        in_ax = self.ddm_input_ax
+        ev_ax.clear()
+        in_ax.clear()
+        snap = self._extract_pure_ddm_snapshot(spin) or {}
+        history = self._pure_ddm_histories.get(self.clicked_spin) if self.clicked_spin else None
+
+        if history and history.get("times"):
+            times = list(history["times"])
+            xs = list(history["x"])
+            zs = np.asarray(list(history["z"]), dtype=float)
+            labels = history.get("labels", ["target 0", "target 1"])
+
+            # Boundary envelope: crossing either edge commits.
+            ev_ax.fill_between(times, -zs, zs, color="#7f8c8d", alpha=0.12, linewidth=0)
+            ev_ax.plot(times, zs, color="#c0392b", linewidth=1.4, linestyle="--",
+                       label=f"+z(t) → {labels[0]}")
+            ev_ax.plot(times, -zs, color="#2980b9", linewidth=1.4, linestyle="--",
+                       label=f"-z(t) → {labels[1]}")
+            ev_ax.plot(times, xs, color="#111111", linewidth=2.2, label="x(t)")
+            commit_time = history.get("commit_time")
+            if commit_time is not None:
+                ev_ax.axvline(commit_time, color="#27ae60", linewidth=1.2, alpha=0.8)
+
+            cmap = plt.get_cmap("tab10")
+            in_ax.plot(times, list(history["q0"]), color=cmap(0), linewidth=1.9, label=labels[0])
+            in_ax.plot(times, list(history["q1"]), color=cmap(1), linewidth=1.9, label=labels[1])
+            in_ax.plot(times, list(history["qh0"]), color=cmap(0), linewidth=0.8, alpha=0.35)
+            in_ax.plot(times, list(history["qh1"]), color=cmap(1), linewidth=0.8, alpha=0.35)
+
+            x_max = times[-1]
+            x_min = max(0.0, x_max - self.input_history_seconds)
+            if math.isclose(x_min, x_max, rel_tol=0.0, abs_tol=1e-9):
+                x_min = min(times[0], x_max)
+                x_max = x_min + 1e-6
+            ev_ax.set_xlim(x_min, x_max)
+            in_ax.set_xlim(x_min, x_max)
+            handles, _ = ev_ax.get_legend_handles_labels()
+            if handles:
+                ev_ax.legend(loc="upper left", fontsize=8, frameon=False, ncol=3)
+            in_handles, _ = in_ax.get_legend_handles_labels()
+            if in_handles:
+                in_ax.legend(loc="upper left", fontsize=8, frameon=False)
+
+        committed_id = snap.get("committed_id")
+        commit_txt = f"committed: {committed_id}" if committed_id else "deliberating"
+        rt = snap.get("rt")
+        rt_txt = f"   RT {rt:.2f}s" if isinstance(rt, (int, float)) else ""
+        ev_ax.set_title(
+            f"Decision variable x(t) vs boundary ±z(t)   —   {commit_txt}{rt_txt}",
+            fontsize=11,
+        )
+        ev_ax.set_ylabel("x (accumulated evidence)")
+        ev_ax.grid(True, alpha=0.25)
+        ev_ax.margins(x=0.02, y=0.12)
+        ev_ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.4)
+        if snap.get("incoherent"):
+            # Plan Section 4.1: never let this combination be read as an optimality result.
+            ev_ax.text(
+                0.99, 0.03,
+                "bayes_risk/reward_rate give the optimal CONSTANT boundary - collapse not justified",
+                transform=ev_ax.transAxes, ha="right", va="bottom",
+                fontsize=7, color="#c0392b",
+            )
+
+        policy = snap.get("policy") or "?"
+        mode = snap.get("boundary_mode") or "?"
+        in_ax.set_title(
+            f"Sensory input to model  qᵢ(t)   (bold = clean, faint = sampled)"
+            f"   [policy {policy}, boundary {mode}]",
+            fontsize=10, pad=2,
+        )
+        in_ax.set_xlabel("Simulation time")
+        in_ax.set_ylabel("Quality qᵢ")
+        in_ax.grid(True, alpha=0.25)
+        in_ax.margins(x=0.02, y=0.15)
+        in_ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.4)
 
     def _on_graph_window_closed(self):
         """React when the graph window is manually closed."""
@@ -1689,6 +2064,22 @@ class GUI_2D(QWidget):
             self._clear_selection(update_view=False)
             return
         self._update_spin_window_title(spin)
+        # Embodied-DDM agents use a dedicated cartesian inspector (evidence + drive over
+        # time), not the ring-attractor polar bands.
+        if isinstance(spin, dict) and spin.get("decision_model") == "embodied_ddm":
+            self._update_ddm_inspector(spin)
+            return
+        if isinstance(spin, dict) and spin.get("decision_model") == "embodied_pure_ddm":
+            self._update_pure_ddm_inspector(spin)
+            return
+        # Returning from a DDM agent to a ring-attractor agent: restore the polar bands.
+        if self.ddm_evidence_ax is not None and self.ddm_evidence_ax.get_visible():
+            self.ddm_evidence_ax.set_visible(False)
+            self.ddm_input_ax.set_visible(False)
+        if self.ax is not None and not self.ax.get_visible():
+            self._set_ring_bands_visible(True)
+            if self.bump_ax is not None:
+                self.bump_ax.set_visible(True)
         display_states = spin
         display_angles = None
         display_field = None
@@ -1874,6 +2265,8 @@ class GUI_2D(QWidget):
                 self.agents_spins = data["agents_spins"]
                 self._update_input_histories()
                 self._update_bump_strength_histories()
+                self._update_ddm_histories()
+                self._update_pure_ddm_histories()
                 self._refresh_agent_centers()
                 if self.connection_features_enabled:
                     self.agents_metadata = data.get("agents_metadata", {})
