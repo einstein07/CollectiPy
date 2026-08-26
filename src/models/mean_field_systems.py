@@ -393,7 +393,7 @@ class MeanFieldSystem:
         y[0] = y0
 
         N = n  # number of neurons
-        for i in range(1, len(t_eval)):
+        """for i in range(1, len(t_eval)):
             z_prev = y[i-1, :N]
             a_prev = y[i-1, N:]
 
@@ -410,6 +410,21 @@ class MeanFieldSystem:
             y[i, :N] = z_prev + dt * z_dot + noise
             y[i, N:] = a_prev + dt * a_dot
 
+        return y"""
+        for i in range(1, len(t_eval)):
+            z_prev = y[i-1, :N]
+            a_prev = y[i-1, N:]
+
+            noise = randn_like_func(z_prev, sigma * np.sqrt(dt), 1.0 / np.sqrt(N))
+
+            drive = u * (M @ z_prev) + b - beta - (g_adapt * a_prev)
+            z_dot = -z_prev + np.tanh(drive) - np.tanh(-beta) + noise
+
+            a_dot = (-a_prev + z_prev) / tau_adapt
+
+            y[i, :N] = z_prev + dt * z_dot
+            y[i, N:] = a_prev + dt * a_dot
+
         return y
     
     @staticmethod
@@ -417,12 +432,17 @@ class MeanFieldSystem:
         dt = t_eval[1] - t_eval[0]
         y = np.zeros((len(t_eval), len(y0)))
         y[0] = y0
-        for i in range(1, len(t_eval)):
+        """for i in range(1, len(t_eval)):
             # Euler-Maruyama: noise increment ~ sigma*sqrt(dt), applied OUTSIDE the drift
             # so it is not multiplied by dt a second time (see Task 0.1).
             noise = randn_like_func(y[i-1], sigma, 1.0 / np.sqrt(n)) * np.sqrt(dt)
             dydt = -y[i-1] + np.tanh(u * M @ y[i-1] + b - beta) - np.tanh(-beta)
             y[i] = y[i-1] + dt * dydt + noise
+        return y"""
+        for i in range(1, len(t_eval)):
+            noise = randn_like_func(y[i-1], sigma * np.sqrt(dt), 1.0 / np.sqrt(n))
+            dydt = -y[i-1] + np.tanh(u * M @ y[i-1] + b - beta) - np.tanh(-beta) + noise
+            y[i] = y[i-1] + dt * dydt
         return y
     
     @staticmethod
