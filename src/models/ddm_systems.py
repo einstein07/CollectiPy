@@ -111,6 +111,7 @@ class DriftDiffusionSystem:
         lambda_t: Optional[float] = None,
         delta_min: float = 1e-3,
         A_source: str = "ensemble",
+        drift_knowledge: str = "known_magnitude",
         A_lognormal_s: float = 0.0,
         A_lognormal_debias: bool = True,
         A_lognormal_redraw: str = "onset",
@@ -135,6 +136,7 @@ class DriftDiffusionSystem:
         flexibility: bool = False,
         post_commit_accumulation: str = "unbounded",
         A_expected: Optional[float] = None,
+        A_expected_deferred: bool = False,
         rng: np.random.Generator | None = None,
     ):
         eta = np.asarray(eta_rate, dtype=float).reshape(-1)
@@ -171,9 +173,12 @@ class DriftDiffusionSystem:
         if self.boundary_mode not in {"static", "collapsing"}:
             raise ValueError("boundary_mode must be 'static' or 'collapsing'")
         self.threshold_policy = str(threshold_policy).strip().lower()
-        if self.threshold_policy not in {"manual", "bayes_risk", "reward_rate", "geometric"}:
+        if self.threshold_policy not in {
+            "manual", "bayes_risk", "reward_rate", "geometric", "bellman",
+        }:
             raise ValueError(
-                "threshold_policy must be 'manual', 'bayes_risk', 'reward_rate' or 'geometric'"
+                "threshold_policy must be 'manual', 'bayes_risk', 'reward_rate', "
+                "'geometric' or 'bellman'"
             )
         self.z_manual = float(z_manual)
         self.cost_ratio = float(cost_ratio)
@@ -209,6 +214,88 @@ class DriftDiffusionSystem:
             raise ValueError(
                 "A_source must be 'oracle', 'ensemble', 'online_evidence' or "
                 "'online_lognormal' ('online' is a deprecated alias for 'online_evidence')"
+            )
+
+        # Resolved here rather than further down because the known-|A| validation
+        # immediately below needs it.
+        self.A_expected = None if A_expected is None else float(A_expected)
+        # DEFERRED RESOLUTION. `A_expected` is not free information the experimenter has
+        # to supply twice: the scenario already declares the target qualities, and their
+        # gap IS the ensemble magnitude. When the caller owns those declared qualities
+        # (the movement model does; this class does not) it constructs with
+        # A_expected_deferred=True and calls `resolve_ensemble_A` once, before the first
+        # `update_A_hat`. Crucially this is NOT the deleted running-mean fallback: the
+        # value comes from the scenario DEFINITION, not from the evidence, so it is a
+        # block-level constant, defined before the first tick and independent of trial
+        # history -- the two properties Section 3 removed the old fallback to protect.
+        self.A_expected_deferred = bool(A_expected_deferred)
+
+        # --- TASK_A_KNOWN_DRIFT.md: state the assumption, then enforce it -------
+        # THE ASSUMPTION: the agent knows the MAGNITUDE |A| = |q0 - q1|; it does not know
+        # the SIGN. Its task is sign discrimination only. This is load-bearing, not
+        # cosmetic: `a = 2Az/c^2` IS the log-odds at commitment only if A is known, and
+        # that identity is what makes a constant boundary optimal absent geometry change.
+        # It follows that under this model the collapse has EXACTLY ONE SOURCE -- the
+        # geometry -- which is what makes every collapse result attributable.
+        self.drift_knowledge = str(drift_knowledge).strip().lower()
+        if self.drift_knowledge not in {"known_magnitude", "estimated"}:
+            raise ValueError(
+                "drift_knowledge must be 'known_magnitude' (the implemented model, "
+                "TASK_A_KNOWN_DRIFT.md) or 'estimated' (TASK_B_UNKNOWN_DRIFT.md)"
+            )
+        if self.drift_knowledge == "known_magnitude":
+            if self.A_source not in {"ensemble", "oracle"}:  # noqa: E501
+                raise ValueError(
+                    f"A_source '{self.A_source}' is an ESTIMATION model: it infers |A| "
+                    "from the evidence, which the known-|A| model does not permit (it "
+                    "would make z* depend on trial history and give the collapse a "
+                    "second source). Only 'ensemble' and 'oracle' are coherent here. "
+                    "See TASK_B_UNKNOWN_DRIFT.md for the model where |A| is unknown; to "
+                    "run this configuration as that model set "
+                    "drift_knowledge: 'estimated'."
+                )
+            # Enforced only where A_hat actually DETERMINES the boundary. Under
+            # threshold_policy 'manual' z is a fixed number and A_hat reaches nothing but
+            # the logs, so there is no z*(Delta) whose invariance the requirement could
+            # buy -- Section 3's stated reason for it. Demanding A_expected there would be
+            # friction without a property.
+            a_drives_z = self.threshold_policy in {
+                "bayes_risk", "reward_rate", "geometric", "bellman",
+            }
+            # Deferral is only meaningful where A_hat DETERMINES the boundary. Under
+            # 'manual' nothing reads it, so a symmetric-tie scenario -- identical target
+            # qualities, a perfectly legitimate experiment -- must not fail on a
+            # deduction it never needed.
+            if not a_drives_z:
+                self.A_expected_deferred = False
+            if (
+                a_drives_z
+                and self.A_source == "ensemble"
+                and self.A_expected is None
+                and not self.A_expected_deferred
+            ):
+                # The null -> running-mean fallback is removed (TASK_A Section 3): it is
+                # UNDEFINED at evidence onset, which is exactly when z* is first computed,
+                # and it silently makes z* depend on trial history. Deferred resolution
+                # from the DECLARED target qualities is exempt: see A_expected_deferred.
+                raise ValueError(
+                    "A_expected is REQUIRED under A_source 'ensemble': it is the "
+                    "magnitude the agent is assumed to know. There is no null fallback -- "
+                    "a running mean is undefined at evidence onset, which is when z* is "
+                    "first computed. Set A_expected, use A_source 'oracle' to take the "
+                    "true per-trial |q0 - q1|, or construct with A_expected_deferred=True "
+                    "and call resolve_ensemble_A() with the declared target qualities."
+                )
+            if self.A_expected is not None and float(self.A_expected) <= 0.0:
+                raise ValueError("A_expected must be > 0 under the known-|A| model")
+        else:
+            # Task B owns the history-dependent estimate; there is nothing to deduce.
+            self.A_expected_deferred = False
+            logger.info(
+                "drift_knowledge 'estimated': A_source '%s' infers |A| from the evidence. "
+                "This is NOT the known-|A| model -- `a` is no longer a confidence and the "
+                "collapse has a second source. See TASK_B_UNKNOWN_DRIFT.md.",
+                self.A_source,
             )
         self.A_lognormal_s = float(A_lognormal_s)
         if self.A_lognormal_s < 0.0:
@@ -271,7 +358,6 @@ class DriftDiffusionSystem:
                 "(a bounded one-shot reversal window); disabling the latter."
             )
             self.allow_changes_of_mind = False
-        self.A_expected = None if A_expected is None else float(A_expected)
 
         self.rng = rng if rng is not None else np.random.default_rng()
 
@@ -312,6 +398,11 @@ class DriftDiffusionSystem:
         # closes inside one tick, which chatter (Section 3.2) produces constantly.
         # The owner drains this list each tick and enriches it with the pose.
         self.pending_transitions: list = []
+        # Bellman policy: the whole z(t) trajectory is precomputed, so `boundary()`
+        # becomes a table lookup rather than a formula (Section 6).
+        self._z_table_t = None
+        self._z_table_z = None
+        self.past_horizon = False
         self.z_current = float(self.z_manual)
         self.z0 = float(self.z_manual)
         self.z_star_at_onset: Optional[float] = None
@@ -336,6 +427,29 @@ class DriftDiffusionSystem:
         """Mark that threshold_policy and boundary_mode are an incoherent pairing."""
         self.boundary_policy_incoherent = bool(value)
 
+    def resolve_ensemble_A(self, value: float, *, source: str = "declared qualities") -> float:
+        """Install the ensemble |A| deduced from the scenario (deferred resolution).
+
+        Called once, before the first `update_A_hat`, by a caller that owns the DECLARED
+        target qualities. `value` must be their gap, never a percept-derived or
+        evidence-derived quantity: the point of `ensemble` is one threshold per block, so
+        anything that varies within or across trials would reintroduce exactly the
+        history dependence Section 3 removed the running-mean fallback to prevent.
+        """
+        value = float(value)
+        if not np.isfinite(value) or value <= 0.0:
+            raise ValueError(
+                f"cannot deduce the ensemble |A| from the {source}: the gap is {value!r}. "
+                "Identical target qualities mean A = 0, where every known-|A| boundary "
+                "correctly degenerates to z -> 0 ('evidence is worthless') and there is "
+                "nothing to solve. For a symmetric-tie experiment set A_expected "
+                "explicitly to the discriminability the agent should ASSUME, or use "
+                "threshold_policy 'manual'."
+            )
+        self.A_expected = value
+        self.A_expected_deferred = False
+        return value
+
     # ------------------------------------------------------------------
     # Drift-magnitude estimate (the A entering rho and z*)
     # ------------------------------------------------------------------
@@ -356,9 +470,11 @@ class DriftDiffusionSystem:
 
         Sources:
           oracle           - the true |q0 - q1|. Calibration and V-tests only.
-          ensemble         - A_expected if set, else the running mean of the true
-                             magnitude: one threshold per block, which is the correct
-                             setting for a fixed environment.
+          ensemble         - A_expected: one threshold per block, which is the correct
+                             setting for a fixed environment. Supplied explicitly, or
+                             deduced from the scenario's DECLARED target qualities via
+                             resolve_ensemble_A(). Falls back to the running mean of the
+                             true magnitude only under drift_knowledge 'estimated'.
           online_evidence  - |x|/t from the agent's own accumulated evidence (variance
                              c^2/t); falls back to the percept magnitude at t = 0.
           online_lognormal - |q0 - q1| * exp(eps), eps ~ N(0, s^2), drawn ONCE at evidence
@@ -397,6 +513,17 @@ class DriftDiffusionSystem:
                 self._A_lognormal_hat = gap * math.exp(eps - adjust)
             estimate = self._A_lognormal_hat
         else:  # "ensemble"
+            # No null fallback under the known-|A| model -- __init__ has already refused
+            # A_expected=None there. `running_mean` survives only for the 'estimated'
+            # (Task B) arm, where a history-dependent estimate is the point rather than a
+            # violation.
+            if self.A_expected is None and self.A_expected_deferred:
+                raise RuntimeError(
+                    "A_expected was deferred but never resolved: call "
+                    "resolve_ensemble_A() with the declared target qualities BEFORE the "
+                    "first update_A_hat(), or the threshold would silently fall back to "
+                    "a history-dependent running mean."
+                )
             estimate = (
                 float(self.A_expected) if self.A_expected is not None else running_mean
             )
@@ -940,8 +1067,39 @@ class DriftDiffusionSystem:
         if self.z_star_at_onset is None:
             self.z_star_at_onset = self.z0
 
+    def set_bellman_table(self, t_grid, z_values) -> None:
+        """Install a precomputed optimal boundary `z(t)` (FEATURE_BELLMAN_POLICY Section 6).
+
+        Unlike every other policy this one is solved once for the whole trajectory, so
+        `threshold_update_ticks` has nothing to do and is ignored by the caller.
+        """
+        t_grid = np.asarray(t_grid, dtype=float).reshape(-1)
+        z_values = np.asarray(z_values, dtype=float).reshape(-1)
+        if t_grid.size != z_values.size or t_grid.size < 2:
+            raise ValueError("bellman table needs matching t and z arrays of length >= 2")
+        self._z_table_t = t_grid
+        self._z_table_z = z_values
+        self.z0 = float(z_values[0])
+        self.z_current = float(z_values[0])
+        self.past_horizon = False
+
+    def _bellman_z(self, t: float) -> float:
+        """Table lookup with linear interpolation between samples.
+
+        Past the horizon the table has no entry: HOLD the last value and flag it. Do not
+        extrapolate -- the terminal collapse is an artefact of the horizon, not a
+        prediction, and extrapolating it drives z to zero for the wrong reason.
+        """
+        tt = float(t)
+        if tt >= self._z_table_t[-1]:
+            self.past_horizon = True
+            return float(self._z_table_z[-1])
+        return float(np.interp(tt, self._z_table_t, self._z_table_z))
+
     def boundary(self, t: float) -> float:
         """Return the boundary `z(t)`; `t` is time since evidence onset (Section 4.3)."""
+        if self._z_table_z is not None:
+            return float(max(self._bellman_z(t), self.z_min))
         if self.boundary_mode == "static" or self.urgency_mode == "gating":
             return float(self.z0)
         t = max(float(t), 0.0)

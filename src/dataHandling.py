@@ -632,6 +632,11 @@ class SpaceDataHandling(DataHandling):
             ("recommit_latency", spin_values.get("pure_ddm_recommit_latency")),
             ("total_path_length", spin_values.get("pure_ddm_total_path_length")),
             ("arrived_before_reversal", spin_values.get("pure_ddm_arrived_before_reversal")),
+            # --- bellman policy ---
+            ("z_bellman", spin_values.get("pure_ddm_z_bellman")),
+            ("z_myopic", spin_values.get("pure_ddm_z_myopic")),
+            ("z_gap", spin_values.get("pure_ddm_z_gap")),
+            ("past_horizon", spin_values.get("pure_ddm_past_horizon")),
         ]
         if not ddm_entry["header_written"]:
             ddm_entry["writer"].writerow([name for name, _ in columns])

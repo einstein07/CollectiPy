@@ -91,6 +91,12 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self.geometric_error_mode = str(params.get("geometric_error_mode", "terminal_graded"))
         self.delta_min = float(params.get("delta_min", 1e-3))
         self.A_source = str(params.get("A_source", "ensemble"))
+        # TASK_A_KNOWN_DRIFT.md: the implemented model assumes the agent knows
+        # |A| but not its sign. 'estimated' opts into the Task B arm, where |A|
+        # is inferred from the evidence and `a` is no longer a confidence.
+        self.drift_knowledge = str(
+            params.get("drift_knowledge", "known_magnitude")
+        ).strip().lower()
         self.A_lognormal_s = float(params.get("A_lognormal_s", 0.0))
         self.A_lognormal_debias = bool(params.get("A_lognormal_debias", True))
         self.A_lognormal_redraw = str(params.get("A_lognormal_redraw", "onset"))
@@ -136,6 +142,20 @@ class EmbodiedPureDDMMovementModel(TargetModel):
 
         # --- readout / motion ---
         self.readout_mode = str(params.get("readout_mode", "normalized"))
+        # --- bellman policy (FEATURE_BELLMAN_POLICY) ---
+        self.bellman_cfg = dict(params.get("bellman") or {})
+        if self.threshold_policy == "bellman" and self.threshold_update_ticks not in (0, 1):
+            # The whole trajectory is already solved, so per-tick re-evaluation has
+            # nothing to do. Say so rather than letting a config carried over from
+            # `geometric` look as though it is still doing something.
+            logger.warning(
+                "%s: threshold_update_ticks=%d is IGNORED under threshold_policy "
+                "'bellman' -- z(t) is precomputed for the whole horizon.",
+                agent.get_name(), self.threshold_update_ticks,
+            )
+        self._bellman_diag = None
+        self._bellman_solved = False
+
         # --- post-commitment flexibility (FEATURE_POST_COMMITMENT_FLEXIBILITY) ---
         self.flexibility = bool(params.get("flexibility", False))
         self.post_commit_accumulation = str(
@@ -273,6 +293,9 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self._total_path_length = 0.0
         self._last_xy: Optional[tuple] = None
         self._feasibility_checked = False
+        self._bellman_solved = False
+        self._bellman_diag = None
+        self._A_expected_resolved = False
         params = self.params
 
         # The evidence pipeline is literally the LCA's: same quality modulation, same
@@ -324,6 +347,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             lambda_t=self.lambda_t,
             delta_min=self.delta_min,
             A_source=self.A_source,
+            drift_knowledge=self.drift_knowledge,
             A_lognormal_s=self.A_lognormal_s,
             A_lognormal_debias=self.A_lognormal_debias,
             A_lognormal_redraw=self.A_lognormal_redraw,
@@ -346,6 +370,14 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             flexibility=self.flexibility,
             post_commit_accumulation=self.post_commit_accumulation,
             A_expected=params.get("A_expected"),
+            # The scenario already declares the target qualities, so A_expected is
+            # redundant under 'ensemble': defer it and deduce the gap from those declared
+            # qualities at evidence onset (_resolve_A_expected). NOT the deleted
+            # running-mean fallback -- the value comes from the scenario definition, so it
+            # is a block constant, known before the first tick and free of trial history.
+            A_expected_deferred=(
+                params.get("A_expected") is None and self.A_source == "ensemble"
+            ),
             rng=self._make_rng(),
         )
         self.ddm.flag_policy_incoherent(self.boundary_policy_incoherent)
@@ -449,6 +481,10 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         # Steps 6-7 — resolve the drift estimate, refresh the boundary, then integrate.
         # update_A_hat must run BEFORE _update_threshold: the threshold consumes
         # A_hat, and at evidence onset ddm.step() has not run yet.
+        # `s` is the DECLARED quality of each target (the detection layer passes the
+        # configured object strength through untouched), not a pose-dependent percept, so
+        # it is the right source for a block-level magnitude.
+        self._resolve_A_expected(s, ids)
         self.ddm.update_A_hat(q)
         self._update_threshold(q, phi, d)
         state = self.ddm.step(q, dt)
@@ -724,6 +760,80 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             return False
         return state.t_evidence >= self._commit_effective_at
 
+    def _resolve_A_expected(self, s, ids) -> None:
+        """Deduce the ensemble |A| from the declared target qualities, and report it.
+
+        A_expected is redundant information: the scenario declares each target's quality,
+        and under `A_source: ensemble` the magnitude the agent is assumed to know is
+        exactly their gap. Requiring it in the config as well means keeping two numbers in
+        sync by hand, and nothing catches the drift when they diverge -- the run simply
+        solves for a boundary that does not belong to the process it is simulating.
+
+        This is NOT the running-mean fallback TASK_A_KNOWN_DRIFT.md Section 3 removed. The
+        value comes from the scenario DEFINITION (`s` is the configured object strength,
+        passed through the detection layer untouched), so it is a block-level constant,
+        defined before the first tick and independent of trial history -- which is what
+        keeps z*(Delta) invariant to the per-trial gap (test A2) and the collapse
+        attributable to the geometry alone.
+
+        Runs once per run, at evidence onset. Reports the number either way, because the
+        experimenter's sanity check is `is the |A| the agent assumes the |A| the arena
+        actually presents?`.
+        """
+        if self._A_expected_resolved:
+            return
+        self._A_expected_resolved = True
+
+        declared = abs(float(s[0]) - float(s[1]))
+        listing = ", ".join(
+            f"{tid} = {float(val):.6g}" for tid, val in zip(ids, np.asarray(s, dtype=float))
+        )
+        name = self.agent.get_name()
+
+        # The DDM clears the deferral wherever A_hat does not determine the boundary
+        # (threshold_policy 'manual', drift_knowledge 'estimated'), so a symmetric-tie
+        # scenario is never failed by a deduction nothing would have read.
+        if self.ddm.A_expected_deferred:
+            self.ddm.resolve_ensemble_A(declared, source="declared target qualities")
+            logger.info(
+                "%s: ensemble |A| = %.6g, DEDUCED from the declared target qualities "
+                "(%s). Fixed for the block; set A_expected in the config to override it.",
+                name, declared, listing,
+            )
+            if self.dist_mode != "none" or self.target_quality_modulations:
+                logger.warning(
+                    "%s: dist_mode '%s' / quality modulations make the REALISED drift "
+                    "differ from the declared gap %.6g, which is what the deduced |A| "
+                    "reports. The agent's assumed magnitude is the declared one by "
+                    "construction; do not read the two as the same number.",
+                    name, self.dist_mode, declared,
+                )
+        elif self.ddm.A_expected is not None:
+            logger.info(
+                "%s: ensemble |A| = %.6g (A_expected, set explicitly). The declared "
+                "target qualities (%s) give a gap of %.6g.",
+                name, float(self.ddm.A_expected), listing, declared,
+            )
+            if not math.isclose(float(self.ddm.A_expected), declared, rel_tol=1e-6,
+                                abs_tol=1e-12):
+                logger.warning(
+                    "%s: A_expected = %.6g DISAGREES with the declared gap %.6g (%.0f%% "
+                    "off). Under the known-|A| model the agent is assumed to KNOW the "
+                    "magnitude, so with these two apart `a = 2Az/c^2` is no longer the "
+                    "log-odds at commitment and the boundary does not belong to the "
+                    "process being simulated. Remove A_expected to deduce it from the "
+                    "qualities, or change the target strengths to match.",
+                    name, float(self.ddm.A_expected), declared,
+                    100.0 * abs(float(self.ddm.A_expected) - declared) / max(declared, 1e-12),
+                )
+        else:
+            # 'oracle' (tracks the live gap by design) or a policy that never reads |A|.
+            logger.info(
+                "%s: |A| is not a declared constant here (A_source '%s', threshold_policy "
+                "'%s'). The declared target qualities (%s) give a gap of %.6g.",
+                name, self.A_source, self.threshold_policy, listing, declared,
+            )
+
     def _update_threshold(self, q, phi, d) -> None:
         """Recompute the baseline boundary per `threshold_policy` (plan Sections 3.2-3.5)."""
         onset = not self._evidence_started
@@ -765,6 +875,8 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             z = DriftDiffusionSystem.solve_threshold_reward_rate(
                 A, c, self.T0, self.ddm.D_iti, self.ddm.D_penalty
             )
+        elif policy == "bellman":
+            z = self._bellman_threshold(A, c, q, phi, d)
         else:  # geometric
             z = self._geometric_threshold(A, c, q, phi, d)
 
@@ -813,6 +925,98 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             if self.lambda_t_mode == "mvt" else "",
         )
         return self.lambda_t
+
+    def _bellman_threshold(self, A: float, c: float, q, phi, d) -> float:
+        """Solve the free-boundary problem once, then hand the table to the accumulator.
+
+        `geometric` is the QUASI-STATIC approximation to this: it solves the STATIC
+        optimum and re-evaluates it each tick at the current geometry. This solves the
+        actual optimal-stopping problem, with the geometry entering as the time-varying
+        running cost c_tau(t). The tick loop is unchanged either way -- only the way the
+        z array is populated differs.
+        """
+        from models.bellman_boundary import bellman_boundary, myopic_z
+
+        if self._bellman_solved:
+            # Solved for the whole horizon at onset; nothing to recompute per tick.
+            return float(self.ddm.boundary(self.ddm.t_evidence))
+
+        cfg = self.bellman_cfg
+        delta0 = abs(_wrap_pi(float(phi[0]) - float(phi[1])))
+        delta0 = max(delta0, self.delta_min)
+        d_mean = float(np.mean(d))
+        v = self._speed_per_second()
+        # Recover the arena geometry the c_tau derivation assumes: the agent closes on
+        # the bisector foot at r0, with the targets +-L/2 either side of it.
+        r0 = d_mean * math.cos(delta0 / 2.0)
+        half_L = d_mean * math.sin(delta0 / 2.0)
+
+        def c_tau_of_t(t: float) -> float:
+            # SAME geometry code as the geometric policy: c_tau = 1 - cos(Delta/2).
+            # Re-deriving it here would let the two policies drift apart and make the
+            # comparison meaningless (Section 5.1).
+            remaining = max(r0 - v * float(t), 1e-6)
+            delta_t = 2.0 * math.atan2(half_L, remaining)
+            return DriftDiffusionSystem.c_tau_linearised(
+                delta_t, predecision_motion=self.predecision_motion
+            )
+
+        T_max = cfg.get("T_max")
+        T_max = float(T_max) if T_max else (r0 / v if v > 1e-12 else 10.0)
+        c_e = float(self.cost_ratio)
+
+        try:
+            t_grid, z_arr, diag = bellman_boundary(
+                A, c, c_e, c_tau_of_t, T_max,
+                N_x=int(cfg.get("N_x", 801)),
+                N_t=int(cfg.get("N_t", 10000)),
+                X_max_factor=float(cfg.get("X_max_factor", 4.0)),
+                z_myopic_onset=myopic_z(A, c, c_e, c_tau_of_t(0.0)),
+                scheme=str(cfg.get("scheme", "crank_nicolson")),
+                horizon_check_factor=cfg.get("T_max_check_factor", 1.5),
+            )
+        except ValueError as exc:
+            logger.error(
+                "%s: the bellman solve failed (%s). Falling back to the geometric "
+                "quasi-static policy for this run.", self.agent.get_name(), exc,
+            )
+            self._bellman_solved = True
+            return self._geometric_threshold(A, c, q, phi, d)
+
+        self.ddm.set_bellman_table(t_grid, z_arr)
+        self._bellman_solved = True
+        self._bellman_diag = diag
+        self._bellman_c_tau_of_t = c_tau_of_t
+        self._bellman_A, self._bellman_c, self._bellman_c_e = A, c, c_e
+        logger.info(
+            "%s: bellman boundary solved -- z(0)=%.4g vs quasi-static z*(0)=%.4g "
+            "(gap %.1f%%), T_max=%.2fs, horizon check %s",
+            self.agent.get_name(), z_arr[0], diag["z_myopic_onset"],
+            100.0 * (diag["z_myopic_onset"] - z_arr[0]) / max(diag["z_myopic_onset"], 1e-12),
+            T_max,
+            "ok" if diag.get("horizon_check", {}).get("ok", True) else "FAILED",
+        )
+        self._geom_log = {
+            "d_1": float(d[0]), "d_2": float(d[1]), "v": v, "delta": delta0,
+            "c_tau": float(c_tau_of_t(0.0)), "c_tau_eff": float(c_tau_of_t(0.0)),
+            "c_err_eff": c_e, "rho": float("nan"), "rho_branch": "bellman",
+            "a_star": float("nan"), "z_star": float(z_arr[0]),
+            "z_floor_analytic": float("nan"), "lambda_t_used": None,
+            "cost_ratio_used": c_e, "geometric_error_mode": self.geometric_error_mode,
+            "T_arr": None,
+        }
+        return float(z_arr[0])
+
+    def _bellman_myopic_now(self) -> Optional[float]:
+        """`z_myopic(t)` at the current evidence time, for the Section 8 comparison.
+
+        One Newton solve per tick, which is what makes the Section 10 figure free.
+        """
+        if not self._bellman_solved or self._bellman_diag is None:
+            return None
+        from models.bellman_boundary import myopic_z
+        return myopic_z(self._bellman_A, self._bellman_c, self._bellman_c_e,
+                        self._bellman_c_tau_of_t(self.ddm.t_evidence))
 
     def _geometric_threshold(self, A: float, c: float, q, phi, d) -> float:
         """Threshold from the embodied cost geometry, and record its diagnostics.
@@ -1143,6 +1347,23 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 self._swap_applied_at is not None and self._t_recommit_after_swap is None
             ),
             "pure_ddm_transitions": list(self._transitions),
+            # --- bellman policy (FEATURE_BELLMAN_POLICY Section 8) ---
+            # z_myopic is computed alongside unconditionally under this policy: it costs
+            # one Newton solve per tick and makes the Section 10 comparison figure free.
+            "pure_ddm_z_bellman": (
+                float(self._last_state.z) if (self._bellman_solved
+                                              and self._last_state is not None) else None
+            ),
+            "pure_ddm_z_myopic": self._bellman_myopic_now(),
+            "pure_ddm_z_gap": (
+                None if (zm := self._bellman_myopic_now()) is None
+                or self._last_state is None else float(zm - self._last_state.z)
+            ),
+            "pure_ddm_past_horizon": bool(getattr(self.ddm, "past_horizon", False)),
+            "pure_ddm_bellman_solve_s": (
+                None if self._bellman_diag is None
+                else float(self._bellman_diag["wall_time_s"])
+            ),
             "boundary_policy_incoherent": bool(self.boundary_policy_incoherent),
         }
         if self.threshold_policy == "geometric" and self._geom_log:
