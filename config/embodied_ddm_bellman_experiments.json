@@ -11,7 +11,15 @@
         "num_runs": 1,
         "ticks_per_second": 10,
         "_comment_ticks_per_second": "ARENA clock, in Hz. Must equal the agent's ticks_per_second: that one sets the DDM's dt (0.05 s here), this one drives the simulation loop and the logging cadence. If they disagree the tick stamps alias against the snapshot offsets and a multi-second decision renders as one or two points.",
-
+        "termination": {
+            "type": "proximity",
+            "target_ids": [
+                "static_0.s#0",
+                "static_1.s#0"
+            ],
+            "radius": 0.05,
+            "agent_ids": "any"
+        },
         "arenas": {
             "arena_0": {
                 "random_seed": 0,
@@ -80,7 +88,7 @@
                     "sensory_time_mode": "world_time",
 
                     "_comment_evidence": "--- evidence. c = sqrt(sum eta_rate^2) = 0.354, and c enters the boundary three times: as the diffusion coefficient of the PDE, through k = 2A/c^2, and through the quasi-static comparison z = a*c^2/(2A). ---",
-                    "eta_rate": [0.25, 0.25],
+                    "eta_rate": [0.224, 0.224],
 
                     "_comment_policy": "--- the policy. 'bellman' solves the free-boundary problem in (x,t) by backward induction, with the geometry entering as the time-varying running cost c_tau(t). Solved ONCE at evidence onset and cached as a z(t) table; threshold_update_ticks has nothing to do and is ignored. ---",
                     "threshold_policy": "bellman",
@@ -90,7 +98,7 @@
                     "A_source": "ensemble",
 
                     "_comment_costs": "--- costs. c_e is the terminal error cost (0-1 loss); c_tau(t) is the running cost of deliberating, derived from the live geometry. Only their ratio matters, so c_e is carried by cost_ratio alone. CALIBRATION: cost_ratio is the one lever that lengthens decisions (z ~ cost_ratio in the small-rho branch), and it decides whether this config demonstrates anything. At 1.0 the mean RT is ~0.35 s against an 8.8 s horizon: the decision is over inside the first 4% of the run, the geometry has not moved, and z(t) is indistinguishable from a constant boundary -- the onset gap to the quasi-static policy is only 6%. At 3.0 the mean RT is ~1.6 s, the boundary falls measurably as Delta opens, and the onset gap is 14.9%. Push much past 5.0 and the expected decision time exceeds T_max, where the table is held flat and the terminal collapse is an artefact of the horizon rather than a result. ---",
-                    "cost_ratio": 1.0,
+                    "cost_ratio": 300.0,
                     "delta_min": 0.001,
                     "_comment_delta_min": "Clamp on the angular separation feeding c_tau: Delta -> 0 makes deliberation free and sends the boundary to infinity.",
                     "z_min": 0.05,
@@ -109,7 +117,7 @@
                         "_comment_T_max_check_factor": "Startup re-solve at 1.5*T_max: if z(t) moves when the horizon moves, the horizon is doing modelling work it should not be doing. Logged as horizon_check.",
                         "N_x": 1601,
                         "_comment_N_x": "Section 5 suggests 801; the boundary gap converges from BELOW as the grid refines, so 801 understates it by ~27% and puts a visible sawtooth on z(t). 1601 halves the ripple; use 3201 for figures.",
-                        "N_t": 10000,
+                        "N_t": 433000,
                         "_comment_N_t": "The free boundary converges as O(sqrt(dt)) (smooth pasting makes the contact tangential), so dt <~ 1e-3 is needed to bring z(t) inside 2 dx. Still well under a second to solve.",
                         "X_max_factor": 4.0,
                         "_comment_X_max_factor": "Grid half-width in units of the quasi-static z(0). Raise it if the solver warns that part of the horizon has no contact set inside X_max.",
