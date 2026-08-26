@@ -1,0 +1,133 @@
+{
+    "_comment_scope": "BELLMAN POLICY ONLY (FEATURE_BELLMAN_POLICY.md). Every key under `embodied_pure_ddm` below is read on the threshold_policy 'bellman' code path; nothing else is present. Parameters belonging to the other policies (collapse_form / tau_c / weibull_* / collapse_rate / deadline_T for the parametric collapse, lambda_t and geometric_error_mode for the geometric quasi-static policy, D_iti / D_penalty for reward_rate, z_manual for manual, A_lognormal_* for the estimated-|A| arm, urgency_*, extended / s_A / s_x, flexibility / quality_swap) are deliberately OMITTED and fall back to their code defaults, which the bellman path never reads: once set_bellman_table() has installed z(t), DriftDiffusionSystem.boundary() returns the table and boundary_mode / collapse_form are bypassed entirely. See config/embodied-pure-ddm-2-targets.json for the fully documented superset.",
+    "environment": {
+        "logging": {
+            "console": true,
+            "console_level": "INFO",
+            "file_level": "INFO"
+        },
+        "collisions": false,
+        "time_limit": 60,
+        "num_runs": 1,
+        "ticks_per_second": 10,
+        "_comment_ticks_per_second": "ARENA clock, in Hz. Must equal the agent's ticks_per_second: that one sets the DDM's dt (0.05 s here), this one drives the simulation loop and the logging cadence. If they disagree the tick stamps alias against the snapshot offsets and a multi-second decision renders as one or two points.",
+
+        "arenas": {
+            "arena_0": {
+                "random_seed": 0,
+                "radius": 1,
+                "_id": "square",
+                "color": "white"
+            }
+        },
+        "_comment_quality": "The strengths ARE the drift: with normalize 'none' and dist_mode 'none' the perceived quality is the object strength, so A = |q0 - q1| = 4.12 - 4.00 = 0.12 EXACTLY. Under the known-|A| model that number must equal A_expected below -- if the two disagree the agent is solving for a boundary that does not belong to the process it is running, and `a = 2Az/c^2` stops being the log-odds at commitment. Change one and change the other.",
+        "_comment_geometry": "The layout IS an input to the boundary: c_tau(t) is rebuilt from the onset geometry (r0 = d*cos(Delta/2) = 0.433 m, half_L = d*sin(Delta/2) = 0.25 m) and the horizon defaults to T_max = r0/v. Agent at the origin, targets at range 0.5 m, angular separation Delta(0) = 60 deg.",
+        "objects": {
+            "static_0": {
+                "number": [1],
+                "position": [[0.433, -0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "green",
+                "strength": [5.0],
+                "uncertainty": [0]
+            },
+            "static_1": {
+                "number": [1],
+                "position": [[0.433, 0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "red",
+                "strength": [4.95],
+                "uncertainty": [0]
+            }
+        },
+
+        "agents": {
+            "movable_0": {
+                "position": [[0.0, 0.0, 0.0]],
+                "orientation": [[0, 0, 0]],
+                "number": [1],
+                "shape": "cylinder",
+                "linear_velocity": 0.001,
+                "_comment_linear_velocity": "m/s. Enters the boundary: c_tau(t) advances the agent along the bisector as r0 - v*t, and T_max = r0/v = 8.66 s.",
+                "angular_velocity": 10,
+                "ticks_per_second": 10,
+                "height": 0.02,
+                "diameter": 0.033,
+                "color": "blue",
+                "detection": {
+                    "type": "GPS",
+                    "range": 5.0,
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "embodied_pure_ddm",
+
+                "embodied_pure_ddm": {
+                    "_comment_structure": "--- structure. K == 2 only. ---",
+                    "target_ids": [
+                        "static_0.s#0",
+                        "static_1.s#0"
+                    ],
+                    "reference": "egocentric",
+                    "perception_width": 0.2,
+                    "perception_global_inhibition": 0.2,
+                    "task": "selection",
+                    "sensory_time_mode": "world_time",
+
+                    "_comment_evidence": "--- evidence. c = sqrt(sum eta_rate^2) = 0.354, and c enters the boundary three times: as the diffusion coefficient of the PDE, through k = 2A/c^2, and through the quasi-static comparison z = a*c^2/(2A). ---",
+                    "eta_rate": [0.25, 0.25],
+
+                    "_comment_policy": "--- the policy. 'bellman' solves the free-boundary problem in (x,t) by backward induction, with the geometry entering as the time-varying running cost c_tau(t). Solved ONCE at evidence onset and cached as a z(t) table; threshold_update_ticks has nothing to do and is ignored. ---",
+                    "threshold_policy": "bellman",
+
+                    "_comment_drift": "--- known |A|. The policy is only defined if the agent knows the drift MAGNITUDE (it does not know the sign; that is the task). Under A_source 'ensemble' that magnitude is DEDUCED from the declared target strengths above (|5.0 - 4.9| = 0.1) and held fixed for the block -- the qualities are already in the config, so there is no A_expected to keep in sync by hand. The resolved value is logged once at evidence onset ('ensemble |A| = ... DEDUCED from the declared target qualities') for the sanity check. Set A_expected explicitly ONLY to make the agent assume a magnitude other than the one the arena presents; a mismatch is then logged as a warning. ---",
+                    "drift_knowledge": "known_magnitude",
+                    "A_source": "ensemble",
+
+                    "_comment_costs": "--- costs. c_e is the terminal error cost (0-1 loss); c_tau(t) is the running cost of deliberating, derived from the live geometry. Only their ratio matters, so c_e is carried by cost_ratio alone. CALIBRATION: cost_ratio is the one lever that lengthens decisions (z ~ cost_ratio in the small-rho branch), and it decides whether this config demonstrates anything. At 1.0 the mean RT is ~0.35 s against an 8.8 s horizon: the decision is over inside the first 4% of the run, the geometry has not moved, and z(t) is indistinguishable from a constant boundary -- the onset gap to the quasi-static policy is only 6%. At 3.0 the mean RT is ~1.6 s, the boundary falls measurably as Delta opens, and the onset gap is 14.9%. Push much past 5.0 and the expected decision time exceeds T_max, where the table is held flat and the terminal collapse is an artefact of the horizon rather than a result. ---",
+                    "cost_ratio": 1.0,
+                    "delta_min": 0.001,
+                    "_comment_delta_min": "Clamp on the angular separation feeding c_tau: Delta -> 0 makes deliberation free and sends the boundary to infinity.",
+                    "z_min": 0.05,
+                    "_comment_z_min": "Floor applied to the tabulated z(t) at lookup. Also caps the terminal collapse at the horizon, which is an artefact of T_max rather than a prediction.",
+
+                    "_comment_motion": "--- motion. predecision_motion is NOT cosmetic here: it selects the c_tau formula the solver is handed. Under 'midpoint' c_tau = 1 - cos(Delta/2) is EXACT rather than a near-tie linearisation, and the heading is the fixed angular bisector, so the agent closes on the bisector foot at speed v -- precisely the trajectory c_tau(t) assumes. scaling_mode 'constant' with norm_scale 1.0 keeps the realised speed equal to that v; 'concentration' would gate it by cos(Delta/2) and the agent would no longer follow the geometry the boundary was solved for. ---",
+                    "predecision_motion": "midpoint",
+                    "scaling_mode": "constant",
+                    "norm_scale": 1.0,
+
+                    "_comment_bellman": "--- solver numerics (FEATURE_BELLMAN_POLICY.md Section 5). Modelling lives above; only discretisation lives here. ---",
+                    "bellman": {
+                        "T_max": null,
+                        "_comment_T_max": "null = r0/v from the onset geometry (8.66 s here). Set a float only to override the arrival horizon.",
+                        "T_max_check_factor": 1.5,
+                        "_comment_T_max_check_factor": "Startup re-solve at 1.5*T_max: if z(t) moves when the horizon moves, the horizon is doing modelling work it should not be doing. Logged as horizon_check.",
+                        "N_x": 1601,
+                        "_comment_N_x": "Section 5 suggests 801; the boundary gap converges from BELOW as the grid refines, so 801 understates it by ~27% and puts a visible sawtooth on z(t). 1601 halves the ripple; use 3201 for figures.",
+                        "N_t": 10000,
+                        "_comment_N_t": "The free boundary converges as O(sqrt(dt)) (smooth pasting makes the contact tangential), so dt <~ 1e-3 is needed to bring z(t) inside 2 dx. Still well under a second to solve.",
+                        "X_max_factor": 4.0,
+                        "_comment_X_max_factor": "Grid half-width in units of the quasi-static z(0). Raise it if the solver warns that part of the horizon has no contact set inside X_max.",
+                        "scheme": "crank_nicolson"
+                    }
+                }
+            }
+        },
+
+        "results": {
+            "base_path": "./data/bellman_policy/",
+            "agent_specs": [
+                "base",
+                "mean_field"
+            ],
+            "_comment_agent_specs": "'mean_field' is what dumps the per-tick decision columns, including pure_ddm_z_bellman, pure_ddm_z_myopic and pure_ddm_bellman_gap -- the Section 10 comparison against the quasi-static policy.",
+            "group_specs": [],
+            "snapshots_per_second": 10
+        }
+    }
+}
