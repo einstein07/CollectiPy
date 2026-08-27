@@ -19,6 +19,12 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
+
+# Figure-fraction headroom reserved above each inspector time-series panel for its
+# title. Titles are drawn outside the axes rectangle, so the gridspec slot has to give
+# some of its height back or the title collides with whatever sits above it.
+_PANEL_TITLE_GUTTER = 0.022
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QGraphicsView, QGraphicsScene, QPushButton, QHBoxLayout, QSizePolicy, QComboBox, QToolButton, QFrame
 from PySide6.QtCore import QTimer, Qt, QPointF, QEvent, QRectF, Signal
@@ -215,8 +221,12 @@ class GUI_2D(QWidget):
         self.input_history_seconds = max(1.0, history_seconds)
         self.input_plot_show_base = bool(inputs_plot_cfg.get("show_base", True))
         self.input_plot_show_modulated = bool(inputs_plot_cfg.get("show_modulated", True))
+        # The quality actually scattered onto the ring, i.e. after the sigma_s sensory
+        # noise. Identical to the modulated trace when sigma_s = 0.
+        self.input_plot_show_noisy = bool(inputs_plot_cfg.get("show_noisy", True))
         self.input_ax = None
         self.bump_ax = None
+        self._spin_gridspec = None
         self._input_panel_visible = False
         self._bump_panel_visible = False
         self._input_histories = {}
@@ -236,23 +246,28 @@ class GUI_2D(QWidget):
         self.abstract_dot_margin = max(0, int(markers_cfg.get("margin", 10)))
         self.abstract_dot_default_color = markers_cfg.get("default_color", "black")
         if self.show_spins_enabled:
-            self.figure = plt.figure(figsize=(5.2, 8))
-            gs = GridSpec(4, 2, figure=self.figure,
-                          height_ratios=[3, 0.1, 0.1, 2],
+            self.figure = plt.figure(figsize=(5.2, 9))
+            # Rows 3 and 4 are the two stacked time-series panels: max neural
+            # activation, then the target inputs underneath it. `input_ax` used to be
+            # left as None here, which silently disabled the whole target-input panel -
+            # every method that draws it is guarded on `input_ax is not None`.
+            gs = GridSpec(5, 2, figure=self.figure,
+                          height_ratios=[2.5, 0.1, 0.1, 1.5, 1.5],
                           width_ratios=[1, 1],
                           top=0.95, bottom=0.06, hspace=0.5, wspace=0.5)
+            self._spin_gridspec = gs
             self.ax             = self.figure.add_subplot(gs[0, :], projection="polar")
             self.cax_state      = self.figure.add_subplot(gs[1, 0])
             self.cax_perception = self.figure.add_subplot(gs[1, 1])
             self.cax_tanh       = self.figure.add_subplot(gs[2, 0])
             self.cax_b_ax       = self.figure.add_subplot(gs[2, 1])
-            self.input_ax       = None
             self.bump_ax        = self.figure.add_subplot(gs[3, :])
+            self.input_ax       = self.figure.add_subplot(gs[4, :])
             for _cax in (self.cax_state, self.cax_perception,
                          self.cax_tanh, self.cax_b_ax):
                 _cax.set_visible(False)
             self.canvas = FigureCanvas(self.figure)
-            self.canvas.setMinimumSize(420, 820)
+            self.canvas.setMinimumSize(420, 900)
             self.spin_window = DetachedPanelWindow("Activity Inspector", close_callback=self._on_spin_window_closed)
             self.spin_window.setFocusPolicy(Qt.NoFocus)
             self.spin_window.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
@@ -600,37 +615,64 @@ class GUI_2D(QWidget):
         self.spin_panel_visible = False
         self._update_side_container_visibility()
 
+    def _panel_slot_rect(self, *rows):
+        """Return the figure rectangle spanning the given gridspec rows, or None.
+
+        Positions come from the gridspec itself rather than from hardcoded rectangles,
+        so the two time-series panels can never drift onto the colorbar band above them
+        when the figure is resized.
+        """
+        gs = self._spin_gridspec
+        if gs is None or self.figure is None:
+            return None
+        boxes = [gs[row, :].get_position(self.figure) for row in rows]
+        x0 = min(b.x0 for b in boxes)
+        x1 = max(b.x1 for b in boxes)
+        y0 = min(b.y0 for b in boxes)
+        y1 = max(b.y1 for b in boxes)
+        # Leave a gutter above each panel for its title, which matplotlib draws outside
+        # the axes rectangle and which would otherwise land on the colorbar labels.
+        return [x0, y0, x1 - x0, max(y1 - y0 - _PANEL_TITLE_GUTTER, 0.02)]
+
     def _update_inspector_panel_layout(self) -> None:
-        """Resize the detached inspector according to the active auxiliary plots."""
+        """Resize the detached inspector according to the active auxiliary plots.
+
+        The ring bands and colorbars keep their gridspec slots untouched. Only the two
+        bottom panels move: whichever of them is alone expands to fill both rows.
+        """
         if not self.show_spins_enabled or self.ax is None or self.input_ax is None:
             return
         show_input = self._input_panel_visible
         show_bump = self._bump_panel_visible and self.bump_ax is not None
+        both_rows = self._panel_slot_rect(3, 4)
+        bump_row = self._panel_slot_rect(3)
+        input_row = self._panel_slot_rect(4)
         if show_input and show_bump:
-            self.ax.set_position([0.12, 0.61, 0.76, 0.29])
-            self.input_ax.set_position([0.16, 0.34, 0.78, 0.18])
-            self.input_ax.set_visible(True)
+            # Stacking order top-to-bottom: ring bands, max activation, target inputs.
+            if self.bump_ax is not None and bump_row is not None:
+                self.bump_ax.set_position(bump_row)
+            if input_row is not None:
+                self.input_ax.set_position(input_row)
             if self.bump_ax is not None:
-                self.bump_ax.set_position([0.16, 0.07, 0.78, 0.20])
                 self.bump_ax.set_visible(True)
+            self.input_ax.set_visible(True)
             return
         if show_input:
-            self.ax.set_position([0.12, 0.56, 0.76, 0.34])
-            self.input_ax.set_position([0.16, 0.12, 0.78, 0.28])
+            if both_rows is not None:
+                self.input_ax.set_position(both_rows)
             self.input_ax.set_visible(True)
             if self.bump_ax is not None:
                 self.bump_ax.clear()
                 self.bump_ax.set_visible(False)
             return
         if show_bump:
-            self.ax.set_position([0.12, 0.56, 0.76, 0.34])
             self.input_ax.clear()
             self.input_ax.set_visible(False)
             if self.bump_ax is not None:
-                self.bump_ax.set_position([0.16, 0.12, 0.78, 0.28])
+                if both_rows is not None:
+                    self.bump_ax.set_position(both_rows)
                 self.bump_ax.set_visible(True)
             return
-        self.ax.set_position([0.12, 0.12, 0.76, 0.72])
         self.input_ax.clear()
         self.input_ax.set_visible(False)
         if self.bump_ax is not None:
@@ -681,6 +723,9 @@ class GUI_2D(QWidget):
             qualities = spin.get("mean_field_modulated_target_qualities")
             if qualities is None:
                 qualities = []
+            noisy = spin.get("mean_field_noisy_target_qualities")
+            if noisy is None:
+                noisy = []
             raw_targets = []
             for idx, entry in enumerate(metadata):
                 if not isinstance(entry, dict):
@@ -689,12 +734,14 @@ class GUI_2D(QWidget):
                 modulated_quality = base_quality
                 if idx < len(qualities):
                     modulated_quality = float(qualities[idx])
+                noisy_quality = float(noisy[idx]) if idx < len(noisy) else float("nan")
                 raw_targets.append(
                     {
                         "id": str(entry.get("id", f"target_{idx}")),
                         "label": str(entry.get("id", f"target_{idx}")),
                         "base_quality": base_quality,
                         "modulated_quality": modulated_quality,
+                        "noisy_quality": noisy_quality,
                         "angle": float(entry.get("angle", 0.0)),
                         "distance": float(entry.get("distance", 0.0)),
                     }
@@ -711,6 +758,10 @@ class GUI_2D(QWidget):
                     "label": label,
                     "base_quality": float(entry.get("base_quality", entry.get("intensity", 0.0))),
                     "modulated_quality": float(entry.get("modulated_quality", entry.get("base_quality", 0.0))),
+                    # NaN, not a fallback to `modulated`: a model that does not publish
+                    # a post-noise quality must leave the trace absent rather than draw
+                    # a second copy of the modulated one.
+                    "noisy_quality": float(entry.get("noisy_quality", float("nan"))),
                     "angle": float(entry.get("angle", 0.0)),
                     "distance": float(entry.get("distance", 0.0)),
                 }
@@ -751,6 +802,7 @@ class GUI_2D(QWidget):
                 "label": entry.get("label", target_id),
                 "base": deque([float("nan")] * existing_length),
                 "modulated": deque([float("nan")] * existing_length),
+                "noisy": deque([float("nan")] * existing_length),
             }
         history["times"].append(current_time)
         for target_id, series in history["targets"].items():
@@ -758,9 +810,11 @@ class GUI_2D(QWidget):
             if entry is None:
                 series["base"].append(float("nan"))
                 series["modulated"].append(float("nan"))
+                series["noisy"].append(float("nan"))
                 continue
             series["base"].append(float(entry.get("base_quality", 0.0)))
             series["modulated"].append(float(entry.get("modulated_quality", 0.0)))
+            series["noisy"].append(float(entry.get("noisy_quality", float("nan"))))
         history["last_time"] = current_time
         while history["times"] and current_time - history["times"][0] > self.input_history_seconds:
             history["times"].popleft()
@@ -769,6 +823,8 @@ class GUI_2D(QWidget):
                     series["base"].popleft()
                 if series["modulated"]:
                     series["modulated"].popleft()
+                if series["noisy"]:
+                    series["noisy"].popleft()
 
     def _update_input_histories(self) -> None:
         """Capture live mean-field input traces for all agents currently in the GUI snapshot."""
@@ -850,8 +906,11 @@ class GUI_2D(QWidget):
             x_min = min(times[0], x_max)
             x_max = x_min + 1e-6
         self.bump_ax.set_xlim(x_min, x_max)
-        self.bump_ax.set_title("Max Neural Activation", fontsize=11)
-        self.bump_ax.set_xlabel("Simulation tick")
+        self.bump_ax.set_title("Max Neural Activation", fontsize=11, pad=2)
+        # The target-input panel sits underneath and owns the shared x axis when both
+        # are up; `_update_input_plot` runs first, so this flag is current.
+        if not self._input_panel_visible:
+            self.bump_ax.set_xlabel("Simulation tick")
         self.bump_ax.set_ylabel("Max activation")
         self.bump_ax.grid(True, alpha=0.25)
         self.bump_ax.margins(x=0.02, y=0.1)
@@ -871,6 +930,12 @@ class GUI_2D(QWidget):
         times = list(history["times"])
         cmap = plt.get_cmap("tab10")
         plotted = False
+        # Three traces per target, distinguished by linestyle rather than colour, so a
+        # target keeps one colour across all of them: solid = modulated quality,
+        # dashed = the same quality after the sigma_s sensory noise (what actually
+        # reaches the ring), dotted = the declared base quality.
+        drew_noisy = False
+        drew_base = False
         for idx, (target_id, series) in enumerate(history["targets"].items()):
             label = str(series.get("label", target_id))
             color = cmap(idx % cmap.N)
@@ -883,17 +948,38 @@ class GUI_2D(QWidget):
                     label=label,
                 )
                 plotted = True
+            noisy_values = list(series.get("noisy", []))
+            # All-NaN means the model published no post-noise quality (the DDM
+            # inspectors do not), so the trace is omitted rather than faked.
+            has_noisy = any(v == v for v in noisy_values)
+            if self.input_plot_show_noisy and has_noisy:
+                self.input_ax.plot(
+                    times,
+                    noisy_values,
+                    color=color,
+                    linewidth=1.4,
+                    linestyle="--",
+                    alpha=0.9,
+                    label=("_nolegend_" if self.input_plot_show_modulated else label),
+                )
+                plotted = True
+                drew_noisy = True
             if self.input_plot_show_base:
                 self.input_ax.plot(
                     times,
                     list(series["base"]),
                     color=color,
                     linewidth=1.2,
-                    linestyle="--" if self.input_plot_show_modulated else "-",
-                    alpha=0.65 if self.input_plot_show_modulated else 0.95,
-                    label=f"{label} base" if self.input_plot_show_modulated else label,
+                    linestyle=":" if (self.input_plot_show_modulated or has_noisy) else "-",
+                    alpha=0.6 if (self.input_plot_show_modulated or has_noisy) else 0.95,
+                    label=(
+                        "_nolegend_"
+                        if (self.input_plot_show_modulated or has_noisy)
+                        else label
+                    ),
                 )
                 plotted = True
+                drew_base = True
         if not plotted:
             self._set_input_panel_visible(False)
             return
@@ -904,13 +990,29 @@ class GUI_2D(QWidget):
             x_max = x_min + 1e-6
         self.input_ax.set_xlim(x_min, x_max)
         self.input_ax.set_title("Target Inputs", fontsize=11, pad=2)
+        self.input_ax.set_xlabel("Simulation tick")
         self.input_ax.set_ylabel("Quality")
         self.input_ax.grid(True, alpha=0.25)
         self.input_ax.margins(x=0.02, y=0.15)
         self.input_ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.4)
+        # Colour identifies the target, linestyle identifies the quality level. Listing
+        # every (target x level) pair would triple the legend for no extra information,
+        # so the levels are shown once as neutral style keys.
         handles, labels = self.input_ax.get_legend_handles_labels()
+        if self.input_plot_show_modulated:
+            if drew_noisy:
+                handles.append(Line2D([], [], color="#555555", linewidth=1.4,
+                                      linestyle="--"))
+                labels.append("+ sigma_s noise")
+            if drew_base:
+                handles.append(Line2D([], [], color="#555555", linewidth=1.2,
+                                      linestyle=":"))
+                labels.append("base")
         if handles and labels:
-            self.input_ax.legend(loc="upper right", fontsize=8, frameon=False)
+            self.input_ax.legend(handles, labels, loc="upper right", fontsize=7,
+                                 ncol=2, frameon=False, handlelength=2.4,
+                                 columnspacing=1.0, borderaxespad=0.2)
+        self.input_ax.margins(x=0.02, y=0.28)
 
     # ------------------------------------------------------------------
     # Embodied-DDM inspector
