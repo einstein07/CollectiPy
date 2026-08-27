@@ -13,7 +13,7 @@ Two modes sit behind one interface (`sensory_stream.mode`):
 
 **legacy** (default, and the reproducibility path for every result generated to date)
     Each model generates its own sensory noise exactly as it always has: the ring
-    attractor's `sigma_s` (a frozen per-neuron bias added to `b`) and the DDM's
+    attractor's `sigma_s` (per-tick noise on the target qualities) and the DDM's
     `eta_rate` (white, drawn per sub-step). The two models therefore see *different*
     realisations, and their noise levels are comparable only through an assumed readout
     model. `LegacyPerceptStream.sample()` is a pass-through that consumes no random
@@ -28,9 +28,11 @@ Two modes sit behind one interface (`sensory_stream.mode`):
         eps_i(t)   ~ N(0, eta^2 / dt)   drawn per tick per target       (white noise)
 
     Both channels are needed and they are not interchangeable: `beta` never averages
-    out, `eps` averages out as 1/sqrt(t). Matching the ring attractor's frozen `sigma_s`
-    to the DDM's white `eta_rate` is the category error this module exists to remove, so
-    the two channels stay explicit and separately parameterised.
+    out, `eps` averages out as 1/sqrt(t). Conflating a frozen bias with white noise is
+    the category error this module exists to remove, so the two channels stay explicit
+    and separately parameterised. Note the models' own `sigma_s` keys are NOT the same
+    channel as each other: the DDM's is a frozen per-slot bias (a `beta` analogue),
+    while the ring attractor's is per-tick quality noise (an `eps` analogue).
 
     Because the models receive the same numbers, a behavioural difference between them
     is attributable to the decision dynamics rather than to two independent noise draws.
@@ -71,10 +73,13 @@ draw them separately. `shared` reproduces because the percept is a pure function
 processes, across models, and independently of how often anything is sampled.
 
 Historical note, because it bounds which old results can be compared: until the
-arena-seeding fix the ring attractor's frozen `sigma_s` bias came from an unseeded
-`Generator` and its internal `sigma` noise from the global `np.random`, so ring-attractor
-runs produced a different trajectory on every execution of the same config. Anything
-generated before that fix is not reproducible, in either mode.
+arena-seeding fix the ring attractor's `sigma_s` bias came from an unseeded `Generator`
+and its internal `sigma` noise from the global `np.random`, so ring-attractor runs
+produced a different trajectory on every execution of the same config. Anything
+generated before that fix is not reproducible, in either mode. Separately, `sigma_s`
+itself was redefined: it used to be a frozen per-neuron bias added to `b`, and is now
+per-tick noise on the target qualities, so its numeric value does not carry across that
+change either.
 """
 
 from __future__ import annotations
@@ -426,9 +431,10 @@ def resolve_sensory_stream_spec(
     if float(sigma_s) != 0.0:
         raise PerceptStreamConfigError(
             f"{prefix}sensory_stream.mode 'shared' requires sigma_s = 0 "
-            f"(got {float(sigma_s)!r}). The frozen sensory bias moves upstream into the "
-            "shared stream and is set by sensory_stream.frozen_sd (s_beta); leaving "
-            "sigma_s non-zero would add a second, unshared frozen bias."
+            f"(got {float(sigma_s)!r}). The model-owned sensory noise moves upstream "
+            "into the shared stream, which sets it with sensory_stream.frozen_sd "
+            "(s_beta, frozen) and white_rate (eta, per tick); leaving sigma_s non-zero "
+            "would add a second, unshared noise source on top."
         )
     if eta_rate is not None:
         eta_values = (

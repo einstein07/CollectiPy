@@ -37,6 +37,11 @@ def compute_center_of_mass(z, theta_i):
 logger = logging.getLogger("sim.mean_field")
 logger.setLevel(logging.DEBUG)
 
+# Sentinel for "no tick has been seen yet". A plain object(), so it can never compare
+# equal to a real tick index (including a negative pre-run one) and the first
+# compute_sensory_map call of a trial always draws fresh sensory noise.
+_NO_TICK = object()
+
 class MeanFieldSystem:
     """
     Phenomenological spiking ring attractor (mean-field version).
@@ -90,16 +95,24 @@ class MeanFieldSystem:
             kappa: Concentration for sensory von Mises inputs.
             spatial_decay: Spatial decay rate for guard influence.
             sigma: Noise standard deviation (added to z dynamics, scaled by sqrt(n)).
-            sigma_s: Static sensory noise std. A frozen noise vector drawn once at reset
-                and added to b on every compute_sensory_map call, modelling a fixed
-                sensor distortion rather than noise that averages out.
+            sigma_s: Sensory noise std on the PERCEIVED TARGET QUALITIES. One draw per
+                target per arena tick, added to the (already modulated) quality before
+                the von Mises scatter onto the ring: q_hat_i = q_i + sigma_s * xi_i(t).
+                It therefore lives in quality units, like the DDM's own sigma_s and the
+                shared percept stream's `white_rate`, and NOT in ring-field units.
+                Note this is per-tick noise that averages out over a trial, not the
+                frozen per-neuron bias on `b` it replaced, and not the same thing as
+                AccumulatorSystem.sigma_s, which is still a frozen per-slot bias.
+                Guards are unaffected: only target qualities are noised.
             dt: Integration time step.
             initial_state: Optional initial state vector z.
             external_input: Optional initial external input vector b.
-            rng: Generator for the FROZEN sensory bias (sigma_s), drawn once per reset.
+            rng: Generator for the sensory quality noise (sigma_s), drawn once per
+                arena tick. A sequential stream, so the realisation depends on how many
+                ticks (and how many targets per tick) have been consumed.
             noise_rng: Generator for the internal neural noise (sigma), drawn every
-                Euler sub-step. Deliberately a SEPARATE stream from `rng`: the frozen
-                bias must not shift when the number of integration steps changes, and
+                Euler sub-step. Deliberately a SEPARATE stream from `rng`: the sensory
+                draws must not shift when the number of integration steps changes, and
                 neither may depend on the other's consumption. Both should be seeded
                 from the arena seed by the caller (MeanFieldMovementModel does this);
                 the unseeded defaults exist only for bare unit-test construction and
@@ -130,6 +143,14 @@ class MeanFieldSystem:
         self.sensory_dt = float(default_sensory_dt if sensory_dt is None else sensory_dt)
         if self.sensory_dt < 0.0:
             raise ValueError("sensory_dt must be non-negative")
+        if rng is None and self.sigma_s > 0.0:
+            logger.warning(
+                "MeanFieldSystem: sigma_s=%.4g but no `rng` was supplied, so the "
+                "sensory quality noise comes from an UNSEEDED generator and this run "
+                "cannot be reproduced from its config. Pass a generator derived from "
+                "the arena seed (MeanFieldMovementModel does this).",
+                self.sigma_s,
+            )
         self.rng = rng or np.random.default_rng()
         self.noise_rng = noise_rng or np.random.default_rng()
 
@@ -165,12 +186,13 @@ class MeanFieldSystem:
         if self.b.shape[0] != self.num_neurons:
             raise ValueError("external_input dimension must match num_neurons")
 
-        # Frozen sensory noise: drawn once here, redrawn on reset()
-        self._b_noise: np.ndarray = (
-            self.rng.standard_normal(self.num_neurons) * self.sigma_s
-            if self.sigma_s > 0.0
-            else np.zeros(self.num_neurons, dtype=float)
-        )
+        # Per-tick sensory quality noise. Redrawn by compute_sensory_map() whenever it
+        # is handed a tick index different from the one the cached vector belongs to, so
+        # every inner step of one arena tick (steps_per_tick > 1) sees ONE realisation.
+        # `_noise_tick` starts at a sentinel no caller can pass, so the first call of a
+        # trial always draws.
+        self._q_noise: np.ndarray = np.array([], dtype=float)
+        self._noise_tick: object = _NO_TICK
 
         self.g_adapt = float(g_adapt)
         self.tau_adapt = float(tau_adapt)
@@ -188,6 +210,7 @@ class MeanFieldSystem:
         self.last_target_ids: list[str] = []
         self.last_target_base_qualities = np.array([], dtype=float)
         self.last_modulated_target_qualities = np.array([], dtype=float)
+        self.last_noisy_target_qualities = np.array([], dtype=float)
         self._step_count: int = 0
         
 
@@ -267,6 +290,33 @@ class MeanFieldSystem:
             return
         self.sensory_time += self.sensory_dt
 
+    def _sensory_quality_noise(self, num_targets: int, tick: int | None) -> np.ndarray:
+        """Return this tick's sensory quality noise, one deviate per target.
+
+        Drawn from `self.rng`, a sequential stream seeded from the arena `random_seed`
+        by the caller. One draw per target per ARENA tick: the vector is cached against
+        the tick it was drawn for, so all `steps_per_tick` inner steps of a tick - and
+        all the Euler sub-steps inside each of those - share one realisation. Being a
+        sequential stream, the realisation depends on how many ticks and how many
+        targets have been consumed before it; changing `steps_per_tick` does not shift
+        it, but changing the number of perceived targets does.
+
+        `tick=None` means "no arena clock" and redraws on every call.
+        """
+        if self.sigma_s <= 0.0 or num_targets <= 0:
+            self._q_noise = np.zeros(max(num_targets, 0), dtype=float)
+            self._noise_tick = _NO_TICK if tick is None else tick
+            return self._q_noise
+        stale = (
+            tick is None
+            or tick != self._noise_tick
+            or self._q_noise.shape[0] != num_targets
+        )
+        if stale:
+            self._q_noise = self.rng.standard_normal(num_targets) * self.sigma_s
+            self._noise_tick = _NO_TICK if tick is None else tick
+        return self._q_noise
+
     def compute_sensory_map(
         self,
         num_targets: int,
@@ -278,14 +328,22 @@ class MeanFieldSystem:
         guard_qualities: Iterable[float] | None = None,
         guard_decay_rate: float | None = None,
         guard_distances: Iterable[float] | None = None,
+        tick: int | None = None,
     ) -> np.ndarray:
         """
         Compute sensory input b using von Mises bumps for targets and optional guard inhibition.
+
+        `tick` is the ARENA tick index and is what the sigma_s sensory noise is keyed to:
+        the draw is reused for every call carrying the same tick, so a model running
+        `steps_per_tick > 1` integrates one realisation rather than a fresh one per inner
+        step. Pass None (the default) to redraw on every call, which is what a bare
+        unit-test harness with no arena clock wants.
         """
         b = np.zeros(self.num_neurons, dtype=float)
         self.last_target_ids = []
         self.last_target_base_qualities = np.array([], dtype=float)
         self.last_modulated_target_qualities = np.array([], dtype=float)
+        self.last_noisy_target_qualities = np.array([], dtype=float)
         
         if num_targets > 0 and target_angles is not None and target_qualities is not None:
             target_id_list = [] if target_ids is None else [str(target_id) for target_id in target_ids]
@@ -298,9 +356,17 @@ class MeanFieldSystem:
             self.last_target_ids = target_id_list
             self.last_target_base_qualities = target_qualities.copy()
             self.last_modulated_target_qualities = modulated_target_qualities.copy()
+            # Sensory noise on the PERCEIVED QUALITY, downstream of the sinusoidal
+            # modulation, so sigma_s is expressed in quality units and reaches the ring
+            # through the same von Mises kernel the clean quality does.
+            noisy_target_qualities = (
+                modulated_target_qualities
+                + self._sensory_quality_noise(modulated_target_qualities.shape[0], tick)
+            )
+            self.last_noisy_target_qualities = noisy_target_qualities.copy()
             delta_targets = _delta_angle(self.theta[:, None], target_angles)
             vm_targets = np.exp(self.kappa * (np.cos(delta_targets) - 1.0))
-            b = vm_targets @ modulated_target_qualities
+            b = vm_targets @ noisy_target_qualities
             logger.debug(
                     "Target angles: %s",
                     np.array2string(
@@ -311,9 +377,9 @@ class MeanFieldSystem:
                     ),
                 )
             logger.debug(
-                    "Target qualities: %s",
+                    "Target qualities (post sigma_s): %s",
                     np.array2string(
-                        np.asarray(modulated_target_qualities, dtype=float).reshape(-1),
+                        np.asarray(noisy_target_qualities, dtype=float).reshape(-1),
                         precision=6,
                         separator=", ",
                         max_line_width=1000,
@@ -341,7 +407,6 @@ class MeanFieldSystem:
                     ),
                 )
 
-        b += self._b_noise
         b /= math.sqrt(self.num_neurons)
         self.b = b
         return self.b
@@ -384,11 +449,12 @@ class MeanFieldSystem:
         self.last_target_ids = []
         self.last_target_base_qualities = np.array([], dtype=float)
         self.last_modulated_target_qualities = np.array([], dtype=float)
-        self._b_noise = (
-            self.rng.standard_normal(self.num_neurons) * self.sigma_s
-            if self.sigma_s > 0.0
-            else np.zeros(self.num_neurons, dtype=float)
-        )
+        self.last_noisy_target_qualities = np.array([], dtype=float)
+        # Nothing to redraw: the sensory noise is per-tick, so it is enough to forget
+        # which tick the cached vector belonged to. The generator is deliberately NOT
+        # reseeded here - a trial continues its own stream.
+        self._q_noise = np.array([], dtype=float)
+        self._noise_tick = _NO_TICK
 
     @staticmethod
     def euler_integrate_sfa(y0, t_eval, u, b, M, beta, n, sigma, g_adapt, tau_adapt, randn_like_func):
@@ -556,10 +622,15 @@ class MeanFieldSystem:
         guard_qualities: Iterable[float] | None = None,
         guard_decay_rate: float | None = None,
         guard_distances: Iterable[float] | None = None,
+        tick: int | None = None,
     ):
         """
         Advance the system by one Euler step. Provide either an explicit external_input
         or target/guard descriptors to build b.
+
+        `tick` is the arena tick index; see `compute_sensory_map`. Callers that run
+        several steps per arena tick must pass the SAME tick for all of them, or the
+        sigma_s sensory noise is redrawn mid-tick.
         """
         self._step_count += 1
         self.compute_sensory_map(
@@ -572,6 +643,7 @@ class MeanFieldSystem:
             guard_qualities=guard_qualities,
             guard_decay_rate=guard_decay_rate,
             guard_distances=guard_distances,
+            tick=tick,
         )
 
         times, bump_positions, final_norm = self.compute_dynamics(
@@ -608,5 +680,12 @@ class MeanFieldSystem:
         return self.b.copy()
 
     def get_modulated_target_qualities(self):
-        """Return the latest time-varying target qualities used for b."""
+        """Return the latest time-varying target qualities, BEFORE sigma_s noise."""
         return self.last_modulated_target_qualities.copy()
+
+    def get_noisy_target_qualities(self):
+        """Return the latest target qualities as actually scattered onto the ring.
+
+        Equals `get_modulated_target_qualities()` when sigma_s is 0.
+        """
+        return self.last_noisy_target_qualities.copy()

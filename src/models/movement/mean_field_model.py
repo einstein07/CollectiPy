@@ -101,8 +101,8 @@ class MeanFieldMovementModel(TargetModel):
         # still governs the heading, so use_thresholding/g_threshold are unaffected.
         self.scale_velocity = bool(self.params.get("scale_velocity", True))
         # Sensory percept stream (FEATURE_SHARED_SENSORY_STREAM.md). `legacy` (the
-        # default) is a pass-through and leaves sigma_s doing exactly what it did; under
-        # `shared` the frozen bias moves upstream into the stream, so sigma_s must be 0.
+        # default) is a pass-through and leaves sigma_s owned by the model; under
+        # `shared` the sensory noise moves upstream into the stream, so sigma_s must be 0.
         # The RA's internal `sigma` is NOT shared and is unaffected either way: it is
         # neural noise with no DDM counterpart.
         self._init_percept_stream(sigma_s=float(self.params.get("sigma_s", 0.0)))
@@ -136,8 +136,9 @@ class MeanFieldMovementModel(TargetModel):
             sigma=float(self.params.get("sigma", 0.01)),
             sigma_s=float(self.params.get("sigma_s", 0.0)),
             # Both generators are seeded from the arena RNG, and are separate streams:
-            # `rng` draws the frozen sigma_s bias once, `noise_rng` draws the internal
-            # sigma noise every Euler sub-step. Before this, the former was an unseeded
+            # `rng` draws the sigma_s quality noise once per ARENA TICK, `noise_rng`
+            # draws the internal sigma noise every Euler sub-step. Before this, the
+            # former was an unseeded
             # Generator and the latter was the GLOBAL np.random, so a ring-attractor run
             # could not be reproduced from its config at all.
             rng=self._make_rng("mean_field_sigma_s"),
@@ -163,7 +164,7 @@ class MeanFieldMovementModel(TargetModel):
         self._update_perception(objects, agents, None, None)
         if self.perception is None:
             return
-        for _ in range(self.pre_run_steps):
+        for pre_step in range(self.pre_run_steps):
             target_ids, targets, qualities, guard_angles, guard_qualities, guard_distances = self._convert_perception_to_targets()
             self.mean_field_system.num_targets = len(targets)
             self.mean_field_system.num_guards = 0 if guard_angles is None else len(guard_angles)
@@ -175,6 +176,10 @@ class MeanFieldMovementModel(TargetModel):
                 guard_qualities=guard_qualities,
                 guard_decay_rate=self.guard_decay_rate,
                 guard_distances=guard_distances,
+                # The pre-run happens before the arena clock starts, so it has no tick
+                # of its own. Negative indices give each pre-run step a fresh sigma_s
+                # draw while staying disjoint from every real tick.
+                tick=-(pre_step + 1),
             )
         logger.debug("%s mean-field pre-run completed (%d steps)", self.agent.get_name(), self.pre_run_steps)
 
@@ -214,8 +219,11 @@ class MeanFieldMovementModel(TargetModel):
             neural_field = None
             bump_positions = None
             final_norm = 0.0
+            # `tick` is passed to every inner step so the sigma_s sensory noise is drawn
+            # ONCE per arena tick and held across all steps_per_tick sub-steps.
             for _ in range(self.steps_per_tick):
                 neural_field, bump_positions, final_norm = self.mean_field_system.step(
+                    tick=tick,
                     target_ids=target_ids,
                     target_angles=targets,
                     target_qualities=qualities,
@@ -303,9 +311,20 @@ class MeanFieldMovementModel(TargetModel):
         self,
         target_metadata: list[dict],
         modulated_target_qualities: np.ndarray,
+        noisy_target_qualities: np.ndarray | None = None,
     ) -> list[dict]:
-        """Return a GUI-friendly per-target input snapshot."""
+        """Return a GUI-friendly per-target input snapshot.
+
+        Three quality levels per target, which the inspector draws as three traces:
+        `base` as declared, `modulated` after the sinusoidal quality modulation, and
+        `noisy` after the sigma_s sensory noise — the last being what is actually
+        scattered onto the ring. With sigma_s = 0 the last two coincide.
+        """
         flattened = np.asarray(modulated_target_qualities, dtype=float).reshape(-1)
+        noisy = (
+            None if noisy_target_qualities is None
+            else np.asarray(noisy_target_qualities, dtype=float).reshape(-1)
+        )
         snapshot: list[dict] = []
         for idx, entry in enumerate(target_metadata):
             target_id = str(entry.get("id", f"target_{idx}"))
@@ -313,12 +332,16 @@ class MeanFieldMovementModel(TargetModel):
             modulated_quality = base_quality
             if idx < flattened.size:
                 modulated_quality = float(flattened[idx])
+            noisy_quality = modulated_quality
+            if noisy is not None and idx < noisy.size:
+                noisy_quality = float(noisy[idx])
             snapshot.append(
                 {
                     "id": target_id,
                     "label": target_id,
                     "base_quality": base_quality,
                     "modulated_quality": modulated_quality,
+                    "noisy_quality": noisy_quality,
                     "angle": float(entry.get("angle", 0.0)),
                     "distance": float(entry.get("distance", 0.0)),
                 }
@@ -332,6 +355,7 @@ class MeanFieldMovementModel(TargetModel):
         z = self.mean_field_system.get_state()
         target_metadata = copy.deepcopy((self._mf_entities or {}).get("targets", []))
         modulated_target_qualities = self.mean_field_system.get_modulated_target_qualities()
+        noisy_target_qualities = self.mean_field_system.get_noisy_target_qualities()
         sensory_time = float(getattr(self.mean_field_system, "sensory_time", 0.0))
         sensory_increment = float(getattr(self.mean_field_system, "sensory_dt", self.sensory_dt))
         last_sensory_time = max(0.0, sensory_time - sensory_increment)
@@ -341,9 +365,11 @@ class MeanFieldMovementModel(TargetModel):
             "sensory_map": self.mean_field_system.get_sensory_map(),
             "target_metadata": target_metadata,
             "modulated_target_qualities": modulated_target_qualities,
+            "noisy_target_qualities": noisy_target_qualities,
             "target_signals": self._build_target_signal_snapshot(
                 target_metadata,
                 modulated_target_qualities,
+                noisy_target_qualities,
             ),
             "sensory_time": last_sensory_time,
             "channel": self._active_perception_channel,
@@ -400,6 +426,11 @@ class MeanFieldMovementModel(TargetModel):
             if snapshot.get("modulated_target_qualities") is None
             else snapshot["modulated_target_qualities"].copy()
         )
+        noisy_target_qualities = (
+            None
+            if snapshot.get("noisy_target_qualities") is None
+            else snapshot["noisy_target_qualities"].copy()
+        )
         target_signals = copy.deepcopy(snapshot.get("target_signals") or [])
         avg_angle = snapshot.get("angle")
         if avg_angle is not None and self.reference == "allocentric":
@@ -417,6 +448,7 @@ class MeanFieldMovementModel(TargetModel):
             "mean_field_sensory_map": raw_sensory_map,
             "mean_field_target_metadata": target_metadata,
             "mean_field_modulated_target_qualities": modulated_target_qualities,
+            "mean_field_noisy_target_qualities": noisy_target_qualities,
             "mean_field_target_signals": target_signals,
             "mean_field_sensory_time": float(snapshot.get("sensory_time", 0.0)),
             "mean_field_entities": entities_copy,
