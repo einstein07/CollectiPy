@@ -376,14 +376,23 @@ class MeanFieldSystem:
                         max_line_width=1000,
                     ),
                 )
-            logger.debug(
-                    "Target qualities (post sigma_s): %s",
-                    np.array2string(
-                        np.asarray(noisy_target_qualities, dtype=float).reshape(-1),
-                        precision=6,
-                        separator=", ",
-                        max_line_width=1000,
-                    ),
+            if logger.isEnabledFor(logging.DEBUG):
+                # Clean and noisy side by side: the clean vector is the MEAN of this
+                # tick's sensory draw, the noisy one is what actually reaches the ring.
+                fmt = lambda values: np.array2string(
+                    np.asarray(values, dtype=float).reshape(-1),
+                    precision=6,
+                    separator=", ",
+                    max_line_width=1000,
+                )
+                logger.debug(
+                    "Target qualities (sigma_s=%.4g) ids=%s | mean (pre-noise)=%s | "
+                    "noisy (on ring)=%s | noise=%s",
+                    self.sigma_s,
+                    target_id_list,
+                    fmt(modulated_target_qualities),
+                    fmt(noisy_target_qualities),
+                    fmt(noisy_target_qualities - modulated_target_qualities),
                 )
 
         if num_guards > 0 and guard_angles is not None and guard_qualities is not None and guard_distances is not None:

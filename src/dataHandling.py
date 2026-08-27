@@ -580,6 +580,56 @@ class SpaceDataHandling(DataHandling):
         self._write_ddm_row(files.get("ddm"), spin_values, tick)
         self._write_ddm_transitions(files.get("ddm_transitions"), spin_values)
         self._write_percept_row(files.get("percept"), spin_values, tick)
+        self._write_sensory_noise_row(files.get("sensory_noise"), spin_values, tick)
+
+    @staticmethod
+    def _write_sensory_noise_row(entry, spin_values: dict, tick: int) -> None:
+        """Persist the sigma_s sensory noise added to each target's quality.
+
+        One row per tick per target, shaped like `_percept.csv`, recording the quality
+        the ring would have seen without noise and the quality it actually saw:
+
+            clean_quality  quality after the sinusoidal modulation, BEFORE sigma_s
+                           (this is the MEAN of the per-tick sensory draw)
+            noisy_quality  what is actually scattered onto the ring through the
+                           von Mises kernel
+            noise          noisy - clean, i.e. the realised sigma_s * xi_i(t) deviate
+
+        `base_quality` is the strength as declared in the config, kept so a run whose
+        quality modulation is switched off is still readable on its own. With
+        sigma_s = 0 the three quality columns coincide and `noise` is 0.
+        """
+        if not entry:
+            return
+        signals = spin_values.get("mean_field_target_signals")
+        if not signals:
+            return
+        sigma_s = spin_values.get("mean_field_sigma_s")
+        columns = ["tick", "target", "base_quality", "clean_quality",
+                   "noisy_quality", "noise", "sigma_s"]
+        if not entry["header_written"]:
+            entry["writer"].writerow(columns)
+            entry["header_written"] = True
+        for signal in signals:
+            if not isinstance(signal, dict):
+                continue
+            clean = signal.get("modulated_quality")
+            noisy = signal.get("noisy_quality")
+            noise = (
+                "" if clean is None or noisy is None
+                else repr(float(noisy) - float(clean))
+            )
+            # repr(), not str(): the noise realisation is what makes two otherwise
+            # identical runs diverge, so it has to round-trip exactly.
+            entry["writer"].writerow([
+                tick,
+                signal.get("id", ""),
+                "" if signal.get("base_quality") is None else repr(float(signal["base_quality"])),
+                "" if clean is None else repr(float(clean)),
+                "" if noisy is None else repr(float(noisy)),
+                noise,
+                "" if sigma_s is None else sigma_s,
+            ])
 
     @staticmethod
     def _write_percept_row(entry, spin_values: dict, tick: int) -> None:
@@ -729,6 +779,7 @@ class SpaceDataHandling(DataHandling):
         ddm_path = os.path.join(self.run_folder, f"{agent_id}_ddm.csv")
         ddm_tr_path = os.path.join(self.run_folder, f"{agent_id}_ddm_transitions.csv")
         percept_path = os.path.join(self.run_folder, f"{agent_id}_percept.csv")
+        sensory_noise_path = os.path.join(self.run_folder, f"{agent_id}_sensory_noise.csv")
         neural_handle = open(neural_path, "w", newline="")
         perception_handle = open(perception_path, "w", newline="")
         sensory_handle = open(sensory_path, "w", newline="")
@@ -737,6 +788,7 @@ class SpaceDataHandling(DataHandling):
         ddm_handle = open(ddm_path, "w", newline="")
         ddm_tr_handle = open(ddm_tr_path, "w", newline="")
         percept_handle = open(percept_path, "w", newline="")
+        sensory_noise_handle = open(sensory_noise_path, "w", newline="")
         entry = {
             "neural": {"handle": neural_handle, "writer": csv.writer(neural_handle), "header_written": False},
             "perception": {"handle": perception_handle, "writer": csv.writer(perception_handle), "header_written": False},
@@ -758,6 +810,14 @@ class SpaceDataHandling(DataHandling):
             # (FEATURE_SHARED_SENSORY_STREAM.md Section 9).
             "percept": {
                 "handle": percept_handle, "writer": csv.writer(percept_handle),
+                "header_written": False,
+            },
+            # Per-tick, per-target record of the sigma_s sensory noise: the clean
+            # quality, the noisy quality actually scattered onto the ring, and the
+            # realised deviate between them.
+            "sensory_noise": {
+                "handle": sensory_noise_handle,
+                "writer": csv.writer(sensory_noise_handle),
                 "header_written": False,
             },
         }

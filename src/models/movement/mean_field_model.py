@@ -454,6 +454,10 @@ class MeanFieldMovementModel(TargetModel):
             "mean_field_entities": entities_copy,
             "mean_field_norm": self._last_norm,
             "mean_field_beta": float(self.mean_field_system.beta),
+            # Std of the per-tick sensory noise added to the target qualities. Logged
+            # alongside the clean/noisy pair so a row is self-describing: with
+            # sigma_s = 0 the two qualities coincide and this column says why.
+            "mean_field_sigma_s": float(getattr(self.mean_field_system, "sigma_s", 0.0)),
             "mean_field_lambda1": (
                 self.bifurcation_detector.last_lambda1
                 if hasattr(self, "bifurcation_detector")
