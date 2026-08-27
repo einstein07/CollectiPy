@@ -142,6 +142,18 @@ class Environment():
         agents_cfg = exp.environment.get("agents") or {}
         if not isinstance(agents_cfg, dict):
             raise ValueError("Invalid agents configuration: expected a dictionary.")
+        # Environment-level context the movement models need but cannot otherwise see:
+        # the shared sensory-stream declaration (both models must agree on it) and the
+        # arena tick rate it derives dt from. An agent-level block always wins.
+        stream_cfg = exp.environment.get("sensory_stream") or {}
+        arena_ticks = exp.environment.get("ticks_per_second")
+        for cfg in agents_cfg.values():
+            if not isinstance(cfg, dict):
+                continue
+            if stream_cfg and "sensory_stream" not in cfg:
+                cfg["sensory_stream"] = stream_cfg
+            if arena_ticks is not None:
+                cfg.setdefault("arena_ticks_per_second", arena_ticks)
         agents: Dict[str, tuple[Dict[str, Any], list]] = {
             agent_type: (cfg, []) for agent_type, cfg in agents_cfg.items()
         }
