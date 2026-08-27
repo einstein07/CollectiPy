@@ -137,6 +137,14 @@ class EmbodiedDDMMovementModel(TargetModel):
             gradient_window=int(bif_cfg.get("gradient_window", 5)),
             gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
+        # Sensory percept stream (FEATURE_SHARED_SENSORY_STREAM.md). Under `shared` the
+        # frozen sensor bias moves upstream into the stream, so sigma_s must be 0; the
+        # accumulator's own `sigma` is internal noise and is left alone.
+        self._init_percept_stream(
+            dist_mode=self.dist_mode,
+            attention_mode=self.attention_mode,
+            sigma_s=self.sigma_s,
+        )
         self.reset()
         logger.info(
             "%s embodied-DDM model instantiated (max_targets=%d, mode=%s, lambda=%.3f, beta_inh=%.3f, dt=one-step-per-tick)",
@@ -148,20 +156,10 @@ class EmbodiedDDMMovementModel(TargetModel):
         )
 
     # ------------------------------------------------------------------
-    def _make_rng(self) -> np.random.Generator:
-        """Derive a numpy Generator from the agent's seeded RNG for reproducibility."""
-        if hasattr(self.agent, "get_random_generator"):
-            try:
-                pyrng = self.agent.get_random_generator()
-                seed = int(pyrng.randint(0, 2**32 - 1))
-                return np.random.default_rng(seed)
-            except Exception:
-                pass
-        return np.random.default_rng()
-
     def reset(self) -> None:
         """Reset the accumulator state."""
         self.perception = None
+        self._build_percept_stream()
         self._last_heading = None
         self._hold = 0
         self._committed = None
@@ -191,7 +189,7 @@ class EmbodiedDDMMovementModel(TargetModel):
             sigma=self.sigma,
             y_floor=self.y_floor,
             n_sub=self.n_sub,
-            rng=self._make_rng(),
+            rng=self._make_rng("accumulator"),
         )
         if hasattr(self, "bifurcation_detector"):
             self.bifurcation_detector.reset()
@@ -556,7 +554,7 @@ class EmbodiedDDMMovementModel(TargetModel):
                 if slot == self._committed:
                     committed_id = tid
                     break
-        return {
+        data = {
             # model == "mean_field" so the existing GUI panel and mean_field pkl logger
             # accept it; decision_model marks that the substrate is the accumulator.
             "model": "mean_field",
@@ -595,6 +593,9 @@ class EmbodiedDDMMovementModel(TargetModel):
             "accumulator_scaling_mode": self.scaling_mode,
             "accumulator_bisector_guard_fired": bool(self._bisector_guard_fired),
         }
+        # Stamp which sensory protocol produced this record, so no result is ambiguous.
+        data.update(self.percept_stream_record())
+        return data
 
 
 class _AccumulatorBifShim:

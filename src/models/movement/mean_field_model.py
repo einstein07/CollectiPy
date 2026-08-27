@@ -100,6 +100,12 @@ class MeanFieldMovementModel(TargetModel):
         # False -> constant speed (max_absolute_velocity * norm_scale); the readout
         # still governs the heading, so use_thresholding/g_threshold are unaffected.
         self.scale_velocity = bool(self.params.get("scale_velocity", True))
+        # Sensory percept stream (FEATURE_SHARED_SENSORY_STREAM.md). `legacy` (the
+        # default) is a pass-through and leaves sigma_s doing exactly what it did; under
+        # `shared` the frozen bias moves upstream into the stream, so sigma_s must be 0.
+        # The RA's internal `sigma` is NOT shared and is unaffected either way: it is
+        # neural noise with no DDM counterpart.
+        self._init_percept_stream(sigma_s=float(self.params.get("sigma_s", 0.0)))
         self.reset()
         logger.info(
             "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f)",
@@ -113,6 +119,7 @@ class MeanFieldMovementModel(TargetModel):
     def reset(self) -> None:
         """Reset the mean-field state."""
         self.perception = None
+        self._build_percept_stream()
         self._last_bump_angle = None
         self.mean_field_system = MeanFieldSystem(
             num_neurons=self.num_neurons,
@@ -128,6 +135,13 @@ class MeanFieldMovementModel(TargetModel):
             target_quality_modulations=self.target_quality_modulations,
             sigma=float(self.params.get("sigma", 0.01)),
             sigma_s=float(self.params.get("sigma_s", 0.0)),
+            # Both generators are seeded from the arena RNG, and are separate streams:
+            # `rng` draws the frozen sigma_s bias once, `noise_rng` draws the internal
+            # sigma noise every Euler sub-step. Before this, the former was an unseeded
+            # Generator and the latter was the GLOBAL np.random, so a ring-attractor run
+            # could not be reproduced from its config at all.
+            rng=self._make_rng("mean_field_sigma_s"),
+            noise_rng=self._make_rng("mean_field_sigma"),
             dt=self.integration_dt,
             integration_time=self.integration_time,
             sensory_time_mode=self.sensory_time_mode,
@@ -420,6 +434,8 @@ class MeanFieldMovementModel(TargetModel):
             ),
             "channel": snapshot.get("channel"),
         }
+        # Stamp which sensory protocol produced this record, so no result is ambiguous.
+        data.update(self.percept_stream_record())
         # Drain new bifurcation events detected this tick (Path A IPC: events flow
         # through per-tick spin data from agent process to Arena).
         new_bif = list(self.bifurcation_detector.events) if hasattr(self, 'bifurcation_detector') else []

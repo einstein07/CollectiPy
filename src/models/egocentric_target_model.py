@@ -23,10 +23,18 @@ boundary may differ between the models.
 `MeanFieldMovementModel` keeps its own `__init__` (unchanged) and simply inherits the
 methods here. New models call `_init_target_model` to set up the shared attributes the
 methods below depend on.
+
+The per-target `intensity` crossing that boundary is routed through a `PerceptStream`
+(`models.percept_stream`), which is the single insertion point for the shared sensory
+protocol: `legacy` (the default) passes it through untouched and draws no random
+numbers, while `shared` replaces it with one realisation both models reconstruct
+identically from the trial seed. Detection and geometry upstream, and both decision
+substrates downstream, are unchanged either way. See FEATURE_SHARED_SENSORY_STREAM.md.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 from dataclasses import dataclass, field
@@ -34,6 +42,12 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from models.percept_stream import (
+    LegacyPerceptStream,
+    PerceptStream,
+    SensoryStreamSpec,
+    resolve_sensory_stream_spec,
+)
 from models.utils import normalize_angle
 from plugin_base import MovementModel
 from plugin_registry import get_detection_model
@@ -104,6 +118,198 @@ class TargetModel(MovementModel):
         self.detection_model = self._create_detection_model()
 
     # ------------------------------------------------------------------
+    # Model-internal randomness.
+    #
+    # Every generator a decision model owns is derived here, from the agent RNG the
+    # simulator seeds per run out of the arena `random_seed`
+    # (EntityManager.initialize -> Entity.set_random_generator). Nothing in these models
+    # may fall back to the global `np.random`, or to an unseeded Generator, without
+    # saying so: a silently unseeded stream makes a run impossible to reproduce from its
+    # config, which is not a property you can notice by looking at the output.
+    #
+    # This is a DIFFERENT derivation path from the percept stream, which keys off the
+    # raw arena seed via `Entity.set_trial_seed`. Keeping them apart is what stops a
+    # model's internal draws from shifting the shared percept, or vice versa.
+    # ------------------------------------------------------------------
+    def _make_rng(self, purpose: str = "") -> np.random.Generator:
+        """Derive a numpy Generator from the agent's arena-seeded RNG.
+
+        Each call consumes one draw from the agent generator and returns an independent
+        stream, so distinct `purpose`s never share numbers. Call order within a model is
+        therefore part of its reproducibility contract: add new calls at the END of a
+        `reset()`, never in the middle, or every later stream shifts.
+        """
+        getter = getattr(self.agent, "get_random_generator", None)
+        if getter is not None:
+            try:
+                pyrng = getter()
+                seed = int(pyrng.randint(0, 2**32 - 1))
+                return np.random.default_rng(seed)
+            except Exception as exc:      # noqa: BLE001 - reported below, never silent
+                self._warn_unseeded(purpose, f"agent RNG raised {exc!r}")
+        else:
+            self._warn_unseeded(purpose, "the agent exposes no get_random_generator()")
+        trial_seed = getattr(self.agent, "trial_seed", None)
+        if trial_seed is not None:
+            # Better than nothing: still arena-derived, still reproducible. Namespaced
+            # so it cannot collide with the percept stream's own use of the same seed.
+            key = f"model_rng|{self.agent.get_name()}|{purpose}|{int(trial_seed)}".encode()
+            sub = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "little")
+            return np.random.default_rng(sub)
+        return np.random.default_rng()
+
+    def _warn_unseeded(self, purpose: str, reason: str) -> None:
+        """Report once that a generator could not be seeded from the arena."""
+        if getattr(self, "_unseeded_warned", False):
+            return
+        self._unseeded_warned = True
+        logger.warning(
+            "%s: cannot seed the '%s' generator from the arena RNG (%s). Falling back "
+            "to the trial seed if one is set, otherwise to an UNSEEDED generator - this "
+            "run will not be reproducible from its config.",
+            self.agent.get_name(), purpose or "model", reason,
+        )
+
+    # ------------------------------------------------------------------
+    # Sensory percept stream (FEATURE_SHARED_SENSORY_STREAM.md).
+    #
+    # The insertion point is the `intensity` field of the shared perception boundary:
+    # detection and geometry upstream are untouched, and everything downstream (the ring
+    # attractor scattering onto its ring, the DDM differencing into x) is untouched too.
+    # In `legacy` mode this is a pass-through that draws no random numbers, so existing
+    # RNG sequences and trajectories are preserved bit-for-bit.
+    # ------------------------------------------------------------------
+    def _sensory_stream_config(self) -> dict:
+        """Return the `sensory_stream` block: model params first, then agent/environment.
+
+        The environment-level block is propagated onto every agent config by
+        `Environment.agents_init`, which is the natural place to declare it: both models
+        must agree on it, and it sits next to the arena `random_seed` it defaults to.
+        """
+        params = getattr(self, "params", None) or {}
+        block = params.get("sensory_stream") if isinstance(params, dict) else None
+        if block:
+            return dict(block)
+        config_elem = getattr(self.agent, "config_elem", None) or {}
+        block = config_elem.get("sensory_stream") if isinstance(config_elem, dict) else None
+        return dict(block or {})
+
+    def _resolve_arena_tick_rate(self) -> Optional[float]:
+        """Return the arena tick rate if the environment declared one, else None.
+
+        `Environment.agents_init` copies it onto every agent config. When it is absent
+        (a bare unit-test harness), the precondition that the arena and agent rates
+        agree is simply not checkable and is skipped rather than guessed.
+        """
+        rate = getattr(self.agent, "arena_ticks_per_second", None)
+        if rate is None:
+            config_elem = getattr(self.agent, "config_elem", None) or {}
+            if isinstance(config_elem, dict):
+                rate = config_elem.get("arena_ticks_per_second")
+        if rate is None:
+            return None
+        try:
+            return float(rate)
+        except (TypeError, ValueError):
+            return None
+
+    def _init_percept_stream(
+        self,
+        *,
+        dist_mode: str = "none",
+        attention_mode: str = "none",
+        sigma_s: float = 0.0,
+        eta_rate=None,
+    ) -> None:
+        """Resolve and validate the `sensory_stream` block, then build the stream.
+
+        Every `shared`-mode precondition that depends only on configuration is checked
+        here, at construction, and raises naming the offending key.
+        """
+        self._percept_tick = -1
+        self._last_percept_qualities: dict[str, float] = {}
+        self.sensory_stream_spec: SensoryStreamSpec = resolve_sensory_stream_spec(
+            self._sensory_stream_config(),
+            owner=str(self.agent.get_name()),
+            tick_rate=self._resolve_agent_tick_rate(),
+            arena_tick_rate=self._resolve_arena_tick_rate(),
+            dist_mode=dist_mode,
+            attention_mode=attention_mode,
+            sigma_s=sigma_s,
+            eta_rate=eta_rate,
+        )
+        if self.sensory_stream_spec.is_shared and self.target_quality_modulations:
+            logger.warning(
+                "%s: sensory_stream mode 'shared' with target_quality_modulations set. "
+                "The modulation is applied by each model DOWNSTREAM of the shared "
+                "percept, so it multiplies q_hat rather than the clean q. Both models "
+                "still receive identical percepts, but the generative model is then "
+                "q_hat*(1+eps*sin(.)), not (q*(1+eps*sin(.)) + beta + eps).",
+                self.agent.get_name(),
+            )
+        self._build_percept_stream()
+
+    def _build_percept_stream(self) -> None:
+        """(Re)build the stream for the current trial. Called from every `reset()`.
+
+        The trial seed is only known once the simulator has seeded the agent for the
+        run, which happens after the model is constructed, so the stream is rebuilt at
+        every reset rather than held from `__init__`.
+        """
+        spec = getattr(self, "sensory_stream_spec", None)
+        if spec is None:
+            self.percept_stream = LegacyPerceptStream()
+            return
+        self._percept_tick = -1
+        self._last_percept_qualities = {}
+        self.percept_stream = spec.build(
+            trial_seed=getattr(self.agent, "trial_seed", None),
+            owner=f"{self.agent.get_name()}: ",
+        )
+        if spec.is_shared:
+            logger.info(
+                "%s sensory_stream resolved: mode=%s frozen_sd=%.6g white_rate=%.6g "
+                "seed=%s dt=%.6g",
+                self.agent.get_name(),
+                spec.mode,
+                spec.frozen_sd,
+                spec.white_rate,
+                self.percept_stream.describe().get("sensory_stream_seed"),
+                spec.dt,
+            )
+
+    def _apply_percept_stream(self, ids, qualities: np.ndarray) -> np.ndarray:
+        """Return the perceived qualities for `ids`, routed through the stream.
+
+        `legacy` short-circuits to the caller's own array: `sample()` still runs (it is
+        the interface both models read through) but its result is discarded, because
+        returning the untouched floats is what keeps the legacy path bit-identical.
+        """
+        stream: PerceptStream = getattr(self, "percept_stream", None) or LegacyPerceptStream()
+        if len(ids) == 0:
+            return qualities
+        clean = {
+            str(tid): float(q)
+            for tid, q in zip(ids, np.asarray(qualities, dtype=float))
+        }
+        if not stream.passthrough:
+            stream.assert_tick_rate(self._resolve_agent_tick_rate())
+        sampled = stream.sample(self._percept_tick, [str(t) for t in ids], clean)
+        if stream.passthrough:
+            return qualities
+        self._last_percept_qualities = dict(sampled)
+        return np.array([float(sampled[str(tid)]) for tid in ids], dtype=float)
+
+    def percept_stream_record(self) -> dict:
+        """Return the per-trial stamp: which protocol produced this record."""
+        stream: PerceptStream = getattr(self, "percept_stream", None) or LegacyPerceptStream()
+        record = dict(stream.describe())
+        record["sensory_stream_qhat"] = dict(
+            getattr(self, "_last_percept_qualities", {}) or {}
+        )
+        return record
+
+    # ------------------------------------------------------------------
     # Moved verbatim from MeanFieldMovementModel (Task 1.1).
     # ------------------------------------------------------------------
     def _resolve_agent_tick_rate(self) -> float:
@@ -156,6 +362,9 @@ class TargetModel(MovementModel):
         if tick is not None and hasattr(self.agent, "should_sample_detection"):
             if not self.agent.should_sample_detection(tick):
                 return
+        # The percept stream is keyed by the tick the detection was actually taken at,
+        # so a model that skips acquisition holds its percept rather than re-drawing.
+        self._percept_tick = -1 if tick is None else int(tick)
         snapshot = self.detection_model.sense(self.agent, objects, agents, arena_shape)
         if snapshot is None:
             self.perception = None
@@ -300,6 +509,7 @@ class TargetModel(MovementModel):
             target_ids = [str(entry.get("id", "")) for entry in target_entries]
             target_angles = np.array([entry.get("angle", 0.0) for entry in target_entries], dtype=float)
             target_qualities = np.array([entry.get("intensity", 1.0) for entry in target_entries], dtype=float)
+            target_qualities = self._apply_percept_stream(target_ids, target_qualities)
         else:
             target_ids = []
             target_angles = np.array([], dtype=float)
@@ -328,6 +538,12 @@ class TargetModel(MovementModel):
         phi = np.array([float(entry.get("angle", 0.0)) for entry in entries], dtype=float)
         d = np.array([float(entry.get("distance", 0.0)) for entry in entries], dtype=float)
         s = np.array([float(entry.get("intensity", 1.0)) for entry in entries], dtype=float)
+        # Keep the DECLARED strengths visible alongside the sampled percept: block-level
+        # constants (the ensemble |A| deduction) must read the scenario definition, not
+        # one noisy draw. Under `legacy` the stream is a pass-through and the two are
+        # identical, so nothing downstream can change on the reproducibility path.
+        self._percept_clean_s = {tid: float(val) for tid, val in zip(ids, s)}
+        s = self._apply_percept_stream(ids, s)
         if phi.size:
             phi = (phi + np.pi) % (2 * np.pi) - np.pi
         return TargetPercept(ids=ids, phi=phi, d=d, s=s)

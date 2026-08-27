@@ -91,6 +91,8 @@ class DriftDiffusionSystem:
         self,
         eta_rate: Sequence[float] = (0.3, 0.3),
         evidence_mode: str = "difference",
+        # --- shared sensory stream (FEATURE_SHARED_SENSORY_STREAM.md) ---
+        external_percept: bool = False,
         # --- across-trial variability ([B06] Section 3) ---
         extended: bool = False,
         s_A: float = 0.0,
@@ -147,6 +149,13 @@ class DriftDiffusionSystem:
         if np.any(eta < 0.0):
             raise ValueError("eta_rate entries must be non-negative")
         self.eta_rate = eta
+        # `external_percept` means the caller already hands in the SAMPLED quality
+        # q_hat, drawn upstream by a shared percept stream, so this system must not draw
+        # again. `eta_rate` is then the stream's white rate: it no longer generates the
+        # noise, but it is still the noise SCALE the boundary mathematics needs, since
+        # c^2 = sum(eta_rate^2) sets z*, ER and DT. Default False = the legacy path,
+        # which samples its own q_hat exactly as before.
+        self.external_percept = bool(external_percept)
 
         self.evidence_mode = str(evidence_mode).strip().lower()
         if self.evidence_mode not in {"difference", "llr"}:
@@ -1220,7 +1229,8 @@ class DriftDiffusionSystem:
         """Advance the decision variable by one control tick of `dt` seconds.
 
         `q` is the clean (pre-sampling) quality of each of the two targets, in the slot
-        order fixed by the configured `target_ids`.
+        order fixed by the configured `target_ids` — or, under `external_percept`, the
+        already-sampled percept `q_hat` handed in by a shared percept stream.
         """
         q = np.asarray(q, dtype=float).reshape(-1)
         if q.size != 2:
@@ -1259,8 +1269,13 @@ class DriftDiffusionSystem:
         q_hat_acc = np.zeros(2, dtype=float)
 
         for _ in range(self.n_sub):
-            xi = self.rng.standard_normal(2)
-            q_hat = q + eta * xi
+            if self.external_percept:
+                # q is already the sampled percept q_hat, shared with the other model;
+                # drawing here would add a second, unshared noise channel.
+                q_hat = q
+            else:
+                xi = self.rng.standard_normal(2)
+                q_hat = q + eta * xi
             q_hat_acc += q_hat
             delta = float(q_hat[0] - q_hat[1]) + self._A_offset
 

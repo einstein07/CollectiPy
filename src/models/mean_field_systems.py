@@ -66,6 +66,7 @@ class MeanFieldSystem:
         sensory_time_mode: str = "world_time",
         sensory_dt: float | None = None,
         rng: np.random.Generator | None = None,
+        noise_rng: np.random.Generator | None = None,
         # SFA parameters
         g_adapt: float = 0.0, # set > 0 to enable SFA
         tau_adapt: float = 0.0, # adaptation time constant
@@ -95,7 +96,14 @@ class MeanFieldSystem:
             dt: Integration time step.
             initial_state: Optional initial state vector z.
             external_input: Optional initial external input vector b.
-            rng: Optional numpy random generator for reproducibility.
+            rng: Generator for the FROZEN sensory bias (sigma_s), drawn once per reset.
+            noise_rng: Generator for the internal neural noise (sigma), drawn every
+                Euler sub-step. Deliberately a SEPARATE stream from `rng`: the frozen
+                bias must not shift when the number of integration steps changes, and
+                neither may depend on the other's consumption. Both should be seeded
+                from the arena seed by the caller (MeanFieldMovementModel does this);
+                the unseeded defaults exist only for bare unit-test construction and
+                make a run irreproducible.
             g_adapt: Adaptation strength (set > 0 to enable spike-frequency adaptation).
             tau_adapt: Adaptation time constant (used when g_adapt > 0).
             g_threshold: Threshold parameter for thresholding.
@@ -123,6 +131,7 @@ class MeanFieldSystem:
         if self.sensory_dt < 0.0:
             raise ValueError("sensory_dt must be non-negative")
         self.rng = rng or np.random.default_rng()
+        self.noise_rng = noise_rng or np.random.default_rng()
 
         self.theta = np.linspace(-np.pi, np.pi, self.num_neurons, endpoint=False)
 
@@ -445,13 +454,15 @@ class MeanFieldSystem:
             y[i] = y[i-1] + dt * dydt
         return y
     
-    @staticmethod
-    def randn_like(y, sigma, inv_sqrt_n):
-        #out = np.empty_like(y)
-        #for i in prange(y.size):
-        #    out[i] = np.random.normal(0.0, sigma) * inv_sqrt_n
-        #return out
-        return np.random.normal(0.0, sigma * inv_sqrt_n, size=y.shape)
+    def randn_like(self, y, sigma, inv_sqrt_n):
+        """Return the Euler-Maruyama noise increment for one sub-step.
+
+        Draws from `self.noise_rng`, NOT from the global `np.random`. The global module
+        RNG was the source here until the arena-seeding fix: it made the ring
+        attractor's internal noise impossible to reproduce from a config, since nothing
+        in the simulator ever seeded it.
+        """
+        return self.noise_rng.normal(0.0, sigma * inv_sqrt_n, size=y.shape)
     
 
     def compute_dynamics(self, total_time: float | None = None, dt: float | None = None):
@@ -475,7 +486,7 @@ class MeanFieldSystem:
                 self.u, self.b, self.M, self.beta,
                 self.num_neurons, self.sigma,
                 self.g_adapt, self.tau_adapt,
-                MeanFieldSystem.randn_like,
+                self.randn_like,
             )
             z_traj = result[:, :self.num_neurons]
             a_traj = result[:, self.num_neurons:]
@@ -485,7 +496,7 @@ class MeanFieldSystem:
                 y0, t_eval,
                 self.u, self.b, self.M, self.beta,
                 self.num_neurons, self.sigma,
-                MeanFieldSystem.randn_like,
+                self.randn_like,
             )
             a_traj = None
 

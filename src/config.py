@@ -161,6 +161,7 @@ class Config:
                             "target_position_swaps": environment.get("target_position_swaps", []),
                             "post_bifurcation_swap": environment.get("post_bifurcation_swap"),
                             "termination": environment.get("termination", {}),
+                            "sensory_stream": environment.get("sensory_stream", {}),
                             "results": environment.get("results", {}),
                             "logging": environment.get("logging") or {},
                             "gui": environment.get("gui", {}),

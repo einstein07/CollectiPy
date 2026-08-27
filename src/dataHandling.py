@@ -579,6 +579,43 @@ class SpaceDataHandling(DataHandling):
 
         self._write_ddm_row(files.get("ddm"), spin_values, tick)
         self._write_ddm_transitions(files.get("ddm_transitions"), spin_values)
+        self._write_percept_row(files.get("percept"), spin_values, tick)
+
+    @staticmethod
+    def _write_percept_row(entry, spin_values: dict, tick: int) -> None:
+        """Persist the sampled sensory percept q_hat and the protocol that produced it.
+
+        One row per tick per target, in the SAME shape for every decision model, so the
+        shared-stream claim can be checked by diffing two agents' `_percept.csv` files:
+        under `sensory_stream.mode: shared` the q_hat columns must agree exactly, tick
+        for tick. Under `legacy` the file records the mode and leaves q_hat empty —
+        there is no shared percept to record, each model samples its own downstream.
+        """
+        if not entry:
+            return
+        mode = spin_values.get("sensory_stream_mode")
+        if mode is None:
+            return
+        columns = ["tick", "target", "q_hat", "mode", "seed", "frozen_sd",
+                   "white_rate", "dt"]
+        if not entry["header_written"]:
+            entry["writer"].writerow(columns)
+            entry["header_written"] = True
+        common = [
+            mode,
+            spin_values.get("sensory_stream_seed"),
+            spin_values.get("sensory_stream_frozen_sd"),
+            spin_values.get("sensory_stream_white_rate"),
+            spin_values.get("sensory_stream_dt"),
+        ]
+        qhat = spin_values.get("sensory_stream_qhat") or {}
+        rows = sorted(qhat.items()) if qhat else [("", None)]
+        for target, value in rows:
+            # repr(), not str(): the whole point is a bit-exact diff between two files.
+            entry["writer"].writerow(
+                [tick, target, "" if value is None else repr(float(value))]
+                + ["" if v is None else v for v in common]
+            )
 
     @staticmethod
     def _write_ddm_row(ddm_entry, spin_values: dict, tick: int) -> None:
@@ -691,6 +728,7 @@ class SpaceDataHandling(DataHandling):
         position_path = os.path.join(self.run_folder, f"{agent_id}_position.csv")
         ddm_path = os.path.join(self.run_folder, f"{agent_id}_ddm.csv")
         ddm_tr_path = os.path.join(self.run_folder, f"{agent_id}_ddm_transitions.csv")
+        percept_path = os.path.join(self.run_folder, f"{agent_id}_percept.csv")
         neural_handle = open(neural_path, "w", newline="")
         perception_handle = open(perception_path, "w", newline="")
         sensory_handle = open(sensory_path, "w", newline="")
@@ -698,6 +736,7 @@ class SpaceDataHandling(DataHandling):
         position_handle = open(position_path, "w", newline="")
         ddm_handle = open(ddm_path, "w", newline="")
         ddm_tr_handle = open(ddm_tr_path, "w", newline="")
+        percept_handle = open(percept_path, "w", newline="")
         entry = {
             "neural": {"handle": neural_handle, "writer": csv.writer(neural_handle), "header_written": False},
             "perception": {"handle": perception_handle, "writer": csv.writer(perception_handle), "header_written": False},
@@ -713,6 +752,13 @@ class SpaceDataHandling(DataHandling):
             "ddm_transitions": {
                 "handle": ddm_tr_handle, "writer": csv.writer(ddm_tr_handle),
                 "header_written": False, "rows_written": 0,
+            },
+            # Per-tick sensory percept q_hat, in one shape for every decision model, so
+            # a shared-stream run can be verified by diffing two agents' files directly
+            # (FEATURE_SHARED_SENSORY_STREAM.md Section 9).
+            "percept": {
+                "handle": percept_handle, "writer": csv.writer(percept_handle),
+                "header_written": False,
             },
         }
         self.mean_field_files[(key, idx)] = entry

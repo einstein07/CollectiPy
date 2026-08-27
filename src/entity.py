@@ -231,7 +231,11 @@ class Agent(Entity):
         """Initialize the instance."""
         super().__init__(entity_type, config_elem, _id)
         self.random_generator = Random()
+        # Arena seed for the current run; set per run by the EntityManager. Only the
+        # shared sensory stream reads it (see models/percept_stream.py).
+        self.trial_seed = None
         self.ticks_per_second = config_elem.get("ticks_per_second", 5)
+        self.arena_ticks_per_second = config_elem.get("arena_ticks_per_second")
         self.color = config_elem.get("color", "blue")
         self.detection_range = 0.1
         self.linear_velocity_cmd = 0.0
@@ -1028,6 +1032,15 @@ class Agent(Entity):
         seed = make_agent_seed(random_seed, self.entity_type, int(self._id))
         self.random_generator.seed(seed)
         logger.debug("%s seeded RNG with %s", self.get_name(), seed)
+
+    def set_trial_seed(self, trial_seed):
+        """Record the arena seed for this run.
+
+        Kept separate from the agent RNG seed above: a shared sensory stream must be
+        reconstructible from a value that is identical across models and processes, and
+        `make_agent_seed` mixes in the entity type and id.
+        """
+        self.trial_seed = None if trial_seed is None else int(trial_seed)
 
     def get_random_generator(self):
         """Return the random generator."""

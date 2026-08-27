@@ -32,7 +32,7 @@ import copy
 import logging
 import math
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 
@@ -246,6 +246,16 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             gradient_window=int(bif_cfg.get("gradient_window", 5)),
             gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
+        # Sensory percept stream (FEATURE_SHARED_SENSORY_STREAM.md). Under `shared` the
+        # white sensory noise moves upstream into the stream, so eta_rate must be 0 in
+        # the config; `reset()` then hands the stream's own `white_rate` to the DDM as
+        # the noise SCALE (c), while the realisation comes from the stream.
+        self._init_percept_stream(
+            dist_mode=self.dist_mode,
+            attention_mode=self.attention_mode,
+            sigma_s=0.0,
+            eta_rate=self.eta_rate,
+        )
         self.reset()
         logger.info(
             "%s embodied pure-DDM instantiated (policy=%s, boundary=%s, motion=%s, c=%.4f)",
@@ -257,19 +267,36 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         )
 
     # ------------------------------------------------------------------
-    def _make_rng(self) -> np.random.Generator:
-        """Derive a numpy Generator from the agent's seeded RNG for reproducibility."""
-        if hasattr(self.agent, "get_random_generator"):
-            try:
-                pyrng = self.agent.get_random_generator()
-                return np.random.default_rng(int(pyrng.randint(0, 2 ** 32 - 1)))
-            except Exception:
-                pass
-        return np.random.default_rng()
+    def _resolve_evidence_noise(self) -> tuple[Sequence[float], bool]:
+        """Return `(eta_rate, external_percept)` for the configured sensory protocol.
+
+        `legacy`: the configured `eta_rate`, and this model draws its own `q_hat`.
+
+        `shared`: the percept is drawn upstream and handed in already sampled, so the
+        DDM must not draw again. `eta_rate` is then the stream's `white_rate` on both
+        channels — not to generate noise, but because `c^2 = sum(eta_rate^2)` is the
+        noise SCALE every boundary quantity is expressed in (`z* = a c^2 / 2A`, ER, DT).
+        Leaving it at the configured 0 would drive `c` to zero and collapse every
+        derived threshold, which would silently change the decision policy rather than
+        just the noise source. The config's own `eta_rate` is required to be 0 under
+        `shared` precisely so there is no ambiguity about where this number came from.
+
+        Note the frozen channel `s_beta` deliberately does NOT enter `c`: it is constant
+        within a trial, so it shifts the drift `A` of that trial rather than adding
+        diffusion, exactly as the ring attractor's `sigma_s` does.
+        """
+        spec = getattr(self, "sensory_stream_spec", None)
+        if spec is None or not spec.is_shared:
+            return self.eta_rate, False
+        eta = float(spec.white_rate)
+        return (eta, eta), True
 
     def reset(self) -> None:
         """Reset the decision process and the evidence pipeline."""
         self.perception = None
+        # Built before the DDM: under `shared` the stream supplies the noise scale the
+        # boundary mathematics needs (see `_resolve_evidence_noise`).
+        self._build_percept_stream()
         self._last_heading = None
         self._evidence_started = False
         self._tick_count = 0
@@ -324,12 +351,14 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             sigma=0.0,
             y_floor=None,
             n_sub=1,
-            rng=self._make_rng(),
+            rng=self._make_rng("evidence"),
         )
 
+        eta_rate_effective, external_percept = self._resolve_evidence_noise()
         self.ddm = DriftDiffusionSystem(
-            eta_rate=self.eta_rate,
+            eta_rate=eta_rate_effective,
             evidence_mode=self.evidence_mode,
+            external_percept=external_percept,
             extended=self.extended,
             s_A=float(params.get("s_A", 0.0)),
             s_x=float(params.get("s_x", 0.0)),
@@ -352,7 +381,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             A_lognormal_debias=self.A_lognormal_debias,
             A_lognormal_redraw=self.A_lognormal_redraw,
             A_hat_min=self.A_hat_min,
-            A_rng=self._make_rng(),   # separate stream from the evidence noise
+            A_rng=self._make_rng("A_hat"),   # separate stream from the evidence noise
             collapse_form=str(params.get("collapse_form", "weibull")),
             z_min=float(params.get("z_min", 0.05)),
             collapse_rate=float(params.get("collapse_rate", 0.5)),
@@ -378,7 +407,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             A_expected_deferred=(
                 params.get("A_expected") is None and self.A_source == "ensemble"
             ),
-            rng=self._make_rng(),
+            rng=self._make_rng("ddm"),
         )
         self.ddm.flag_policy_incoherent(self.boundary_policy_incoherent)
         # collapse_form 'geometric' IS the per-tick re-evaluation of rho from the current
@@ -481,10 +510,20 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         # Steps 6-7 — resolve the drift estimate, refresh the boundary, then integrate.
         # update_A_hat must run BEFORE _update_threshold: the threshold consumes
         # A_hat, and at evidence onset ddm.step() has not run yet.
-        # `s` is the DECLARED quality of each target (the detection layer passes the
-        # configured object strength through untouched), not a pose-dependent percept, so
-        # it is the right source for a block-level magnitude.
-        self._resolve_A_expected(s, ids)
+        # The deduction must read the DECLARED quality of each target — the scenario
+        # definition — never a sampled percept. Under sensory_stream 'shared',
+        # `percept.s` is already one noisy realisation (the stream is applied upstream
+        # in `_build_target_percept`), so handing it to `_resolve_A_expected` would make
+        # the agent's "known" |A| a random variable with sd ~ eta*sqrt(2/dt) — silently
+        # breaking drift_knowledge 'known_magnitude' and solving each replicate's
+        # boundary for a different drift. `_percept_clean_s` carries the pre-stream
+        # values; under 'legacy' the stream is a pass-through and they equal `s`.
+        clean_s = getattr(self, "_percept_clean_s", None)
+        if clean_s and all(t in clean_s for t in ids):
+            s_declared = np.array([clean_s[t] for t in ids], dtype=float)
+        else:
+            s_declared = s
+        self._resolve_A_expected(s_declared, ids)
         self.ddm.update_A_hat(q)
         self._update_threshold(q, phi, d)
         state = self.ddm.step(q, dt)
@@ -965,6 +1004,54 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         T_max = float(T_max) if T_max else (r0 / v if v > 1e-12 else 10.0)
         c_e = float(self.cost_ratio)
 
+        # Optional disk cache (CAMPAIGN_SPEC Section 7.3). Default OFF: with
+        # `bellman.table_cache_dir` unset (null) this block is inert and the solve
+        # path below is byte-for-byte the historical behaviour. The key is computed
+        # HERE, from the same floats the solver is about to receive, so a precompute
+        # job that populates the cache by running this model is guaranteed to agree.
+        cache_dir = cfg.get("table_cache_dir") or None
+        cache_key = None
+        if cache_dir:
+            from models.bellman_table_cache import load_table, save_table, table_key
+            cache_inputs = dict(
+                A=A, c=c, c_e=c_e, r0=r0, L=2.0 * half_L, v=v, T_max=T_max,
+                N_x=int(cfg.get("N_x", 801)), N_t=int(cfg.get("N_t", 10000)),
+                X_max_factor=float(cfg.get("X_max_factor", 4.0)),
+                scheme=str(cfg.get("scheme", "crank_nicolson")),
+            )
+            cache_key = table_key(**cache_inputs)
+            hit = load_table(cache_dir, cache_key)
+            if hit is not None:
+                t_grid, z_arr, meta = hit
+                self.ddm.set_bellman_table(t_grid, z_arr)
+                self._bellman_solved = True
+                # The subset of the solver's diag the rest of the model reads
+                # (`z_myopic_onset` for the gap log, `wall_time_s` for the record).
+                self._bellman_diag = {
+                    "z_myopic_onset": meta["z_myopic_onset"],
+                    "wall_time_s": meta["wall_time_s"],
+                    "table_cache": "hit",
+                }
+                self._bellman_c_tau_of_t = c_tau_of_t
+                self._bellman_A, self._bellman_c, self._bellman_c_e = A, c, c_e
+                logger.info(
+                    "%s: bellman boundary LOADED from table cache (key %s) -- "
+                    "z(0)=%.4g, T_max=%.2fs, solved elsewhere in %.2fs",
+                    self.agent.get_name(), cache_key[:12], z_arr[0], T_max,
+                    meta["wall_time_s"],
+                )
+                self._geom_log = {
+                    "d_1": float(d[0]), "d_2": float(d[1]), "v": v, "delta": delta0,
+                    "c_tau": float(c_tau_of_t(0.0)), "c_tau_eff": float(c_tau_of_t(0.0)),
+                    "c_err_eff": c_e, "rho": float("nan"), "rho_branch": "bellman",
+                    "a_star": float("nan"), "z_star": float(z_arr[0]),
+                    "z_floor_analytic": float("nan"), "lambda_t_used": None,
+                    "cost_ratio_used": c_e,
+                    "geometric_error_mode": self.geometric_error_mode,
+                    "T_arr": None,
+                }
+                return float(z_arr[0])
+
         try:
             t_grid, z_arr, diag = bellman_boundary(
                 A, c, c_e, c_tau_of_t, T_max,
@@ -984,6 +1071,19 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             return self._geometric_threshold(A, c, q, phi, d)
 
         self.ddm.set_bellman_table(t_grid, z_arr)
+        if cache_dir and cache_key:
+            # Persisted only after a SUCCESSFUL solve; the fallback path above never
+            # writes. Atomic write, so racing tasks on a cold cache are safe.
+            from models.bellman_table_cache import save_table
+            hc = diag.get("horizon_check")
+            save_table(
+                cache_dir, cache_key, t_grid, z_arr,
+                inputs={k: v_ for k, v_ in cache_inputs.items() if k != "scheme"},
+                z_myopic_onset=float(diag["z_myopic_onset"]),
+                wall_time_s=float(diag["wall_time_s"]),
+                scheme=cache_inputs["scheme"],
+                horizon_ok=(None if not isinstance(hc, dict) else hc.get("ok")),
+            )
         self._bellman_solved = True
         self._bellman_diag = diag
         self._bellman_c_tau_of_t = c_tau_of_t
@@ -1366,6 +1466,8 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             ),
             "boundary_policy_incoherent": bool(self.boundary_policy_incoherent),
         }
+        # Stamp which sensory protocol produced this record, so no result is ambiguous.
+        data.update(self.percept_stream_record())
         if self.threshold_policy == "geometric" and self._geom_log:
             data.update({f"pure_ddm_{k}": v for k, v in self._geom_log.items()})
         return data

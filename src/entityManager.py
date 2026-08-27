@@ -150,6 +150,10 @@ class EntityManager:
                 entity_seed = random_seed + seed_counter if random_seed is not None else seed_counter
                 seed_counter += 1
                 entity.set_random_generator(entity_seed)
+                # The arena seed itself (not the per-entity derivation) is what a shared
+                # sensory stream is reconstructed from, in this or any other process.
+                if hasattr(entity, "set_trial_seed"):
+                    entity.set_trial_seed(random_seed)
                 entity.reset()
                 if not entity.get_orientation_from_dict():
                     rand_angle = Random.uniform(entity.get_random_generator(), 0.0, 360.0)
