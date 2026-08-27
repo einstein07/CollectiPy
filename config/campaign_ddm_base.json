@@ -1,0 +1,139 @@
+{
+    "_comment": "CAMPAIGN base config (CAMPAIGN_SPEC.md Section 1). Every locked parameter lives here; campaign/genconfig.py overrides ONLY the factor values (target strengths/positions, cost_ratio, seeds, solver N_t, output paths) and never edits this file in place. Positions here are the 60-degree baseline at range d = 0.5 m; the generator recomputes them per angular-separation condition.",
+    "environment": {
+        "logging": {
+            "console": true,
+            "console_level": "INFO",
+            "file_level": "INFO"
+        },
+        "collisions": false,
+        "time_limit": 60,
+        "_comment_time_limit": "Seconds. Decision (<= 4.2 s at the top of the criterion grid) plus post-commitment travel (<= ~19 s at v = 0.05) fit with a wide margin; a run that hits this limit is CENSORED, not scored.",
+        "num_runs": 1,
+        "gui": {
+            "_id": "2D",
+            "on_click": [
+                "show_spins", "detection"
+            ],
+            "view": ["detection"]
+        },
+        "ticks_per_second": 10,
+        "_comment_ticks_per_second": "Arena clock. MUST equal the agent's ticks_per_second (Section 1: they alias otherwise). dt = 0.1 s.",
+        "sensory_stream": {
+            "mode": "shared",
+            "frozen_sd": 0.0,
+            "white_rate": 0.035,
+            "seed": null,
+            "_comment": "Section 2. The white sensory noise lives HERE, upstream of the model; eta_rate below is 0 accordingly, and the DDM's c becomes sqrt(2)*white_rate = 0.0495. `seed` is set per replicate by the generator as H(campaign_seed, 'sensory', dQ, dtheta, replicate) -- the criterion is deliberately absent so the sweep is paired. frozen_sd = 0 per Section 1.2: a frozen bias imposes an accuracy ceiling Phi(A/s_beta) that flattens every curve."
+        },
+        "termination": {
+            "type": "proximity",
+            "target_ids": ["static_0.s#0", "static_1.s#0"],
+            "radius": 0.05,
+            "agent_ids": "any"
+        },
+        "arenas": {
+            "arena_0": {
+                "random_seed": 0,
+                "side": 2,
+                "_id": "square",
+                "color": "white",
+                "_comment_side": "Square arena spans [-side/2, side/2]. side = 2 fits every angular-separation condition: at dtheta = 150deg the targets sit at y = +-0.483 plus a 0.025 object radius, which overflows the default side = 1 (and the arena would RE-SAMPLE the target to a random position rather than fail).",
+                "_comment_random_seed": "Set per replicate by the generator as the INTERNAL seed H(campaign_seed, 'internal', dQ, dtheta, c_e, replicate); the model's own RNG descends from it."
+            }
+        },
+        "objects": {
+            "static_0": {
+                "number": [1],
+                "position": [[0.4330127018922193, -0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "red",
+                "strength": [5.0],
+                "uncertainty": [0],
+                "_comment": "The BETTER target by construction; scored as correct downstream."
+            },
+            "static_1": {
+                "number": [1],
+                "position": [[0.4330127018922193, 0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "green",
+                "strength": [4.95],
+                "uncertainty": [0]
+            }
+        },
+        "agents": {
+            "movable_0": {
+                "position": [[0.0, 0.0, 0.0]],
+                "orientation": [[0, 0, 0]],
+                "number": [1],
+                "shape": "cylinder",
+                "linear_velocity": 0.05,
+                "_comment_linear_velocity": "m/s, LOCKED (Section 1): physically plausible, T_max = r0/v spans 2.6-8.7 s across the angular grid.",
+                "angular_velocity": 120,
+                "_comment_angular_velocity": "deg/s. NOT the template's 10: the minimum turn radius is v/omega, and at the locked v = 0.05 a 10 deg/s plant gives a 0.29 m turning circle -- the agent then ORBITS the target outside the 0.05 m termination radius forever (measured: stable closed orbit, min distance 0.134 m, up to 19/20 replicates censored at dtheta = 150). Arrival scoring requires v/omega << termination radius; 120 deg/s gives 0.024 m. Post-commitment motion only -- the pre-decision heading is the bisector the agent already faces, and percepts are heading-independent (attention_mode none), so decisions are untouched.",
+                "ticks_per_second": 10,
+                "height": 0.02,
+                "diameter": 0.033,
+                "color": "blue",
+                "detection": {
+                    "type": "GPS",
+                    "range": 5.0,
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "embodied_pure_ddm",
+                "embodied_pure_ddm": {
+                    "target_ids": ["static_0.s#0", "static_1.s#0"],
+                    "reference": "egocentric",
+                    "perception_width": 0.2,
+                    "perception_global_inhibition": 0.2,
+                    "task": "selection",
+                    "sensory_time_mode": "world_time",
+                    "eta_rate": [0.0, 0.0],
+                    "_comment_eta_rate": "REQUIRED to be 0 under sensory_stream.mode 'shared': the noise is drawn upstream, and the stream's white_rate is handed back to the DDM as the noise SCALE c on both channels.",
+                    "n_sub": 16,
+                    "_comment_n_sub": "Section 1.3: integration step c*sqrt(dt/n_sub) = 0.0039, below the smallest useful boundary. The two lowest criterion points remain discretisation-limited and are flagged as such in the output.",
+                    "dist_mode": "none",
+                    "attention_mode": "none",
+                    "threshold_policy": "bellman",
+                    "drift_knowledge": "known_magnitude",
+                    "A_source": "ensemble",
+                    "geometric_error_mode": "terminal_categorical",
+                    "cost_ratio": 300.0,
+                    "_comment_cost_ratio": "The swept criterion (factor C); overridden per condition.",
+                    "delta_min": 0.001,
+                    "z_min": 0.0001,
+                    "_comment_z_min": "DELIBERATELY far below the historical 0.05: Section 1.3 requires the chance-level end of the curve to be measured (flagged, with the realised crossing log-odds recorded), and a 0.05 floor would replace the policy's z ~ 0.003 at c_e <= 0.1 with the floor itself. 1e-4 keeps the numerical guard without masking any grid point.",
+                    "predecision_motion": "midpoint",
+                    "scaling_mode": "constant",
+                    "norm_scale": 1.0,
+                    "bellman": {
+                        "T_max": null,
+                        "_comment_T_max": "null = r0/v from the onset geometry, per condition.",
+                        "T_max_check_factor": null,
+                        "_comment_T_max_check_factor": "Off for the bulk campaign; the precompute pass (campaign/precompute_tables.py) runs the 1.5x horizon check once per condition instead of once per replicate.",
+                        "N_x": 1601,
+                        "N_t": 8660,
+                        "_comment_N_t": "Overridden per condition to ceil(T_max / 1e-3): dt = 1 ms everywhere on the grid (the boundary converges as O(sqrt(dt))).",
+                        "X_max_factor": 4.0,
+                        "scheme": "crank_nicolson",
+                        "table_cache_dir": null,
+                        "_comment_table_cache_dir": "Set by the generator to the campaign's shared table cache (Section 7.3). null = solve in-process, the historical behaviour."
+                    }
+                }
+            }
+        },
+        "results": {
+            "base_path": "./data/campaign_ddm/",
+            "agent_specs": ["base", "mean_field"],
+            "group_specs": [],
+            "snapshots_per_second": 10,
+            "_comment_snapshots_per_second": "Equal to the tick rate: per-tick rows. At this horizon a run is <= 600 ticks, so the per-run archive stays small; the filesystem load is controlled by chunk aggregation (Section 7.4), not by the logging cadence."
+        }
+    }
+}
