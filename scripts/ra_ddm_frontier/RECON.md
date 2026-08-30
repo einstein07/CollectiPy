@@ -280,6 +280,42 @@ carries over unchanged — while z\*(0.3) = 0.0278 clears it **marginally**
 (1.1×): read the ce = 0.3 point with that in mind. Commitment *ticks* are also
 10× coarser; arrival is still sub-tick-refined from the trajectory as before.
 
+### D-12 wave 2 (spec v2, 2026-08-30): Set U-v2 top-up + DDM ceiling points
+
+**Set U-v2** (§2): generated from wave-1 `cells.csv` by
+`generate_manifest.py --topup-from`. Measured cliff windows (rule: û_hi = last
+Set-R level with acc_all > 0.95 — 0.65 at every v; û_lo = first < 0.85 —
+0.70 at v = 0.2, 0.75 elsewhere), sampled at Δû = 0.025, plus 0.3·u\* / 0.5·u\*
+anchors, a 1.2·u\* committed point, and the û ∈ {1.75, 2.0, 2.4} tail:
+
+| v | new u values |
+|---|---|
+| 0.2 | 4.0, 6.5, 8.5, 8.75, 9.25, 23.0, 26.25, 31.5 |
+| 0.3 | 2.75, 4.5, 6.25, 6.5, 6.75, 16.0, 18.25, 21.75 |
+| 0.4 | 2.25, 3.5, 4.75, 5.25, 5.5, 8.5, 17.25 |
+| 0.5 | 1.75, 3.0, 4.0, 4.25, 4.5, 7.5 (tail all within 5 % of the existing 10–15 levels, skipped as the spec predicted) |
+
+**29 cells × 1000 = 29 000 replicates.** Interpretation of the 5 % skip rule:
+it applies to the anchors / committed / tail targets (the spec states it in
+the tail paragraph); cliff-window samples deliberately interleave the integer
+wave-1 grid and are dropped only on exact collision — the spec's own
+indicative lists (8.25, 8.75, 9.25 at v = 0.2) confirm this reading. Cell ids
+are `U2_…`, `sweep = absolute`, same directory layout — analysis pools waves
+automatically; `manifest_full.csv` is the §9 completeness reference.
+
+**DDM ceiling points** (§11): c_e ∈ {3000, 30000} (~10× and ~100× the previous
+maximum), in `ddm_manifest_topup.csv`. The analytic fixed-bound
+infinite-patience asymptote is also computed: Φ((A/c)·√(r₀/v)) =
+Φ(0.5·√8.6603) = **0.9294** — no boundary policy can beat the full-horizon
+ideal observer. `analyze_overlay.py` now emits `ceiling_check.json`: the
+RA-beats-the-DDM-family claim is granted only if the cross-validated
+envelope's peak (eval-half trials, so no winner's curse) clears both the
+asymptote and the best measured DDM point with CI separation.
+
+**Step-halving** (§2): `dt_check.py`, 200 trials/arm at dt 0.1 vs 0.05 on
+identical frontier-v1 seeds, at the three stiffest new cells (u = 23, 26.25,
+31.5 at v = 0.2) — result recorded below; blocking for the wave-2 submission.
+
 ---
 
 ## Pre-flight results (this workstation, 2026-08-30 — final configuration: η = 0.07071068 (c = 0.1), both models at 1 tick/s)
@@ -296,3 +332,7 @@ carries over unchanged — while z\*(0.3) = 0.0278 clears it **marginally**
 | In-process vs `main.py -c` | bit-identical (position/percept/neural logs) |
 | Measured wall time | RA 0.50–0.58 s/run, DDM 0.55–0.57 s/run (cache warm) → at `RUNS_PER_TASK=100`: ≲ 2 min/task; whole pair of campaigns ≈ 15–20 core-hours |
 | SLURM dry run | RA 1000 tasks, DDM 100 + precompute; `sbatch --test-only` still needed on the login node |
+| **Wave 2** step-halving (D-12; 200 trials/arm, dt 0.1 vs 0.05, identical seeds) | **PASS** at all three stiffest cells — u = 23: Δ = +0.010 [−0.035, +0.050]; u = 26.25: +0.010 [−0.030, +0.050]; u = 31.5: +0.015 [−0.025, +0.060]; zero failures, max\|z\| ≈ 1.85. `dt_check_report.json` |
+| **Wave 2** ceiling point c_e = 30000, 3 local replicates | solver clean; rt 5.5–6.8 s of the 8.66 s horizon, all committed, arrival ~11 s |
+| **Wave 2** TOPUP dry runs | RA 29 tasks, DDM 2 + precompute |
+| Ceiling verdict on wave-1 data | claim **STANDS** vs the analytic asymptote (RA envelope eval-half peaks 0.984 / 0.994 vs 0.9294) and vs the measured DDM best (hi 0.9505) — empirical extreme-c_e confirmation pending the wave-2 DDM runs |

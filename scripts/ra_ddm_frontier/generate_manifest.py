@@ -51,7 +51,15 @@ def main(argv=None) -> int:
                          f"{frontier.DIFF} (other panels are out of scope, §13)")
     ap.add_argument("--force", action="store_true",
                     help="overwrite an existing manifest")
+    ap.add_argument("--topup-from", type=Path, default=None, metavar="CELLS_CSV",
+                    help="wave-2 mode (§2 Set U-v2 + §11 DDM ceiling points): "
+                         "derive the top-up grids from wave-1 cells.csv and "
+                         "write manifest_topup/manifest_full (and DDM twins) "
+                         "into --out-dir")
     args = ap.parse_args(argv)
+
+    if args.topup_from is not None:
+        return topup_main(args)
 
     if abs(args.diff - frontier.DIFF) > 1e-12:
         raise SystemExit(f"--diff {args.diff} != {frontier.DIFF}: other panels "
@@ -109,6 +117,67 @@ def main(argv=None) -> int:
                       "ddm_frame": {"ticks_per_second": frontier.DDM_TICKS_PER_SECOND,
                                     "time_limit_s": frontier.DDM_TIME_LIMIT},
                       "bellman_N_t": frontier.BELLMAN_N_T}))
+    return 0
+
+
+def topup_main(args) -> int:
+    """Wave 2: Set U-v2 (measured-cliff sampling + matched tails) and the DDM
+    ceiling points. Emits, per §2/§5:
+        manifest_topup.csv       new RA cells only (submission)
+        manifest_full.csv        wave 1 + wave 2 (analysis + completeness)
+        ddm_manifest_topup.csv   the extreme-c_e ceiling points (submission)
+        ddm_manifest_full.csv    previous grid + ceiling points
+    """
+    out_dir = args.out_dir or (frontier._ROOT / "results" / "ra_ddm_frontier")
+    frontier.anchor_check()
+    frontier.write_templates()
+
+    topup, report = frontier.build_topup_rows(args.topup_from, args.n_runs)
+    wave1 = frontier.build_ra_rows(args.n_runs)
+    print("Set U-v2 — measured cliff windows and chosen u per v "
+          f"(rule: û_hi = last acc_all > {frontier.TOPUP_ACC_HI}, "
+          f"û_lo = first < {frontier.TOPUP_ACC_LO}, Δû = {frontier.TOPUP_DU_HAT}; "
+          f"anchors {frontier.TOPUP_ANCHORS}·u*, committed "
+          f"{frontier.TOPUP_COMMITTED}·u*, tail {frontier.TOPUP_TAIL} in û; "
+          f"skip within {frontier.TOPUP_SKIP_REL:.0%} of an existing Set-U level):")
+    for v, r in report.items():
+        print(f"  v = {v:g} (u* = {r['u_star']:.4f}): window û ∈ "
+              f"[{r['uhat_hi']:g}, {r['uhat_lo']:g}] -> new u = {r['new_u']}")
+    print(f"  -> {len(topup)} new cells x {args.n_runs} runs "
+          f"= {len(topup) * args.n_runs} additional replicates")
+
+    ddm_ceiling = frontier.build_ddm_ceiling_rows(args.n_runs)
+    ddm_full = frontier.build_ddm_rows(args.n_runs) + ddm_ceiling
+    print(f"DDM ceiling points (§11): c_e = "
+          f"{[float(r['c_e']) for r in ddm_ceiling]}; analytic "
+          f"infinite-patience asymptote Phi((A/c)·sqrt(r0/v)) = "
+          f"{frontier.ddm_ideal_ceiling():.4f}")
+
+    jobs = [("ra topup", topup, frontier.RA_FIELDS,
+             out_dir / "manifest_topup.csv"),
+            ("ra full", wave1 + topup, frontier.RA_FIELDS,
+             out_dir / "manifest_full.csv"),
+            ("ddm topup", ddm_ceiling, frontier.DDM_FIELDS,
+             out_dir / "ddm_manifest_topup.csv"),
+            ("ddm full", ddm_full, frontier.DDM_FIELDS,
+             out_dir / "ddm_manifest_full.csv")]
+    for name, rows, fields, dest in jobs:
+        if dest.exists() and not args.force:
+            if frontier.read_manifest(dest) == rows:
+                print(f"[{name}] {dest} already up to date ({len(rows)} rows)")
+                continue
+            raise SystemExit(f"{dest} exists with DIFFERENT content — a "
+                             "re-derived top-up would re-key wave 2; pass "
+                             "--force only if that is intended.")
+        frontier.write_manifest(rows, fields, dest)
+        print(f"[{name}] wrote {dest} ({len(rows)} rows)")
+
+    hi = sorted(topup, key=lambda r: float(r["u"]))[-3:]
+    print("\nBLOCKING before submission (§2): step-halving check at the three "
+          "highest new u values:")
+    print(f"  python3 scripts/ra_ddm_frontier/dt_check.py --manifest "
+          f"{out_dir / 'manifest_topup.csv'}   # cells "
+          + ", ".join(r['cell_id'] for r in hi))
     return 0
 
 

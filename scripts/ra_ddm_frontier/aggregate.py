@@ -342,9 +342,16 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     root = args.base_root
-    manifest = args.manifest or (
-        root / (frontier.RA_MANIFEST_NAME if args.campaign == "ra"
-                else frontier.DDM_MANIFEST_NAME))
+    if args.manifest is not None:
+        manifest = args.manifest
+    else:
+        # §9: once wave 2 exists, completeness is judged against the FULL
+        # manifest (all waves); fall back to the wave-1 name otherwise.
+        full = root / ("manifest_full.csv" if args.campaign == "ra"
+                       else "ddm_manifest_full.csv")
+        wave1 = root / (frontier.RA_MANIFEST_NAME if args.campaign == "ra"
+                        else frontier.DDM_MANIFEST_NAME)
+        manifest = full if full.is_file() else wave1
     rows_manifest = frontier.read_manifest(manifest) if manifest.is_file() else []
     if not rows_manifest:
         print(f"WARNING: no manifest at {manifest}; completeness not checkable")
