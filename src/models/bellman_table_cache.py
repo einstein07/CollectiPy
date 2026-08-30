@@ -62,9 +62,16 @@ def table_key(
     N_t: int,
     X_max_factor: float,
     scheme: str,
+    terminal: str = "forced_choice",
+    halt_cost_rate: float = 1.0,
 ) -> str:
     """Return the cache key for one solve. Floats render via repr: bit-identical
-    inputs give the same key, and any real difference in inputs changes it."""
+    inputs give the same key, and any real difference in inputs changes it.
+
+    The terminal condition parameterises the solve too (BELLMAN_KNOWN_A_TERMINAL_HALT
+    Section 3), so it is part of the key — but only when it departs from the default,
+    so every existing forced-choice cache stays valid under its historical key.
+    """
     parts = [
         f"fmt={_FORMAT}",
         f"A={float(A)!r}", f"c={float(c)!r}", f"c_e={float(c_e)!r}",
@@ -74,6 +81,9 @@ def table_key(
         f"X_max_factor={float(X_max_factor)!r}",
         f"scheme={str(scheme)}",
     ]
+    if str(terminal) != "forced_choice":
+        parts.append(f"terminal={str(terminal)}")
+        parts.append(f"halt_cost_rate={float(halt_cost_rate)!r}")
     return hashlib.sha1("|".join(parts).encode()).hexdigest()
 
 

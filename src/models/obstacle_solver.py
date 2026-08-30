@@ -16,7 +16,7 @@ unknown-drift model later, with a belief coordinate and reparameterised time.
 The problem solved is
 
     min { L V + running_cost(t) ,  obstacle(x) - V } = 0
-    V(x, T_max) = obstacle(x)
+    V(x, T_max) = terminal_V(x)          # defaults to obstacle(x): forced choice at T_max
 
 with the generator
 
@@ -179,6 +179,7 @@ def solve_obstacle_problem(
     running_cost: Callable[[float], float],
     scheme: str = "crank_nicolson",
     tol: Optional[float] = None,
+    terminal_V: Optional[np.ndarray] = None,
 ):
     """Solve the obstacle problem backward in time.
 
@@ -193,6 +194,11 @@ def solve_obstacle_problem(
     scheme : 'crank_nicolson' (default, 2nd order in dt) or 'implicit' (1st order).
     tol : contact tolerance. Defaults to `1e-10 * max(stopping_cost)` so it scales with
         the problem rather than being a bare absolute number.
+    terminal_V : optional (N_x,) value at the horizon, `V(x, T_max)`. None (the default)
+        means the stopping cost: at the horizon you must stop, whatever you believe.
+        A caller with a better option at the horizon (BELLMAN_KNOWN_A_TERMINAL_HALT
+        Section 4.1) passes its value here; it must satisfy `terminal_V <= stopping_cost`
+        pointwise, or the obstacle constraint is violated at t = T_max itself.
 
     Returns
     -------
@@ -226,11 +232,23 @@ def solve_obstacle_problem(
         tol = 1e-10 * float(np.max(np.abs(stopping_cost)))
     tol = max(float(tol), 0.0)
 
+    if terminal_V is not None:
+        terminal_V = np.asarray(terminal_V, dtype=float).reshape(-1)
+        if terminal_V.size != x_grid.size:
+            raise ValueError("terminal_V must have the same length as x_grid")
+        if np.any(terminal_V > stopping_cost + tol):
+            raise ValueError(
+                "terminal_V exceeds stopping_cost by up to "
+                f"{float(np.max(terminal_V - stopping_cost)):.3g}: the terminal value "
+                "cannot be worse than stopping at the horizon."
+            )
+
     lower, diag, upper = _generator_bands(x_grid, drift, diffusion)
     ab = _step_matrices(lower, diag, upper, dt, theta)
 
     t0 = time.perf_counter()
-    V = stopping_cost.copy()                       # terminal condition V(x, T_max)
+    # Terminal condition V(x, T_max); the default is the stopping cost (forced choice).
+    V = stopping_cost.copy() if terminal_V is None else terminal_V.copy()
     boundary = np.zeros(n_steps, dtype=float)
 
     for n in range(n_steps - 1, -1, -1):

@@ -156,6 +156,68 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self._bellman_diag = None
         self._bellman_solved = False
 
+        # --- terminal condition of the bellman solve (BELLMAN_KNOWN_A_TERMINAL_HALT) ---
+        #   forced_choice - commit at arrival whatever you believe; z(T_max) = 0.
+        #   halt_sprt     - halt at the midpoint at arrival and keep integrating at
+        #                   delay rate halt_cost_rate against the flat threshold z_halt.
+        self.bellman_terminal = str(
+            self.bellman_cfg.get("terminal", "forced_choice")
+        ).strip().lower()
+        if self.bellman_terminal not in {"forced_choice", "halt_sprt"}:
+            raise ValueError(
+                "bellman.terminal must be 'forced_choice' or 'halt_sprt'; got "
+                f"'{self.bellman_terminal}'"
+            )
+        self.halt_cost_rate = float(self.bellman_cfg.get("halt_cost_rate", 1.0))
+        if self.bellman_terminal == "halt_sprt":
+            if self.halt_cost_rate <= 0.0:
+                raise ValueError("bellman.halt_cost_rate must be > 0")
+            if self.drift_knowledge != "known_magnitude":
+                # Section 3: the halted problem is stationary ONLY when |A| is known.
+                # Under the unknown-A arm the reparameterised running cost grows in time
+                # and the belief map is time-dependent, so no flat-boundary closed form
+                # exists. Refuse rather than produce a plausible wrong plateau.
+                raise ValueError(
+                    "bellman.terminal 'halt_sprt' requires drift_knowledge "
+                    "'known_magnitude': the halted problem is stationary only when |A| "
+                    f"is known (got drift_knowledge '{self.drift_knowledge}')."
+                )
+            if self.halt_cost_rate != 1.0:
+                logger.warning(
+                    "%s: bellman.halt_cost_rate = %.3g != 1.0 is a sensitivity knob, "
+                    "not the physical value (halted = zero progress = rate 1)%s",
+                    agent.get_name(), self.halt_cost_rate,
+                    "; c_h < 1 voids the halt-only-at-arrival domination lemma "
+                    "(Section 1)." if self.halt_cost_rate < 1.0 else ".",
+                )
+        # Per-run halt state; re-initialised in reset() like the solver flags above.
+        self._bellman_z_halt = None
+        self._bellman_T_max = None
+        self._halt_mean_exit = None
+        self._halted_now = False
+        self._halt_event = False
+        self._x_at_arrival = None
+        self._t_halt_commit = None
+        self._halt_guard_hits = 0
+
+        # --- static bounds as the degenerate case (RA-DDM frontier spec §2b) ---
+        # bellman.static_bound = b > 0 replaces the PDE solve with the flat table
+        # z(t) = b on [0, T_max] through the SAME machinery — the accumulator's
+        # hold-past-the-horizon rule and (under terminal 'halt_sprt') the
+        # halt-at-midpoint motor hold apply unchanged with z_halt = b. One code
+        # path, two parameterizations; never a parallel implementation.
+        raw_static = self.bellman_cfg.get("static_bound")
+        self.bellman_static_bound = None if raw_static is None else float(raw_static)
+        if self.bellman_static_bound is not None:
+            if self.bellman_static_bound <= 0.0:
+                raise ValueError("bellman.static_bound must be > 0")
+            if self.threshold_policy != "bellman":
+                raise ValueError(
+                    "bellman.static_bound is only read under threshold_policy "
+                    f"'bellman' (got '{self.threshold_policy}'); it would be "
+                    "silently ignored otherwise."
+                )
+
         # --- post-commitment flexibility (FEATURE_POST_COMMITMENT_FLEXIBILITY) ---
         self.flexibility = bool(params.get("flexibility", False))
         self.post_commit_accumulation = str(
@@ -322,6 +384,15 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self._feasibility_checked = False
         self._bellman_solved = False
         self._bellman_diag = None
+        # --- halt_sprt per-run state (BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3) ---
+        self._bellman_z_halt = None          # z_halt of the installed table, halt mode only
+        self._bellman_T_max = None           # arrival horizon of the installed table
+        self._halt_mean_exit = None          # D(z_halt), sizes the runaway guard cap
+        self._halted_now = False             # v = 0 hold active this tick
+        self._halt_event = False             # reached arrival uncommitted
+        self._x_at_arrival = None            # x when the halt began
+        self._t_halt_commit = None           # t_evidence of the post-arrival commit
+        self._halt_guard_hits = 0            # forced commits by the runaway guard
         self._A_expected_resolved = False
         params = self.params
 
@@ -527,6 +598,10 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self.ddm.update_A_hat(q)
         self._update_threshold(q, phi, d)
         state = self.ddm.step(q, dt)
+        # Terminal halt (BELLMAN_KNOWN_A_TERMINAL_HALT): past arrival the boundary is
+        # the flat z_halt and the agent parks at the midpoint until |x| crosses it. May
+        # refresh `state` if the runaway guard forced a commit.
+        state = self._update_halt_state(state)
         self._last_state = state
 
         self._check_reversal_feasibility(d)
@@ -555,6 +630,9 @@ class EmbodiedPureDDMMovementModel(TargetModel):
 
         # Steps 9-10 — readout and actuation.
         committed_effective = self._commit_is_effective(state)
+        # An effective commitment releases the terminal-halt motor hold: the agent
+        # leaves the midpoint for the chosen target.
+        self._halted_now = self._halted_now and not committed_effective
 
         # Beliefs are ALWAYS evaluated and logged, in every motion mode. Under
         # `midpoint` only the *heading* ignores them — the comparison against `average`
@@ -1004,6 +1082,36 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         T_max = float(T_max) if T_max else (r0 / v if v > 1e-12 else 10.0)
         c_e = float(self.cost_ratio)
 
+        # --- static bounds (§2b): the degenerate flat table, no PDE solve ---
+        if self.bellman_static_bound is not None:
+            b = self.bellman_static_bound
+            self.ddm.set_bellman_table(np.array([0.0, T_max]), np.array([b, b]))
+            self._bellman_solved = True
+            # z(T_max) = b IS the halt plateau: under terminal 'halt_sprt' the
+            # agent parks at the midpoint at arrival and integrates against b.
+            self._record_halt_terminal(T_max, b)
+            self._bellman_c_tau_of_t = c_tau_of_t
+            self._bellman_A, self._bellman_c, self._bellman_c_e = A, c, c_e
+            self._bellman_diag = {"z_myopic_onset": float("nan"),
+                                  "wall_time_s": 0.0, "table_cache": "static"}
+            self._geom_log = {
+                "d_1": float(d[0]), "d_2": float(d[1]), "v": v, "delta": delta0,
+                "c_tau": float(c_tau_of_t(0.0)),
+                "c_tau_eff": float(c_tau_of_t(0.0)),
+                "c_err_eff": c_e, "rho": float("nan"), "rho_branch": "static",
+                "a_star": float("nan"), "z_star": float(b),
+                "z_floor_analytic": float("nan"), "lambda_t_used": None,
+                "cost_ratio_used": c_e,
+                "geometric_error_mode": self.geometric_error_mode,
+                "T_arr": None,
+            }
+            logger.info(
+                "%s: static bound installed as a flat bellman table -- b = %.4g "
+                "over T_max = %.2fs (terminal '%s')",
+                self.agent.get_name(), b, T_max, self.bellman_terminal,
+            )
+            return float(b)
+
         # Optional disk cache (CAMPAIGN_SPEC Section 7.3). Default OFF: with
         # `bellman.table_cache_dir` unset (null) this block is inert and the solve
         # path below is byte-for-byte the historical behaviour. The key is computed
@@ -1018,6 +1126,8 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 N_x=int(cfg.get("N_x", 801)), N_t=int(cfg.get("N_t", 10000)),
                 X_max_factor=float(cfg.get("X_max_factor", 4.0)),
                 scheme=str(cfg.get("scheme", "crank_nicolson")),
+                terminal=self.bellman_terminal,
+                halt_cost_rate=self.halt_cost_rate,
             )
             cache_key = table_key(**cache_inputs)
             hit = load_table(cache_dir, cache_key)
@@ -1025,6 +1135,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 t_grid, z_arr, meta = hit
                 self.ddm.set_bellman_table(t_grid, z_arr)
                 self._bellman_solved = True
+                self._record_halt_terminal(T_max, float(z_arr[-1]))
                 # The subset of the solver's diag the rest of the model reads
                 # (`z_myopic_onset` for the gap log, `wall_time_s` for the record).
                 self._bellman_diag = {
@@ -1061,6 +1172,8 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 z_myopic_onset=myopic_z(A, c, c_e, c_tau_of_t(0.0)),
                 scheme=str(cfg.get("scheme", "crank_nicolson")),
                 horizon_check_factor=cfg.get("T_max_check_factor", 1.5),
+                terminal=self.bellman_terminal,
+                halt_cost_rate=self.halt_cost_rate,
             )
         except ValueError as exc:
             logger.error(
@@ -1071,6 +1184,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             return self._geometric_threshold(A, c, q, phi, d)
 
         self.ddm.set_bellman_table(t_grid, z_arr)
+        self._record_halt_terminal(T_max, float(diag.get("z_halt", 0.0)))
         if cache_dir and cache_key:
             # Persisted only after a SUCCESSFUL solve; the fallback path above never
             # writes. Atomic write, so racing tasks on a cold cache are safe.
@@ -1078,7 +1192,10 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             hc = diag.get("horizon_check")
             save_table(
                 cache_dir, cache_key, t_grid, z_arr,
-                inputs={k: v_ for k, v_ in cache_inputs.items() if k != "scheme"},
+                # scheme and terminal are strings; the npz meta stores floats only, and
+                # both are already part of the key.
+                inputs={k: v_ for k, v_ in cache_inputs.items()
+                        if k not in ("scheme", "terminal")},
                 z_myopic_onset=float(diag["z_myopic_onset"]),
                 wall_time_s=float(diag["wall_time_s"]),
                 scheme=cache_inputs["scheme"],
@@ -1117,6 +1234,82 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         from models.bellman_boundary import myopic_z
         return myopic_z(self._bellman_A, self._bellman_c, self._bellman_c_e,
                         self._bellman_c_tau_of_t(self.ddm.t_evidence))
+
+    # ------------------------------------------------------------------
+    # Terminal halt (BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3)
+    # ------------------------------------------------------------------
+    def _record_halt_terminal(self, T_max: float, z_halt: float) -> None:
+        """Stash the installed table's arrival data; no-op under forced choice.
+
+        Called with `z_halt = z_arr[-1]` on a cache hit: under halt_sprt the persisted
+        table's final row IS the explicitly recorded `z(T_max) = z_halt`, so the value
+        round-trips without widening the cache format.
+        """
+        if self.bellman_terminal != "halt_sprt":
+            return
+        from models.bellman_boundary import halt_exit_potential
+        self._bellman_T_max = float(T_max)
+        self._bellman_z_halt = float(z_halt)
+        A = abs(float(self.ddm.A_hat))
+        k = 2.0 * A / float(self.ddm.c) ** 2
+        self._halt_mean_exit = float(halt_exit_potential(z_halt, k, A))
+        if z_halt < self.ddm.z_min:
+            logger.warning(
+                "%s: z_halt = %.4g sits below z_min = %.4g, so the runtime floor binds "
+                "past arrival: the agent will halt against z_min instead and beat "
+                "ER(z_halt) at extra cost. Lower z_min if the halt analysis matters.",
+                self.agent.get_name(), z_halt, self.ddm.z_min,
+            )
+
+    def _update_halt_state(self, state):
+        """Track the halt phase each tick; force a commit if the runaway cap is hit.
+
+        The commitment rule stays `|x| >= z(t)` with `z` flat at `z_halt` past arrival
+        (the table's explicit final row plus the accumulator's hold-past-the-horizon
+        rule). This method OBSERVES that phase — and enforces the episode cap
+        `T_max + 10 D(z_halt)`, which exists as a diagnostic, not a truncation: exit is
+        a.s. finite with exponential tails, so expect zero hits.
+
+        Returns the state, refreshed if the guard forced a commit so the caller's
+        commit latch sees `crossed_this_step` on the same tick.
+        """
+        self._halted_now = False
+        if (
+            self.bellman_terminal != "halt_sprt"
+            or not self._bellman_solved
+            or self._bellman_T_max is None
+            or not getattr(self.ddm, "past_horizon", False)
+        ):
+            return state
+        if state.committed is None and not self._halt_event:
+            # First uncommitted tick at/past arrival: the halt begins.
+            self._halt_event = True
+            self._x_at_arrival = float(state.x)
+            logger.info(
+                "%s: arrived undecided (x = %.4g); halting at the midpoint against "
+                "z_halt = %.4g (expected extra deliberation ~%.2fs).",
+                self.agent.get_name(), state.x, self._bellman_z_halt,
+                self._halt_mean_exit or float("nan"),
+            )
+        if state.committed is None and self._halt_mean_exit is not None:
+            cap = self._bellman_T_max + 10.0 * self._halt_mean_exit
+            if state.t_evidence > cap:
+                self.ddm.force_commit()
+                self._halt_guard_hits += 1
+                state = self.ddm.get_state()
+                logger.warning(
+                    "%s: halt runaway guard fired at t = %.2fs (cap %.2fs): forced a "
+                    "commit to sign(x). One hit is a diagnostic; repeated hits mean the "
+                    "halt threshold or the noise model is wrong.",
+                    self.agent.get_name(), state.t_evidence, cap,
+                )
+        if self._halt_event and state.committed is not None and self._t_halt_commit is None:
+            self._t_halt_commit = float(self.ddm.t_commit or state.t_evidence)
+        # Provisional: the motor hold applies past arrival until the decision reaches
+        # the motors. _decide_and_actuate finalises it once commit effectiveness for
+        # THIS tick is known (the latch for a commit landing this tick runs after us).
+        self._halted_now = True
+        return state
 
     def _geometric_threshold(self, A: float, c: float, q, phi, d) -> float:
         """Threshold from the embodied cost geometry, and record its diagnostics.
@@ -1286,6 +1479,12 @@ class EmbodiedPureDDMMovementModel(TargetModel):
 
         if committed_effective:
             scaling = 1.0
+        elif self._halted_now:
+            # Terminal halt: arrived at the midpoint undecided, integrating against the
+            # flat z_halt. Physically stopped — no translation, no rotation — until the
+            # commitment reaches the motors (Section 4.3).
+            self._zero_commands()
+            return
         elif self.predecision_motion == "stationary":
             # The non-embodied control: no translation AND no rotation, since rotating
             # would change the egocentric bearings and reintroduce the feedback loop.
@@ -1464,6 +1663,24 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 None if self._bellman_diag is None
                 else float(self._bellman_diag["wall_time_s"])
             ),
+            # --- terminal halt (BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3) ---
+            "pure_ddm_bellman_terminal": (
+                self.bellman_terminal if self.threshold_policy == "bellman" else None
+            ),
+            "pure_ddm_z_halt": self._bellman_z_halt,
+            "pure_ddm_bellman_T_max": self._bellman_T_max,
+            "pure_ddm_halted": bool(self._halted_now),
+            "pure_ddm_halt_event": bool(self._halt_event),
+            "pure_ddm_x_at_arrival": self._x_at_arrival,
+            # Extra deliberation bought by the halt: commit time past arrival once
+            # committed, the running excess while still halted, None before arrival.
+            "pure_ddm_halt_duration": (
+                None if not self._halt_event or self._bellman_T_max is None
+                else (self._t_halt_commit - self._bellman_T_max)
+                if self._t_halt_commit is not None
+                else float(self.ddm.t_evidence) - self._bellman_T_max
+            ),
+            "pure_ddm_halt_guard_hits": int(self._halt_guard_hits),
             "boundary_policy_incoherent": bool(self.boundary_policy_incoherent),
         }
         # Stamp which sensory protocol produced this record, so no result is ambiguous.

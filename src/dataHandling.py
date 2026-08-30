@@ -724,6 +724,14 @@ class SpaceDataHandling(DataHandling):
             ("z_myopic", spin_values.get("pure_ddm_z_myopic")),
             ("z_gap", spin_values.get("pure_ddm_z_gap")),
             ("past_horizon", spin_values.get("pure_ddm_past_horizon")),
+            # --- terminal halt (BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3) ---
+            ("bellman_terminal", spin_values.get("pure_ddm_bellman_terminal")),
+            ("z_halt", spin_values.get("pure_ddm_z_halt")),
+            ("halted", spin_values.get("pure_ddm_halted")),
+            ("halt_event", spin_values.get("pure_ddm_halt_event")),
+            ("x_at_arrival", spin_values.get("pure_ddm_x_at_arrival")),
+            ("halt_duration", spin_values.get("pure_ddm_halt_duration")),
+            ("halt_guard_hits", spin_values.get("pure_ddm_halt_guard_hits")),
         ]
         if not ddm_entry["header_written"]:
             ddm_entry["writer"].writerow([name for name, _ in columns])

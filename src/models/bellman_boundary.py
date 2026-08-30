@@ -59,6 +59,83 @@ def myopic_z(A: float, c: float, c_e: float, c_tau: float) -> float:
     return a_star * c ** 2 / (2.0 * A)
 
 
+def halt_exit_potential(x, k: float, A: float):
+    """`D(x) = (x/A) tanh(kx/2)` — the mean-exit-time potential of the halted problem
+    (BELLMAN_KNOWN_A_TERMINAL_HALT Section 2.2).
+
+    Even, smooth at 0 (`D ~ k x^2 / 2A`), in seconds. The mean time to exit `[-z, z]`
+    from `x` under the subjective process is `D(z) - D(x)`; from a central start,
+    `D(z) = (z/A) tanh(kz/2)` is Bogacz's decision time.
+    """
+    x = np.asarray(x, dtype=float)
+    out = x * np.tanh(0.5 * float(k) * x) / float(A)
+    return float(out) if out.ndim == 0 else out
+
+
+def solve_z_halt(k: float, A: float, c_e: float, c_h: float) -> float:
+    """The flat halt threshold: `sinh(a) + a = rho_h`, `a = k z_halt`,
+    `rho_h = c_e k A / (2 c_h)` (Section 2.3).
+
+    This IS the myopic equation with `c_tau -> c_h`: `rho_h = (A/c)^2 (c_e/c_h)`, so the
+    existing `sinh(a)+a` solver is reused rather than re-derived — if the two ever
+    disagree, test B9(i) is the arbiter.
+    """
+    from models.ddm_systems import DriftDiffusionSystem  # lazy: avoids an import cycle
+
+    k, A, c_e, c_h = float(k), abs(float(A)), float(c_e), float(c_h)
+    if c_h <= 0.0:
+        raise ValueError("halt_cost_rate must be > 0")
+    rho_h = c_e * k * A / (2.0 * c_h)
+    a = float(DriftDiffusionSystem.solve_a_star(rho_h))
+    return a / k
+
+
+def terminal_slice(
+    x: np.ndarray,
+    obst: np.ndarray,
+    k: float,
+    A: float,
+    c_e: float,
+    terminal: str = "forced_choice",
+    c_h: float = 1.0,
+):
+    """Build the terminal value `V(x, T_max)` for the backward solve.
+
+    BELLMAN_KNOWN_A_TERMINAL_HALT Sections 2.4 / 4.2. Returns `(V_T, z_halt)`.
+
+    forced_choice: `V_T = obst` — commit at arrival whatever you believe; the boundary
+    collapses to `z(T_max) = 0`.
+
+    halt_sprt: at arrival the agent may halt at the midpoint and keep integrating at
+    delay rate `c_h` against the flat threshold `z_halt`, so
+
+        V_T(x) = g_min - c_h D(x)   for |x| <= z_halt,      = c_e ER(x)   outside,
+        g_min  = c_e ER(z_halt) + c_h D(z_halt).
+
+    THE TRAP (Section 2.4): the interior branch continues BELOW the obstacle for
+    |x| > z_halt (a threshold inside the current position is meaningless), so
+    `np.minimum(obst, g_min - c_h D)` selects the wrong branch outside and silently
+    corrupts the stopping-set extraction. Build piecewise, never by minimum — test
+    B9(ii) is the gate for exactly this bug.
+    """
+    terminal = str(terminal).strip().lower()
+    if terminal == "forced_choice":
+        return obst.copy(), 0.0
+    if terminal != "halt_sprt":
+        raise ValueError(
+            f"terminal must be 'forced_choice' or 'halt_sprt'; got '{terminal}'"
+        )
+    x = np.asarray(x, dtype=float)
+    k, A, c_e, c_h = float(k), abs(float(A)), float(c_e), float(c_h)
+    z_halt = solve_z_halt(k, A, c_e, c_h)
+    D = halt_exit_potential(x, k, A)
+    # ER(z_halt) in the overflow-free form (Section 6): only decaying exponentials.
+    e = math.exp(-k * z_halt)
+    g_min = c_e * e / (1.0 + e) + c_h * halt_exit_potential(z_halt, k, A)
+    V_T = np.where(np.abs(x) <= z_halt, g_min - c_h * D, obst)
+    return V_T, float(z_halt)
+
+
 def stopping_cost_array(x: np.ndarray, k: float, c_e: float) -> np.ndarray:
     """`c_e * ER(x)` computed without a positive exponent (Section 5.2).
 
@@ -113,14 +190,33 @@ def bellman_boundary(
     z_myopic_onset: Optional[float] = None,
     scheme: str = "crank_nicolson",
     horizon_check_factor: Optional[float] = 1.5,
+    terminal: str = "forced_choice",
+    halt_cost_rate: float = 1.0,
 ):
     """Solve for `z(t)` on `[0, T_max]`.
 
     Returns `(t_grid, z, diagnostics)` where `t_grid[n] = n * T_max / N_t`. `diagnostics`
     carries the solver's own numbers plus `z_myopic` on the same grid, so the Section 10
     figure and test B6 need no extra machinery.
+
+    `terminal` selects the condition at the horizon (BELLMAN_KNOWN_A_TERMINAL_HALT):
+    'forced_choice' (default, unchanged behaviour) commits at arrival whatever the
+    belief, so `z(T_max) = 0`; 'halt_sprt' lets the agent halt at the midpoint and keep
+    integrating at delay rate `halt_cost_rate` against the flat threshold `z_halt`, so
+    the boundary collapses onto that plateau instead. Under 'halt_sprt' the returned
+    arrays gain an explicit final row at `t = T_max` with `z = z_halt` (recorded rather
+    than left to be interpolated from the `N_t - 1` row), and `diagnostics` carries
+    `z_halt`, `g_min` and `halt_mean_exit_time = D(z_halt)`.
     """
     A, c, c_e, T_max = abs(float(A)), float(c), float(c_e), float(T_max)
+    terminal = str(terminal).strip().lower()
+    if terminal not in {"forced_choice", "halt_sprt"}:
+        raise ValueError(
+            f"terminal must be 'forced_choice' or 'halt_sprt'; got '{terminal}'"
+        )
+    halt_cost_rate = float(halt_cost_rate)
+    if terminal == "halt_sprt" and halt_cost_rate <= 0.0:
+        raise ValueError("halt_cost_rate must be > 0 under terminal 'halt_sprt'")
     if A <= 0.0:
         raise ValueError(
             "bellman_boundary requires a known, non-zero |A|. Set A_expected with "
@@ -156,13 +252,37 @@ def bellman_boundary(
     drift = subjective_drift(x, A, k)
     obstacle = stopping_cost_array(x, k, c_e)
 
+    # Terminal condition. Forced mode passes terminal_V=None so its path through the
+    # solver is the historical one, bit for bit (Section 6 regression clause).
+    z_halt = 0.0
+    V_T = None
+    if terminal == "halt_sprt":
+        V_T, z_halt = terminal_slice(x, obstacle, k, A, c_e, terminal, halt_cost_rate)
+        # Guaranteed by Section 2.3 when c_tau(0) < c_h (z_halt <= z_myopic(0) then);
+        # an aggressive halt_cost_rate can break that ordering, so check rather than
+        # trust it.
+        if not (z_halt < X_max):
+            raise ValueError(
+                f"z_halt = {z_halt:.4g} does not fit inside X_max = {X_max:.4g}. "
+                "The halt threshold exceeds the grid: raise X_max_factor (or "
+                "halt_cost_rate is unphysically small)."
+            )
+
     dt = T_max / float(N_t)
     V, z, diag = solve_obstacle_problem(
         x_grid=x, n_steps=int(N_t), dt=dt,
         drift=drift, diffusion=c,
         stopping_cost=obstacle, running_cost=c_tau_of_t, scheme=scheme,
+        terminal_V=V_T,
     )
     t_grid = np.arange(int(N_t), dtype=float) * dt
+    if terminal == "halt_sprt":
+        # Record the T_max slice explicitly: z(T_max) = z_halt by construction, and
+        # plots/lookups must not interpolate it from the N_t - 1 row (Section 4.2). The
+        # runtime's hold-past-the-horizon rule then clamps z(t >= T_max) = z_halt for
+        # free.
+        t_grid = np.append(t_grid, T_max)
+        z = np.append(z, z_halt)
 
     # The quasi-static comparison, on the same grid. One Newton solve per sample.
     z_my = np.array([myopic_z(A, c, c_e, float(c_tau_of_t(float(t)))) for t in t_grid])
@@ -174,7 +294,19 @@ def bellman_boundary(
         "z_myopic": z_my,
         "z_myopic_onset": float(z_my[0]) if z_my.size else float("nan"),
         "unbounded_fraction": float(np.mean(~np.isfinite(z))),
+        "terminal": terminal,
     })
+    if terminal == "halt_sprt":
+        e_h = math.exp(-k * z_halt)
+        diag.update({
+            "z_halt": float(z_halt),
+            "halt_cost_rate": halt_cost_rate,
+            "g_min": float(c_e * e_h / (1.0 + e_h)
+                           + halt_cost_rate * halt_exit_potential(z_halt, k, A)),
+            # Mean extra deliberation of a halt started at the midpoint; the runtime's
+            # runaway guard caps episodes at T_max + 10x this (Section 4.3).
+            "halt_mean_exit_time": float(halt_exit_potential(z_halt, k, A)),
+        })
 
     if diag["unbounded_fraction"] > 0.0:
         logger.warning(
@@ -184,8 +316,17 @@ def bellman_boundary(
         )
 
     # B3 as a startup check, not only a test: if the answer moves when the horizon moves,
-    # the horizon is doing modelling work it should not be doing.
-    if horizon_check_factor and horizon_check_factor > 1.0:
+    # the horizon is doing modelling work it should not be doing. A forced-mode
+    # diagnostic only: under 'halt_sprt' T_max is the physical arrival time, not a
+    # truncation, and the exact statement is test B11's fixed-point/extended-horizon
+    # equivalence rather than this asymptotic probe.
+    if terminal == "halt_sprt":
+        if horizon_check_factor and horizon_check_factor > 1.0:
+            diag["horizon_check"] = {
+                "skipped": "terminal 'halt_sprt': T_max is the arrival time, not a "
+                           "truncation; superseded by B11", "ok": True,
+            }
+    elif horizon_check_factor and horizon_check_factor > 1.0:
         diag["horizon_check"] = _horizon_check(
             A, c, c_e, c_tau_of_t, T_max, float(horizon_check_factor),
             N_x, N_t, X_max, scheme, z,

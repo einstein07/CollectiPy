@@ -1221,6 +1221,7 @@ class GUI_2D(QWidget):
             q_hat = np.zeros(2)
         return {
             "time": float(self.time),
+            "t_evidence": float(spin.get("pure_ddm_t_evidence", 0.0)),
             "x": float(spin.get("pure_ddm_x", 0.0)),
             "z": float(spin.get("pure_ddm_z", 0.0)),
             "q": q[:2],
@@ -1232,6 +1233,12 @@ class GUI_2D(QWidget):
             "boundary_mode": spin.get("pure_ddm_boundary_mode"),
             "incoherent": bool(spin.get("boundary_policy_incoherent", False)),
             "rt": spin.get("pure_ddm_rt"),
+            # Terminal halt (BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3): the arrival
+            # line and the +/-z_halt plateau the boundary collapses onto.
+            "bellman_terminal": spin.get("pure_ddm_bellman_terminal"),
+            "z_halt": spin.get("pure_ddm_z_halt"),
+            "bellman_T_max": spin.get("pure_ddm_bellman_T_max"),
+            "halted": bool(spin.get("pure_ddm_halted", False)),
         }
 
     def _append_pure_ddm_sample(self, agent_key, snapshot) -> None:
@@ -1323,6 +1330,31 @@ class GUI_2D(QWidget):
             if commit_time is not None:
                 ev_ax.axvline(commit_time, color="#27ae60", linewidth=1.2, alpha=0.8)
 
+            # Terminal halt: mark arrival and draw the +/-z_halt plateau the boundary
+            # collapses onto (flat past arrival — a decision rule, not an artefact).
+            z_halt = snap.get("z_halt")
+            T_max_ev = snap.get("bellman_T_max")
+            if (
+                snap.get("bellman_terminal") == "halt_sprt"
+                and isinstance(z_halt, (int, float))
+                and isinstance(T_max_ev, (int, float))
+            ):
+                # T_max lives on the evidence clock; shift it onto the panel clock.
+                arrival = snap["time"] - snap.get("t_evidence", 0.0) + float(T_max_ev)
+                if arrival <= times[-1] + self.input_history_seconds:
+                    ev_ax.axvline(arrival, color="#7f8c8d", linewidth=1.2,
+                                  linestyle=":", alpha=0.9)
+                    ev_ax.annotate("arrival", xy=(arrival, 0.0),
+                                   xycoords=("data", "axes fraction"),
+                                   xytext=(3, 4), textcoords="offset points",
+                                   fontsize=8, color="#7f8c8d")
+                    plat_end = max(times[-1], arrival)
+                    for sgn in (1.0, -1.0):
+                        ev_ax.plot([arrival, plat_end], [sgn * z_halt] * 2,
+                                   color="#8e44ad", linewidth=1.2, linestyle="-.",
+                                   alpha=0.9,
+                                   label="±z_halt" if sgn > 0 else None)
+
             cmap = plt.get_cmap("tab10")
             in_ax.plot(times, list(history["q0"]), color=cmap(0), linewidth=1.9, label=labels[0])
             in_ax.plot(times, list(history["q1"]), color=cmap(1), linewidth=1.9, label=labels[1])
@@ -1344,11 +1376,17 @@ class GUI_2D(QWidget):
                 in_ax.legend(loc="upper left", fontsize=8, frameon=False)
 
         committed_id = snap.get("committed_id")
-        commit_txt = f"committed: {committed_id}" if committed_id else "deliberating"
+        commit_txt = f"committed: {committed_id}" if committed_id else (
+            "HALTED at midpoint" if snap.get("halted") else "deliberating"
+        )
         rt = snap.get("rt")
         rt_txt = f"   RT {rt:.2f}s" if isinstance(rt, (int, float)) else ""
+        mode_txt = (
+            f"   [terminal: {snap['bellman_terminal']}]"
+            if snap.get("bellman_terminal") else ""
+        )
         ev_ax.set_title(
-            f"Decision variable x(t) vs boundary ±z(t)   —   {commit_txt}{rt_txt}",
+            f"Decision variable x(t) vs boundary ±z(t)   —   {commit_txt}{rt_txt}{mode_txt}",
             fontsize=11,
         )
         ev_ax.set_ylabel("x (accumulated evidence)")

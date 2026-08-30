@@ -1368,6 +1368,29 @@ class DriftDiffusionSystem:
         self.released_this_step = True
         self.n_releases += 1
 
+    def force_commit(self) -> Optional[int]:
+        """Commit to `sign(x)` now, outside the `|x| >= z` rule.
+
+        The runaway guard of BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3: a halted agent's
+        exit is a.s. finite with exponential tails, but the episode is still capped, and
+        the cap ends with a forced commitment rather than a silent truncation. The caller
+        logs the event; expect it to never fire.
+
+        No-op when already committed. Mirrors the natural commitment paths so a forced
+        commit is indistinguishable downstream (same flags, same transition record).
+        """
+        if self.committed is not None:
+            return self.committed
+        target = 0 if self.x > 0.0 else 1
+        if self.flexibility:
+            self._flex_commit(target)
+        else:
+            self.committed = target
+            self.t_commit = self.t_evidence
+            self.rt = self.t_evidence + self.T0
+            self.crossed_this_step = True
+        return self.committed
+
     def _check_commitment(self) -> bool:
         """Latch or reverse a decision. Returns True if integration should stop."""
         z = self.z_current
