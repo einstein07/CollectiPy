@@ -436,6 +436,107 @@ def build_ddm_rows(n_runs: int = N_RUNS) -> list[dict]:
             for ce in C_E_GRID]
 
 
+# ---------------------------------------------------------------------------
+# Wave 2 (spec v2): Set U-v2 top-up + DDM ceiling points
+# ---------------------------------------------------------------------------
+#: §11 ceiling verification: ~10x and ~100x the previous maximum c_e. The
+#: claim "the RA sub-critical peak exceeds the DDM family" stands only if the
+#: RA peak clears the DDM's infinite-patience asymptote with CI separation.
+DDM_CEILING_CE = [3000.0, 30000.0]
+
+#: §2 Set U-v2 rule parameters.
+TOPUP_ACC_HI = 0.95      # û_hi = last Set-R level (in û order) with acc_all > this
+TOPUP_ACC_LO = 0.85      # û_lo = first Set-R level after û_hi with acc_all < this
+TOPUP_DU_HAT = 0.025     # cliff-window sampling step in û
+TOPUP_ANCHORS = [0.3, 0.5]     # sub-branch anchors, in units of u*
+TOPUP_COMMITTED = 1.2          # one committed point, in units of u*
+TOPUP_TAIL = [1.75, 2.00, 2.40]  # deep super-critical tail, matched in û
+TOPUP_SKIP_REL = 0.05    # skip a target within 5 % of an existing Set-U level
+
+
+def _round25(u: float) -> float:
+    return round(round(u / 0.25) * 0.25, 2)
+
+
+def build_topup_rows(cells_csv: Path, n_runs: int = N_RUNS) -> tuple[list, dict]:
+    """Set U-v2 rows (§2), derived from wave-1 `cells.csv` — inverse-mapping
+    the measured cliff, not sampling uniformly. Returns (rows, report)."""
+    cells = read_manifest(Path(cells_csv))
+    rows, report = [], {}
+    for v in V_GRID:
+        rel = sorted((c for c in cells
+                      if c["sweep"] == "relative" and float(c["v"]) == v),
+                     key=lambda c: float(c["u_hat"]))
+        if not rel:
+            raise SystemExit(f"{cells_csv}: no Set-R rows for v = {v}")
+        us = float(rel[0]["u_star"])
+        existing = sorted(float(c["u"]) for c in cells
+                          if c["sweep"] == "absolute" and float(c["v"]) == v)
+
+        hi_levels = [float(c["u_hat"]) for c in rel
+                     if float(c["acc_all"]) > TOPUP_ACC_HI]
+        if not hi_levels:
+            raise SystemExit(f"v={v}: no Set-R level with acc_all > "
+                             f"{TOPUP_ACC_HI} — the cliff rule has no anchor")
+        uhat_hi = max(hi_levels)
+        uhat_lo = next((float(c["u_hat"]) for c in rel
+                        if float(c["u_hat"]) > uhat_hi
+                        and float(c["acc_all"]) < TOPUP_ACC_LO), None)
+        if uhat_lo is None:
+            raise SystemExit(f"v={v}: no Set-R level below {TOPUP_ACC_LO} "
+                             f"beyond û = {uhat_hi} — no cliff to sample")
+
+        # (target u, may_sit_near_existing): cliff samples deliberately
+        # interleave the integer wave-1 grid, so they are dropped only on an
+        # EXACT collision; anchors / committed / tail apply the 5 % skip.
+        targets = []
+        k = 0
+        while uhat_hi + k * TOPUP_DU_HAT <= uhat_lo + 1e-9:      # cliff window
+            targets.append(((uhat_hi + k * TOPUP_DU_HAT) * us, True))
+            k += 1
+        targets += [(a * us, False) for a in TOPUP_ANCHORS]      # sub-branch
+        targets.append((TOPUP_COMMITTED * us, False))            # committed
+        targets += [(t * us, False) for t in TOPUP_TAIL]         # deep tail
+
+        chosen = []
+        for t, is_cliff in targets:
+            u = _round25(t)
+            taken = existing + chosen
+            if is_cliff:
+                if any(abs(u - e) < 1e-9 for e in taken):
+                    continue
+            elif any(abs(u - e) / e <= TOPUP_SKIP_REL
+                     for e in taken if e > 0):
+                continue
+            chosen.append(u)
+        chosen = sorted(set(chosen))
+        report[v] = {"u_star": us, "uhat_hi": uhat_hi, "uhat_lo": uhat_lo,
+                     "existing": existing, "new_u": chosen}
+        for u in chosen:
+            rows.append({"cell_id": f"U2_v{v:g}_u{u:g}", "sweep": "absolute",
+                         "v": f"{v:g}", "u_hat": f"{u / us:.6f}",
+                         "u_star": f"{us:.6f}", "u": f"{u:.6f}",
+                         "diff": f"{DIFF:g}", "n_runs": str(int(n_runs)),
+                         "seed_scheme": seeding.SCHEME})
+    return rows, report
+
+
+def build_ddm_ceiling_rows(n_runs: int = N_RUNS) -> list[dict]:
+    return [{"point_id": f"D_ce{ce:g}", "c_e": f"{ce:g}",
+             "diff": f"{DIFF:g}", "n_runs": str(int(n_runs)),
+             "seed_scheme": seeding.SCHEME}
+            for ce in DDM_CEILING_CE]
+
+
+def ddm_ideal_ceiling() -> float:
+    """The fixed-bound infinite-patience asymptote (§11): an observer that
+    integrates the full deliberation horizon T = r0/v and reports sign(x) has
+    accuracy Phi((A/c) * sqrt(T)) — no boundary policy can beat it."""
+    from statistics import NormalDist
+    return NormalDist().cdf((QUALITY_DELTA / NOISE_SCALE_C)
+                            * math.sqrt(R0 / LINEAR_VELOCITY))
+
+
 def write_manifest(rows: list[dict], fields: list[str], dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "w", newline="", encoding="utf-8") as fh:

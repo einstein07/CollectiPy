@@ -59,8 +59,17 @@ BATCH="$PROJECT_DIR/scripts/ra_ddm_frontier/run_batch.py"
 if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
     set -e
     mkdir -p "$LOGS_DIR/failures"
-    "$PYTHON_BIN" "$GEN" --campaign "$CAMPAIGN" --diff "$DIFF" \
-        --n-runs "$RUNS_PER_CELL" --out "$MANIFEST"
+    if [ "${TOPUP:-0}" = "1" ]; then
+        # Wave-2 top-up (§2 Set U-v2 / §11 ceiling points): the manifest is
+        # DERIVED from wave-1 data by `generate_manifest.py --topup-from` and
+        # copied here — never regenerated at submission time.
+        [ -f "$MANIFEST" ] || { echo "TOPUP=1 but no manifest at $MANIFEST — " \
+            "generate it locally with --topup-from and copy it here" >&2; exit 1; }
+        echo "top-up submission from existing manifest (generation skipped)"
+    else
+        "$PYTHON_BIN" "$GEN" --campaign "$CAMPAIGN" --diff "$DIFF" \
+            --n-runs "$RUNS_PER_CELL" --out "$MANIFEST"
+    fi
 
     N_CELLS=$(( $(wc -l < "$MANIFEST") - 1 ))
     BATCHES=$(( (RUNS_PER_CELL + RUNS_PER_TASK - 1) / RUNS_PER_TASK ))

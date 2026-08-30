@@ -110,10 +110,17 @@ acc 0.700 [0.48, 0.86], median commit 11 ticks (the factorial's 0.765 was at
 DRY_RUN=1 bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 DRY_RUN=1 CAMPAIGN=ddm bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 
-# for real (RA: 100 cells × 10 batches = 1000 tasks; DDM: 100 tasks)
+# for real (one task = one cell: RA 100 tasks, DDM 10 tasks, ~10-17 min each)
 bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 CAMPAIGN=ddm bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 ```
+
+If sbatch says "Resource temporarily unavailable", the array is hitting a
+per-user submit limit — check with
+`sacctmgr show assoc user=$USER format=user,account,maxsubmitjobs,maxjobs`
+and shrink the array chunks with e.g. `MAX_ARRAY=50` (the script auto-chunks;
+each chunk is its own sbatch). The default geometry (100 elements) was chosen
+to stay far below typical limits.
 
 Re-running either command is free: replicates with `.done` are skipped, so a
 partial array is fixed by resubmitting. The DDM submission first populates the
@@ -139,12 +146,57 @@ at white_rate 0.035 and this campaign is calibrated at 0.1 (RECON D-10) — so
 systematic shifts there are expected, not drift. A blocking gate failing:
 halt and diagnose before the overlay.
 
-### 7. Envelope + overlay + regret
+### 7. Envelope + overlay + regret + ceiling verification
 
 ```bash
 $PY scripts/ra_ddm_frontier/analyze_overlay.py \
     --ra-root <RA root> --ddm-root <DDM root>
 ```
+
+Outputs: `overlay_main` (§11 main figure — per-v absolute-u panels vs the DDM,
+labels thinned in clusters), `tuning_curves` (accuracy vs u, log-x, per v),
+`overlay_slices` (Set-R û-slices + cross-validated envelope, supplement),
+`regret.json`, `mcnemar.csv`, and `ceiling_check.json` — the §11 requirement
+that the "RA beats the DDM family" claim clears the DDM's infinite-patience
+asymptote Φ((A/c)·√(r₀/v)) = 0.9294 with CI separation.
+
+### 8. Wave 2 — Set U-v2 top-up + DDM ceiling points (§2, §11, §12.7)
+
+Wave 2 is **derived from wave-1 data**, so it is generated locally where
+`cells.csv` lives, then shipped to the cluster:
+
+```bash
+# a. derive the top-up grids from the measured cliff windows (local)
+$PY scripts/ra_ddm_frontier/generate_manifest.py \
+    --topup-from <RA root>/cells.csv --out-dir $R
+#    -> $R/manifest_topup.csv, manifest_full.csv,
+#       ddm_manifest_topup.csv, ddm_manifest_full.csv
+
+# b. BLOCKING: step-halving check at the three stiffest new cells (local, ~10 min)
+$PY scripts/ra_ddm_frontier/dt_check.py --manifest $R/manifest_topup.csv
+
+# c. copy the four manifests into the campaigns' cluster directories
+scp $R/manifest_topup.csv $R/manifest_full.csv  <cluster>:<RA LOGS_DIR>/
+scp $R/ddm_manifest_*.csv                        <cluster>:<DDM LOGS_DIR>/
+
+# d. submit the top-ups (cluster — you run this). TOPUP=1 skips manifest
+#    regeneration and uses the shipped file; results land in the SAME tree,
+#    and wave-1 replicates are untouched (.done idempotency).
+TOPUP=1 MANIFEST=<RA LOGS_DIR>/manifest_topup.csv \
+    bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
+TOPUP=1 CAMPAIGN=ddm MANIFEST=<DDM LOGS_DIR>/ddm_manifest_topup.csv \
+    bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
+
+# e. after syncing back: re-aggregate (completeness is now judged against
+#    manifest_full.csv automatically when it sits in the base root) + re-analyze
+$PY scripts/ra_ddm_frontier/aggregate.py --campaign ra  --base-root <RA root>
+$PY scripts/ra_ddm_frontier/aggregate.py --campaign ddm --base-root <DDM root>
+$PY scripts/ra_ddm_frontier/analyze_overlay.py --ra-root <RA root> --ddm-root <DDM root>
+```
+
+Because frontier-v1 seeds are trial-identity keyed, wave 2 is a pure top-up:
+wave-1 cells stay valid and paired, and the new cells are born paired with
+everything else at every run_id.
 
 ## Traceability (§7)
 
