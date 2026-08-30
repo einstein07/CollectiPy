@@ -317,7 +317,7 @@ acceptance checklist. Flagged rather than assumed.
 | u\*(v) grid vs the frontier sweep's hand-entered table | identical to every printed digit |
 | Smoke test (2 cells × 12 trials) → aggregate → analyse | **PASS** end to end; plots render, no schema errors |
 | Section 12 expectation, cell (v=0.5, û=1.0) | **PASS** — DT = 11 ticks, matching the archived 0.765 / 11.0 |
-| Step-halving, 3 stiffest cells | see below |
+| Step-halving, 3 stiffest cells | **2 of 3 FAIL at 200 trials/arm** — cells 7 and 15 are now `excluded` in the manifest. See below; this needs your decision. |
 | `sbatch --test-only` | **NOT RUN** — no SLURM on this workstation (`sbatch`, `squeue`, `sinfo` all absent). The script's own dry run is clean; the SLURM dry run has to be step 4b of the README, on the login node. |
 
 Ground truth used to arbitrate D-01/D-02/D-03: re-scoring the archived matched
@@ -329,30 +329,65 @@ DT 11.0 ticks** — the Section 12 anchor exactly.
 ### Step-halving check (Section 11)
 
 `integration_dt` 0.05 vs 0.1, identical seeds, paired bootstrap on the accuracy
-difference. At the spec's 50 trials per arm:
+difference. Run twice: at the spec's 50 trials per arm, and again at 200 after
+two cells passed only marginally.
+
+**50 trials per arm — all three "pass", two of them marginally:**
+
+| cell | v | û | acc @0.1 | acc @0.05 | Δ [95 % CI] | |
+|---|---|---|---|---|---|---|
+| 7 | 0.1 | 1.50 | 0.340 | 0.180 | −0.160 [−0.320, **+0.000**] | PASS (marginal) |
+| 6 | 0.1 | 1.25 | 0.560 | 0.700 | +0.140 [**−0.020**, +0.300] | PASS (marginal) |
+| 15 | 0.2 | 1.50 | 0.780 | 0.820 | +0.040 [−0.060, +0.140] | PASS |
+
+**200 trials per arm — two cells FAIL:**
 
 | cell | v | û | u | acc @0.1 | acc @0.05 | Δ [95 % CI] | failures | max\|z\| | |
 |---|---|---|---|---|---|---|---|---|---|
-| 7 | 0.1 | 1.50 | 34.19 | 0.340 | 0.180 | −0.160 [−0.320, +0.000] | 0 | 1.83 | PASS (marginal) |
-| 6 | 0.1 | 1.25 | 28.49 | 0.560 | 0.700 | +0.140 [−0.020, +0.300] | 0 | 1.82 | PASS (marginal) |
-| 15 | 0.2 | 1.50 | 19.69 | 0.780 | 0.820 | +0.040 [−0.060, +0.140] | 0 | 1.82 | PASS |
+| 7 | 0.1 | 1.50 | 34.19 | 0.355 | 0.205 | **−0.150 [−0.235, −0.065]** | 0 | 1.83 | **FAIL** |
+| 6 | 0.1 | 1.25 | 28.49 | 0.590 | 0.645 | +0.055 [−0.035, +0.145] | 0 | 1.82 | PASS |
+| 15 | 0.2 | 1.50 | 19.69 | 0.755 | 0.825 | **+0.070 [+0.025, +0.120]** | 0 | 1.82 | **FAIL** |
 
-**Zero numerical failures anywhere, and max\|z\| ≈ 1.8 — three orders of
-magnitude below the 1e3 divergence threshold.** The integrator is not in trouble
-at dt = 0.1 even at u = 34.2.
+At 50 trials the interval is ±0.16 wide and the test simply could not see a
+15-point effect. **This is why the marginal flag exists**: "consistent with zero"
+at n = 50 meant "not refuted", not "shown equal", and at n = 200 it is refuted.
 
-The accuracy criterion passes on all three, but cells 7 and 6 pass *marginally*:
-zero sits on an edge of the bootstrap interval. At 50 trials the interval is
-±0.16 wide, so "consistent with zero" there means "not refuted", not "shown
-equal". `dt_check.py` flags this as `MARGINAL` rather than reporting it as clean,
-and prints the higher-power re-run to do about it:
+**What is and is not wrong.** There are **zero numerical failures anywhere** and
+max\|z\| ≈ 1.8 — three orders of magnitude below the 1e3 divergence threshold.
+The integrator is not blowing up. What fails is *step accuracy*: at the
+super-critical corner the Euler solution at dt = 0.1 does not agree with itself
+at dt = 0.05, and the disagreement is large enough to move accuracy by 7–15
+points. Note also that the two failures move in **opposite directions** (−0.15 at
+v = 0.1, +0.07 at v = 0.2), which is the signature of trajectories that are
+sensitive to the step rather than of a systematic bias converging one way.
 
-```
-dt_check.py --results-root <R> --trials 200 --force
-```
+**Action taken (Section 11):** cells **7 (v=0.1, û=1.50)** and
+**15 (v=0.2, û=1.50)** are marked `excluded` in `manifest.json`. The runner skips
+them, `aggregate.py` reports the design as unbalanced, and
+`analyze_collapse.py` prints the NOTE that the deviance shares are conditional on
+the cells that ran.
 
-Note also that cell 7 is only 47.5 % decided at 200 trials — nearly half its
-trials run the full 100-tick budget without arriving. Its accuracy estimate is
-therefore noisy for a reason unrelated to the integrator, which is part of why
-the step-halving interval there is so wide. Read that cell with the
+**Two open items for the researcher — neither is the agent's call:**
+
+1. **The exclusion set is probably incomplete.** Section 11 fixed the check to
+   three cells, and 2 of the 3 failed. The û = 1.50 column has ten cells and
+   û = 1.25 has ten more; only three were ever tested. Extending the check across
+   the rest of the û ≥ 1.25 block costs ~3.5 min per cell and would say whether
+   the problem is confined to the narrow-kernel corner (v ≤ 0.2) or runs along
+   the whole super-critical edge.
+2. **Excluding is not the only option, and may not be the right one.** The
+   obvious alternative is to run the sweep at dt = 0.05 throughout. It is
+   refused here for two reasons, both of which are judgement calls rather than
+   facts: Section 13 puts model configuration out of scope, and the Section 12
+   anchor (0.765 / 11 ticks) was produced at dt = 0.1, so changing the step
+   breaks the one external check on the whole pipeline. Dropping the two cells
+   instead costs the super-critical saturation probe exactly where the design
+   wanted it (û = 1.50 at narrow kernels).
+
+`results/uhat_v_sweep/dt_check/step_halving_report.json` holds the 200-trial
+numbers; the 50-trial arms were overwritten by the re-run.
+
+Separately: cell 7 is only **47.5 % decided** — nearly half its trials run the
+full 100-tick budget without arriving — so its accuracy estimate is noisy for a
+reason unrelated to the integrator. Read that corner of the grid with the
 `decided_frac` heatmap in hand (see D-06).

@@ -104,11 +104,26 @@ $PY scripts/uhat_v_sweep/dt_check.py --results-root $R          # --dry-run to n
 ```
 
 Section 11: (v=0.1, û=1.50), (v=0.1, û=1.25) and (v=0.2, û=1.50) at
-`integration_dt` 0.05 vs 0.1, 50 trials each on identical seeds. Passes a cell
-when it has zero numerical failures and the paired-bootstrap 95 % interval on
-the accuracy difference contains zero. A failing cell is marked `excluded` in
+`integration_dt` 0.05 vs 0.1 on identical seeds. Passes a cell when it has zero
+numerical failures and the paired-bootstrap 95 % interval on the accuracy
+difference contains zero. A failing cell is marked `excluded` in
 `manifest.json`; the design is then unbalanced and both `aggregate.py` and
 `analyze_collapse.py` say so.
+
+**This has already been run, and 2 of the 3 cells FAIL** — see
+[`RECON.md`](RECON.md) § Step-halving. Cells 7 (v=0.1, û=1.50) and 15
+(v=0.2, û=1.50) are already marked excluded in the shipped manifest. There are
+no numerical failures and max|z| is ~1.8; what fails is step *accuracy* at the
+super-critical corner. **Read that section before submitting** — the spec only
+ever tested 3 of the 20 cells at û ≥ 1.25, so the exclusion set is likely
+incomplete, and excluding cells is not the only available response.
+
+The spec's 50 trials could not resolve the effect (both failures passed
+marginally at n = 50). Use 200:
+
+```bash
+$PY scripts/uhat_v_sweep/dt_check.py --results-root $R --trials 200 --force
+```
 
 ### 4. Submit (cluster — **you run this, not the agent**)
 

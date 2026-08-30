@@ -18,7 +18,11 @@ This is an ESTIMATION problem, not a significance-testing one: at ~32k trials
 everything is "significant", so the deviance ladder reports SHARES and the
 plots report intervals. No p-value decides anything here.
 
-Deviance ladder, trial-level logistic regression of `correct`:
+Deviance ladder, logistic regression of `correct`. Fitted on grouped binomial
+cell counts rather than 30,000 Bernoulli rows: every trial in a cell has
+identical predictors, so the MLE and the deviance differences are the same, and
+the grouped form is the one that survives cells sitting at accuracy exactly
+1.000 (three of them do here).
 
     M0: ~ 1
     M1: ~ C(u_hat)
@@ -76,13 +80,24 @@ def _dummies(levels: np.ndarray, values: np.ndarray) -> np.ndarray:
     return np.column_stack([(values == lev).astype(float) for lev in levels[1:]])
 
 
-def design(data: pd.DataFrame, terms: str) -> np.ndarray:
+def cell_counts(data: pd.DataFrame) -> pd.DataFrame:
+    """Collapse trials to one (successes, trials) row per cell.
+
+    Every trial in a cell has identical predictors, so the grouped binomial fit
+    has the same MLE and the same deviance DIFFERENCES as the trial-level one —
+    and it is enormously better conditioned. 75 rows instead of 30,000.
+    """
+    return (data.groupby(["v", "u_hat"], as_index=False)
+                .agg(k=("correct", "sum"), n=("correct", "size")))
+
+
+def design(frame: pd.DataFrame, terms: str) -> np.ndarray:
     """Design matrix for one rung of the ladder. Intercept always present."""
-    u_levels = np.array(sorted(data["u_hat"].unique()))
-    v_levels = np.array(sorted(data["v"].unique()))
-    blocks = [np.ones((len(data), 1))]
-    du = _dummies(u_levels, data["u_hat"].to_numpy())
-    dv = _dummies(v_levels, data["v"].to_numpy())
+    u_levels = np.array(sorted(frame["u_hat"].unique()))
+    v_levels = np.array(sorted(frame["v"].unique()))
+    blocks = [np.ones((len(frame), 1))]
+    du = _dummies(u_levels, frame["u_hat"].to_numpy())
+    dv = _dummies(v_levels, frame["v"].to_numpy())
     if "u" in terms:
         blocks.append(du)
     if "v" in terms:
@@ -94,37 +109,63 @@ def design(data: pd.DataFrame, terms: str) -> np.ndarray:
     return np.column_stack(blocks)
 
 
-def _irls_logistic(X: np.ndarray, y: np.ndarray, iters: int = 100):
-    """Plain IRLS. Returns (fitted probabilities, converged)."""
+def binomial_deviance(k: np.ndarray, n: np.ndarray, p: np.ndarray) -> float:
+    """Residual deviance against the CELL-SATURATED model.
+
+    2 * sum[ k log(k / n p) + (n-k) log((n-k) / n(1-p)) ], with 0 log 0 = 0.
+    A cell at k = n or k = 0 contributes nothing from the empty side, which is
+    exactly why this form survives the perfect separation that breaks a
+    trial-level saturated fit.
+    """
+    p = np.clip(np.asarray(p, dtype=float), 1e-12, 1 - 1e-12)
+    k = np.asarray(k, dtype=float)
+    n = np.asarray(n, dtype=float)
+    # Compute each side only where its count is non-zero: at k = n the failure
+    # side is 0 log 0, which is 0 by convention but log(0) in floating point.
+    a = np.zeros_like(k)
+    hit = k > 0
+    a[hit] = k[hit] * np.log(k[hit] / (n[hit] * p[hit]))
+    b = np.zeros_like(k)
+    miss = (n - k) > 0
+    b[miss] = (n - k)[miss] * np.log((n - k)[miss] / (n[miss] * (1 - p[miss])))
+    return float(2.0 * np.sum(a + b))
+
+
+def _irls_binomial(X: np.ndarray, k: np.ndarray, n: np.ndarray,
+                   iters: int = 200) -> np.ndarray:
+    """Weighted IRLS for grouped binomial data. Returns fitted probabilities."""
     beta = np.zeros(X.shape[1])
+    k = np.asarray(k, dtype=float)
+    n = np.asarray(n, dtype=float)
     for _ in range(iters):
         eta = np.clip(X @ beta, -30.0, 30.0)
         mu = 1.0 / (1.0 + np.exp(-eta))
-        w = np.clip(mu * (1.0 - mu), 1e-9, None)
-        z = eta + (y - mu) / w
+        w = np.clip(n * mu * (1.0 - mu), 1e-10, None)
+        z = eta + (k - n * mu) / w
         wx = X * w[:, None]
+        lhs, rhs = X.T @ wx, wx.T @ z
         try:
-            step = np.linalg.solve(X.T @ wx, wx.T @ z)
+            step = np.linalg.solve(lhs, rhs)
         except np.linalg.LinAlgError:
-            step, *_ = np.linalg.lstsq(X.T @ wx, wx.T @ z, rcond=None)
-        if np.max(np.abs(step - beta)) < 1e-10:
+            step, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        if np.max(np.abs(step - beta)) < 1e-11:
             beta = step
-            return 1.0 / (1.0 + np.exp(-np.clip(X @ beta, -30.0, 30.0))), True
+            break
         beta = step
-    return 1.0 / (1.0 + np.exp(-np.clip(X @ beta, -30.0, 30.0))), False
+    return 1.0 / (1.0 + np.exp(-np.clip(X @ beta, -30.0, 30.0)))
 
 
-def fit_logistic(X: np.ndarray, y: np.ndarray, backend: str):
-    """Return (deviance, fitted probabilities, n_params)."""
+def fit_binomial(X: np.ndarray, k: np.ndarray, n: np.ndarray, backend: str):
+    """Return (deviance vs the cell-saturated model, fitted probabilities, rank)."""
     if backend == "statsmodels":
         import statsmodels.api as sm
-        res = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+        endog = np.column_stack([np.asarray(k, float),
+                                 np.asarray(n, float) - np.asarray(k, float)])
+        res = sm.GLM(endog, X, family=sm.families.Binomial()).fit()
         mu = np.asarray(res.fittedvalues, dtype=float)
     else:
-        mu, _ = _irls_logistic(X, y)
-    mu = np.clip(mu, 1e-12, 1 - 1e-12)
-    deviance = -2.0 * float(np.sum(y * np.log(mu) + (1 - y) * np.log(1 - mu)))
-    return deviance, mu, int(np.linalg.matrix_rank(X))
+        mu = _irls_binomial(X, k, n)
+    return binomial_deviance(k, n, mu), mu, int(np.linalg.matrix_rank(X))
 
 
 def fit_ols(X: np.ndarray, y: np.ndarray):
@@ -138,36 +179,50 @@ LADDER = [("M0", ""), ("M1", "u"), ("M2", "v"), ("M3", "uv"), ("M4", "uvx")]
 
 
 def deviance_ladder(data: pd.DataFrame, backend: str) -> dict:
-    y = data["correct"].to_numpy(dtype=float)
-    out = {}
-    fitted = {}
+    """M0 -> M4 on grouped binomial cell counts.
+
+    M4 is the cell-saturated model, so its deviance is 0 BY CONSTRUCTION and
+    D(M0) is the whole between-cell deviance. It is set analytically rather than
+    fitted: with cells at accuracy exactly 1.000 the saturated fit is perfectly
+    separated, its coefficients run to infinity, and a numerical fit returns
+    nonsense (observed: deviance 5.0e5 against M0's 2.9e4 — a nested model
+    cannot have MORE deviance than the one it nests).
+    """
+    counts = cell_counts(data)
+    k = counts["k"].to_numpy(dtype=float)
+    n = counts["n"].to_numpy(dtype=float)
+    out, fitted = {}, {}
     for name, terms in LADDER:
-        X = design(data, terms)
-        dev, mu, rank = fit_logistic(X, y, backend)
+        if name == "M4":
+            mu = k / n
+            dev, rank = 0.0, len(counts)
+        else:
+            dev, mu, rank = fit_binomial(design(counts, terms), k, n, backend)
         out[name] = {"deviance": dev, "df": rank, "terms": terms or "1"}
         fitted[name] = mu
     total = out["M0"]["deviance"] - out["M4"]["deviance"]
-    shares = {
-        "between_cell_deviance": total,
-        "u_hat_share": (out["M0"]["deviance"] - out["M1"]["deviance"]) / total
-                       if total > 0 else float("nan"),
-        "v_share_beyond_u_hat": (out["M1"]["deviance"] - out["M3"]["deviance"]) / total
-                                if total > 0 else float("nan"),
-        "interaction_share": (out["M3"]["deviance"] - out["M4"]["deviance"]) / total
-                             if total > 0 else float("nan"),
+    share = (lambda a, b: (out[a]["deviance"] - out[b]["deviance"]) / total
+             if total > 0 else float("nan"))
+    return {
+        "models": out,
+        "counts": counts,
+        "fitted_M3": fitted["M3"],
+        "shares": {
+            "between_cell_deviance": total,
+            "u_hat_share": share("M0", "M1"),
+            "v_share_beyond_u_hat": share("M1", "M3"),
+            "interaction_share": share("M3", "M4"),
+        },
     }
-    return {"models": out, "shares": shares, "fitted_M3": fitted["M3"]}
 
 
-def m3_residuals(data: pd.DataFrame, fitted_m3: np.ndarray) -> pd.DataFrame:
+def m3_residuals(counts: pd.DataFrame, fitted_m3: np.ndarray) -> pd.DataFrame:
     """Observed minus additive-model cell proportion, in probability points."""
-    frame = data[["v", "u_hat", "correct"]].copy()
+    frame = counts.copy()
+    frame["observed"] = frame["k"] / frame["n"]
     frame["fitted"] = fitted_m3
-    grouped = frame.groupby(["v", "u_hat"]).agg(
-        observed=("correct", "mean"), fitted=("fitted", "mean"),
-        n=("correct", "size")).reset_index()
-    grouped["residual_pp"] = 100.0 * (grouped["observed"] - grouped["fitted"])
-    return grouped
+    frame["residual_pp"] = 100.0 * (frame["observed"] - frame["fitted"])
+    return frame[["v", "u_hat", "n", "observed", "fitted", "residual_pp"]]
 
 
 def verdict(shares: dict) -> str:
@@ -516,12 +571,15 @@ def main(argv=None) -> int:
         ladder = None
     else:
         ladder = deviance_ladder(data, backend)
-        print_ladder("Deviance ladder — logistic on `correct` (trial level)",
-                     ladder["models"], "deviance", ladder["shares"])
+        print_ladder(
+            "Deviance ladder — binomial logistic on `correct`, grouped by cell "
+            "(M4 is the cell-saturated model, so its deviance is 0 by "
+            "construction and M0's IS the between-cell deviance)",
+            ladder["models"], "deviance", ladder["shares"])
 
     residuals = None
     if ladder is not None:
-        residuals = m3_residuals(data, ladder["fitted_M3"])
+        residuals = m3_residuals(ladder["counts"], ladder["fitted_M3"])
         worst = residuals.loc[residuals["residual_pp"].abs().idxmax()]
         print(f"    max |M3 cell residual| : {abs(worst['residual_pp']):6.2f} "
               f"probability points  (v = {worst['v']}, u_hat = {worst['u_hat']}; "

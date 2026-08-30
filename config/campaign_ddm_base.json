@@ -17,7 +17,7 @@
             ],
             "view": ["detection"]
         },
-        "ticks_per_second": 10,
+        "ticks_per_second": 1,
         "_comment_ticks_per_second": "Arena clock. MUST equal the agent's ticks_per_second (Section 1: they alias otherwise). dt = 0.1 s.",
         "sensory_stream": {
             "mode": "shared",
@@ -77,7 +77,7 @@
                 "_comment_linear_velocity": "m/s, LOCKED (Section 1): physically plausible, T_max = r0/v spans 2.6-8.7 s across the angular grid.",
                 "angular_velocity": 120,
                 "_comment_angular_velocity": "deg/s. NOT the template's 10: the minimum turn radius is v/omega, and at the locked v = 0.05 a 10 deg/s plant gives a 0.29 m turning circle -- the agent then ORBITS the target outside the 0.05 m termination radius forever (measured: stable closed orbit, min distance 0.134 m, up to 19/20 replicates censored at dtheta = 150). Arrival scoring requires v/omega << termination radius; 120 deg/s gives 0.024 m. Post-commitment motion only -- the pre-decision heading is the bisector the agent already faces, and percepts are heading-independent (attention_mode none), so decisions are untouched.",
-                "ticks_per_second": 10,
+                "ticks_per_second": 1,
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
