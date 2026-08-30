@@ -104,7 +104,7 @@
                     "drift_knowledge": "known_magnitude",
                     "A_source": "ensemble",
                     "geometric_error_mode": "terminal_categorical",
-                    "cost_ratio": 300.0,
+                    "cost_ratio": 3000.0,
                     "_comment_cost_ratio": "The swept criterion (factor C); overridden per condition.",
                     "delta_min": 0.001,
                     "z_min": 0.0001,
@@ -122,6 +122,10 @@
                         "_comment_N_t": "Overridden per condition to ceil(T_max / 1e-3): dt = 1 ms everywhere on the grid (the boundary converges as O(sqrt(dt))).",
                         "X_max_factor": 4.0,
                         "scheme": "crank_nicolson",
+                        "terminal": "halt_sprt",
+                        "_comment_terminal": "forced_choice | halt_sprt (BELLMAN_KNOWN_A_TERMINAL_HALT_DESIGN). forced_choice: commit at arrival whatever you believe, z(T_max) = 0 -- the terminal collapse; undecided mass becomes near-chance guesses and decision times clip at T_max, which caps the frontier's accuracy asymptote at large c_e. halt_sprt: at arrival the agent halts at the midpoint (v = 0) and keeps integrating at delay rate halt_cost_rate against the flat threshold z_halt (= myopic z* at c_tau = c_h), so z(T_max) = z_halt, accuracy tends to 1 - ER(z_halt), and decision times extend past arrival by ~D(z_halt) on average -- RECHECK time_limit at the top of the c_e grid before a halt campaign: a run that hits the limit mid-halt is censored. Known-|A| model only. The table cache key includes the mode, so both frontiers can share one cache.",
+                        "halt_cost_rate": 1.0,
+                        "_comment_halt_cost_rate": "c_h: delay rate while halted. 1.0 is the physical value (halted = zero progress recovers nothing). Only read under terminal: halt_sprt; other values are sensitivity knobs, and c_h < 1 voids the halt-only-at-arrival domination lemma.",
                         "table_cache_dir": null,
                         "_comment_table_cache_dir": "Set by the generator to the campaign's shared table cache (Section 7.3). null = solve in-process, the historical behaviour."
                     }

@@ -1,0 +1,167 @@
+{
+  "environment": {
+    "logging": {
+      "console": false,
+      "console_level": "ERROR",
+      "file_level": "ERROR"
+    },
+    "collisions": false,
+    "time_limit": 60,
+    "num_runs": 1,
+    "ticks_per_second": 1,
+    "sensory_stream": {
+      "mode": "shared",
+      "frozen_sd": 0.0,
+      "white_rate": 0.07071068,
+      "seed": null
+    },
+    "termination": {
+      "type": "proximity",
+      "target_ids": [
+        "static_0.s#0",
+        "static_1.s#0"
+      ],
+      "radius": 0.05,
+      "agent_ids": "any"
+    },
+    "arenas": {
+      "arena_0": {
+        "random_seed": 0,
+        "side": 2,
+        "_id": "square",
+        "color": "white"
+      }
+    },
+    "objects": {
+      "static_0": {
+        "number": [
+          1
+        ],
+        "position": [
+          [
+            0.43301270189221935,
+            -0.24999999999999997,
+            0
+          ]
+        ],
+        "_id": "idle",
+        "shape": "cylinder",
+        "height": 0.2,
+        "diameter": 0.05,
+        "color": "red",
+        "strength": [
+          5.0
+        ],
+        "uncertainty": [
+          0
+        ]
+      },
+      "static_1": {
+        "number": [
+          1
+        ],
+        "position": [
+          [
+            0.43301270189221935,
+            0.24999999999999997,
+            0
+          ]
+        ],
+        "_id": "idle",
+        "shape": "cylinder",
+        "height": 0.2,
+        "diameter": 0.05,
+        "color": "green",
+        "strength": [
+          4.95
+        ],
+        "uncertainty": [
+          0
+        ]
+      }
+    },
+    "agents": {
+      "movable_0": {
+        "position": [
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "orientation": [
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "number": [
+          1
+        ],
+        "shape": "cylinder",
+        "linear_velocity": 0.05,
+        "angular_velocity": 120,
+        "ticks_per_second": 1,
+        "height": 0.02,
+        "diameter": 0.033,
+        "color": "blue",
+        "detection": {
+          "type": "GPS",
+          "range": 5.0,
+          "acquisition_per_second": "inf"
+        },
+        "moving_behavior": "embodied_pure_ddm",
+        "embodied_pure_ddm": {
+          "target_ids": [
+            "static_0.s#0",
+            "static_1.s#0"
+          ],
+          "reference": "egocentric",
+          "perception_width": 0.2,
+          "perception_global_inhibition": 0.2,
+          "task": "selection",
+          "sensory_time_mode": "world_time",
+          "eta_rate": [
+            0.0,
+            0.0
+          ],
+          "n_sub": 16,
+          "dist_mode": "none",
+          "attention_mode": "none",
+          "threshold_policy": "bellman",
+          "drift_knowledge": "known_magnitude",
+          "A_source": "ensemble",
+          "geometric_error_mode": "terminal_categorical",
+          "cost_ratio": null,
+          "delta_min": 0.001,
+          "z_min": 0.0001,
+          "predecision_motion": "midpoint",
+          "scaling_mode": "constant",
+          "norm_scale": 1.0,
+          "bellman": {
+            "T_max": null,
+            "T_max_check_factor": null,
+            "N_x": 1601,
+            "N_t": 8661,
+            "X_max_factor": 4.0,
+            "scheme": "crank_nicolson",
+            "terminal": "halt_sprt",
+            "halt_cost_rate": 1.0,
+            "table_cache_dir": null,
+            "static_bound": null
+          }
+        }
+      }
+    },
+    "results": {
+      "base_path": "./data/campaign_ddm/",
+      "agent_specs": [
+        "base",
+        "mean_field"
+      ],
+      "group_specs": [],
+      "snapshots_per_second": 1
+    }
+  }
+}
