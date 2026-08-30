@@ -14,7 +14,7 @@
 # =============================================================================
 #SBATCH --job-name=ra_ddm_frontier
 #SBATCH --partition=cpu
-#SBATCH --time=24:00:00
+#SBATCH --time=06:00:00
 #SBATCH --mem=4G
 #SBATCH --cpus-per-task=1
 
@@ -30,13 +30,17 @@ case "$CAMPAIGN" in
     *)   echo "CAMPAIGN must be 'ra' or 'ddm', got '$CAMPAIGN'" >&2; exit 1 ;;
 esac
 
-LOGS_DIR="${LOGS_DIR:-/pfs/work9/workspace/scratch/kn_pop547841-mySpace/collectipy-data/${SWEEP_NAME}}"
+LOGS_DIR="${LOGS_DIR:-/pfs/work9/workspace/scratch/kn_pop547841-mySpace/collectipy-data/beta_1/${SWEEP_NAME}}"
 BASE_PATH_ROOT="${BASE_PATH_ROOT:-${LOGS_DIR}}"
 MANIFEST="${MANIFEST:-${LOGS_DIR}/${MANIFEST_NAME}}"
 
 DIFF=0.01                 # 1 % quality difference — the DDM panel being matched
 RUNS_PER_CELL="${RUNS_PER_CELL:-1000}"   # run_id 1..N, both campaigns
-RUNS_PER_TASK="${RUNS_PER_TASK:-100}"    # adjust after smoke timing
+# One task = one whole cell. Measured ~0.5-0.6 s/run -> ~10-17 min/task, and
+# the RA campaign is only 100 array elements (DDM: 10). Large arrays (1000
+# elements at RUNS_PER_TASK=100) tripped the site's per-user submit limit
+# ("Batch job submission failed: Resource temporarily unavailable").
+RUNS_PER_TASK="${RUNS_PER_TASK:-1000}"
 MAX_ARRAY="${MAX_ARRAY:-1000}"           # site array-size cap; submission auto-chunks
 THROTTLE="${THROTTLE:-100}"              # concurrent tasks
 DRY_RUN="${DRY_RUN:-0}"
