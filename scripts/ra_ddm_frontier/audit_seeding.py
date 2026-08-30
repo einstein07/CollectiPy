@@ -47,22 +47,31 @@ from run_batch import InProcessRunner   # noqa: E402
 
 TRACE_TICKS = 50
 
-# The four probe configurations (§3): two RA cells, two DDM points.
+# The probe configurations (§3): two RA cells, two Bellman points, one
+# static-bound point (§2b — its own model-seed string 'ddm-static').
 RA_A = {"v": 0.5, "u_hat": 1.00}
 RA_B = {"v": 0.2, "u_hat": 0.65}
 DDM_C = 8.0
 DDM_D = 300.0
+STATIC_B = 0.1
 
 
 def _make_cfg(campaign: str, out_dir: Path, run_id: int, *,
               u: float = None, v: float = None, c_e: float = None,
-              cache_dir: Path = None, model_tag: str = None) -> Path:
+              static_b: float = None, cache_dir: Path = None,
+              model_tag: str = None) -> Path:
     if campaign == "ra":
         cfg = frontier.patch_ra(frontier._load_json(frontier.RA_TEMPLATE), u, v)
+        model = "ra"
+    elif static_b is not None:
+        cfg = frontier.patch_ddm(frontier._load_json(frontier.DDM_TEMPLATE),
+                                 "static", static_b, None)
+        model = "ddm-static"
     else:
         cfg = frontier.patch_ddm(frontier._load_json(frontier.DDM_TEMPLATE),
-                                 c_e, str(cache_dir))
-    frontier.apply_seeds(cfg, campaign, run_id)
+                                 "bellman", c_e, str(cache_dir))
+        model = "ddm-bellman"
+    frontier.apply_seeds(cfg, model, run_id)
     if model_tag is not None:
         # (d): perturb ONLY the model-private channel.
         alt = seeding.model_seed(model_tag, frontier.DTH_DEG,
@@ -163,6 +172,8 @@ def main(argv=None) -> int:
         zips[("D", rid)] = _run(runner, _make_cfg(
             "ddm", root / f"ddm_D/replicate_{rid}", rid, c_e=DDM_D,
             cache_dir=cache))
+        zips[("S", rid)] = _run(runner, _make_cfg(
+            "ddm", root / f"ddm_S/replicate_{rid}", rid, static_b=STATIC_B))
 
     # (a) determinism — same config twice, bitwise-identical logs.
     for tag, kwargs in (("ra", dict(u=RA_A["u_hat"] * frontier.u_star(0.5)[0],
@@ -203,6 +214,14 @@ def main(argv=None) -> int:
            f"û={RA_B['u_hat']}): identical env traces")
     record("(c) parameter invariance [ddm]", eq_ddm,
            f"c_e={DDM_C:g} vs c_e={DDM_D:g}: identical env traces")
+    # §2b: the static family runs under its OWN model-seed string
+    # ('ddm-static') — the env trace must still be the shared one.
+    eq_static = all(overlap_equal(percept_trace(zips[("C", rid)]),
+                                  percept_trace(zips[("S", rid)]))[0]
+                    for rid in run_ids[:2])
+    record("(c) parameter invariance [ddm static]", eq_static,
+           f"bellman c_e={DDM_C:g} vs static b={STATIC_B:g} "
+           "('ddm-static' model seeds): identical env traces")
 
     # (d) stream separation — model_seed change: env untouched, behavior free.
     for tag, kwargs, key in (("ra", dict(u=RA_A["u_hat"] * frontier.u_star(0.5)[0],

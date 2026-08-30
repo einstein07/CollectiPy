@@ -92,12 +92,22 @@ class SubprocessRunner:
                 f"main.py exited {res.returncode}: {res.stderr[-2000:]}")
 
 
+def model_key(campaign: str, row: dict) -> str:
+    """§3/§6 model string: 'ra', 'ddm-bellman' or 'ddm-static'. Wave-1/2 rows
+    (schema v1, no `variant` column) keep their original plain 'ddm' so the
+    frozen forced-choice tree stays reproducible byte-for-byte."""
+    if campaign == "ra":
+        return "ra"
+    variant = row.get("variant")
+    return f"ddm-{variant}" if variant else "ddm"
+
+
 def build_replicate(campaign: str, row: dict, run_id: int, rep_dir: Path,
                     cell_cfg: dict, provenance: dict) -> Path:
     """Write config.json + run_meta.json for one replicate; returns config path."""
     import copy
     cfg = copy.deepcopy(cell_cfg)
-    seeds = frontier.apply_seeds(cfg, campaign, run_id)
+    seeds = frontier.apply_seeds(cfg, model_key(campaign, row), run_id)
     cfg["environment"].setdefault("results", {})["base_path"] = str(rep_dir)
     rep_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = rep_dir / "config.json"
@@ -116,7 +126,11 @@ def cell_config(campaign: str, row: dict, table_cache_dir: str | None) -> dict:
         template = frontier._load_json(frontier.RA_TEMPLATE)
         return frontier.patch_ra(template, float(row["u"]), float(row["v"]))
     template = frontier._load_json(frontier.DDM_TEMPLATE)
-    return frontier.patch_ddm(template, float(row["c_e"]), table_cache_dir)
+    # Halt-campaign rows carry (variant, bound); frozen wave-1/2 rows carry
+    # c_e only and are always the Bellman family.
+    variant = row.get("variant", "bellman")
+    bound = float(row["bound"] if "bound" in row else row["c_e"])
+    return frontier.patch_ddm(template, variant, bound, table_cache_dir)
 
 
 def main(argv=None) -> int:

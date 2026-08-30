@@ -24,9 +24,12 @@ PROJECT_DIR="${PROJECT_DIR:-/home/kn/kn_kn/kn_pop547841/CollectiPy}"
 VENV_BIN="$PROJECT_DIR/.venv/bin"
 CAMPAIGN="${CAMPAIGN:-ra}"                # ra | ddm
 
+# CAMPAIGN=ddm is the §2b HALT campaign (terminal halt_sprt, Bellman + ceiling
+# + static families) in its OWN tree — the forced-choice wave-1/2 tree at
+# ra_ddm_frontier_ddm/ is frozen as the §9 regression reference.
 case "$CAMPAIGN" in
-    ra)  SWEEP_NAME="ra_ddm_frontier_slices"; MANIFEST_NAME="manifest.csv" ;;
-    ddm) SWEEP_NAME="ra_ddm_frontier_ddm";    MANIFEST_NAME="ddm_manifest.csv" ;;
+    ra)  SWEEP_NAME="ra_ddm_frontier_slices";   MANIFEST_NAME="manifest.csv" ;;
+    ddm) SWEEP_NAME="ra_ddm_frontier_ddm_halt"; MANIFEST_NAME="ddm_manifest_halt.csv" ;;
     *)   echo "CAMPAIGN must be 'ra' or 'ddm', got '$CAMPAIGN'" >&2; exit 1 ;;
 esac
 
@@ -60,9 +63,9 @@ if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
     set -e
     mkdir -p "$LOGS_DIR/failures"
     if [ "${TOPUP:-0}" = "1" ]; then
-        # Wave-2 top-up (§2 Set U-v2 / §11 ceiling points): the manifest is
-        # DERIVED from wave-1 data by `generate_manifest.py --topup-from` and
-        # copied here — never regenerated at submission time.
+        # Data-derived top-up waves (wave 2: --topup-from; wave 3 / Set U-v3:
+        # --wave3-from): the manifest is DERIVED from measured data locally
+        # and copied here — never regenerated at submission time.
         [ -f "$MANIFEST" ] || { echo "TOPUP=1 but no manifest at $MANIFEST — " \
             "generate it locally with --topup-from and copy it here" >&2; exit 1; }
         echo "top-up submission from existing manifest (generation skipped)"
@@ -82,7 +85,9 @@ if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
         # Populate the Bellman table cache by running replicate 1 of every
         # point ONCE, into the real tree (cache key is computed inside the
         # solver, so running the model is the only mismatch-proof derivation —
-        # same approach as campaign/precompute_tables.py). ~10 solves.
+        # same approach as campaign/precompute_tables.py). 12 solves for the
+        # Bellman family; static rows have no table (flat boundary) and their
+        # replicate 1 just runs — cheap, and the array skips it via .done.
         echo "precomputing Bellman tables (replicate 1 of each point) ..."
         if [ "$DRY_RUN" = "1" ]; then
             echo "  [dry run] skipped"

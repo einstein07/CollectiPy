@@ -1,6 +1,6 @@
 # RA slices + envelope vs the DDM frontier (1 %, Δθ = 60°)
 
-Implements `ra-ddm-frontier-slice-envelope-experiment.md`. **Read
+Implements `ra-ddm-frontier-slice-envelope-experiment.md` (spec v3). **Read
 [`RECON.md`](RECON.md) first** — especially D-01 (both models run on ONE 1 s
 tick clock: the RA in the archived `ra_ddm_frontier_sweep` environment with
 `time_limit = 1000`, the DDM on the same clock with `time_limit = 60` s and
@@ -9,17 +9,25 @@ realizations per run_id — the spec's full §3), D-09 (`white_rate = √2·ΔQ 
 0.07071068`, so the evidence-channel noise c = √2·η = 2×ΔQ = 0.1 exactly —
 deliberately overriding the DDM campaign's 0.035), D-10 (the
 archived-frontier and factorial-anchor gates are informational under the new
-calibration) and D-11 (the DDM's coarser evidence step at the 1 s tick).
+calibration), D-11 (the DDM's coarser evidence step at the 1 s tick),
+**D-13** (the DDM halt-at-midpoint campaign in its own tree; the
+forced-choice rerun becomes the blocking zero-halt regression reference),
+**D-14** (the static-bound family as `bellman.static_bound` — one code path)
+and **D-15** (Set U-v3: arc-length re-spacing + kernels v ∈ {0.6, 0.8}).
 
 ## What this measures
 
 The RA family placed on the DDM's speed–accuracy plane at δ_Q = 1 %, Δθ = 60°:
-four û-swept slices (Set R, 52 cells) + an absolute-u sweep (Set U, 48 cells,
-incl. the u = 0 no-coupling control), and the cross-validated Pareto envelope,
-against a seed-paired rerun of the DDM's c_e frontier (10 points). Both
-campaigns share one seed universe (`frontier-v1`, `seeding.py`): for a given
-run_id the RA and DDM trials see the identical exogenous noise realization, so
-per-trial (McNemar) comparisons are licensed, not just means.
+û-swept slices (Set R, 52 cells) + absolute-u sweeps (Set U 48, U-v2 29,
+U-v3 45 cells over six kernel shapes, incl. the u = 0 no-coupling controls),
+and the cross-validated Pareto envelope, against the seed-paired DDM under
+the §2b **halt-at-midpoint** motion policy in two bound families — Bellman
+(the c_e grid verbatim + ceiling extremes, collapsing onto the z_halt floor)
+and **static bounds** (14 log-spaced b, with b\*_cost and b\*_RR derived from
+the sweep). Both campaigns share one seed universe (`frontier-v1`,
+`seeding.py`): for a given run_id the RA and DDM trials see the identical
+exogenous noise realization, so per-trial (McNemar) comparisons are licensed,
+not just means.
 
 ## Files
 
@@ -75,16 +83,19 @@ for ROW in 43 48; do
       MANIFEST=$S/ra/manifest.csv TASK_OFFSET=0 SLURM_ARRAY_TASK_ID=$ROW \
       bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 done
-for ROW in 0 9; do
+# DDM (halt campaign): smallest / largest c_e (rows 0, 9), the largest static
+# b (row 25 — halts ~60 % of trials, exercising the midpoint hold), and one
+# mid static b (row 21):
+for ROW in 0 9 21 25; do
   env $COMMON CAMPAIGN=ddm LOGS_DIR=$S/ddm BASE_PATH_ROOT=$S/ddm \
-      MANIFEST=$S/ddm/ddm_manifest.csv TASK_OFFSET=0 SLURM_ARRAY_TASK_ID=$ROW \
+      MANIFEST=$S/ddm/ddm_manifest_halt.csv TASK_OFFSET=0 SLURM_ARRAY_TASK_ID=$ROW \
       bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 done
 ```
 
 (Execution mode reads the manifest, so generate it into the smoke dirs first:
 `$PY scripts/ra_ddm_frontier/generate_manifest.py --campaign ra --n-runs 20 --out $S/ra/manifest.csv`
-and likewise `--campaign ddm --out $S/ddm/ddm_manifest.csv`.)
+and likewise `--campaign ddm --out $S/ddm/ddm_manifest_halt.csv`.)
 
 Then aggregation + overlay end-to-end on the smoke output:
 
@@ -110,7 +121,8 @@ acc 0.700 [0.48, 0.86], median commit 11 ticks (the factorial's 0.765 was at
 DRY_RUN=1 bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 DRY_RUN=1 CAMPAIGN=ddm bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 
-# for real (one task = one cell: RA 100 tasks, DDM 10 tasks, ~10-17 min each)
+# for real (one task = one cell: RA 100 tasks, DDM 26 tasks — the §2b halt
+# campaign: Bellman + ceiling + static — ~10-17 min each)
 bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 CAMPAIGN=ddm bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
 ```
@@ -139,8 +151,9 @@ $PY scripts/ra_ddm_frontier/aggregate.py --campaign ddm --base-root <DDM root> \
 ```
 
 Gates printed (§12.6): completeness (missing replicates listed → resubmit)
-and the four u = 0 pure-replicate cells (mutual CI overlap; v is inert at
-u = 0) are blocking. The archived-frontier comparison and the
+and the u = 0 pure-replicate cells (four in wave 1, SIX after U-v3; mutual CI
+overlap; v is inert at u = 0) are blocking — as is the `--previous-rerun`
+zero-halt gate of step 10 on the DDM side. The archived-frontier comparison and the
 factorial-anchor cell are **informational** — both references were measured
 at white_rate 0.035 and this campaign is calibrated at 0.1 (RECON D-10) — so
 systematic shifts there are expected, not drift. A blocking gate failing:
@@ -197,6 +210,57 @@ $PY scripts/ra_ddm_frontier/analyze_overlay.py --ra-root <RA root> --ddm-root <D
 Because frontier-v1 seeds are trial-identity keyed, wave 2 is a pure top-up:
 wave-1 cells stay valid and paired, and the new cells are born paired with
 everything else at every run_id.
+
+### 9. Wave 3 — Set U-v3 (§2, §12.8): arc-length re-spacing + kernels v ∈ {0.6, 0.8}
+
+Derived from the pooled waves-1+2 `cells.csv` and the factorial's maps at the
+extension kernels (RECON D-15):
+
+```bash
+# a. derive the wave-3 grid (local; needs manifest_full.csv in $R)
+$PY scripts/ra_ddm_frontier/generate_manifest.py \
+    --wave3-from <RA root>/cells.csv \
+    --factorial ../seoul-data/beta-1/uhat_v_sweep/cells.csv --out-dir $R
+#    -> $R/manifest_wave3.csv (45 cells), manifest_full.csv (174 rows)
+
+# b. BLOCKING: step-halving at the new per-v u maxima (printed by step a)
+$PY scripts/ra_ddm_frontier/dt_check.py --manifest $R/manifest_wave3.csv \
+    --cells U3_v0.6_u11,U3_v0.8_u12,U3_v0.6_u13.25 \
+    --out $R/dt_check_wave3_report.json
+
+# c. ship + submit exactly like wave 2 (same tree, .done idempotency):
+scp $R/manifest_wave3.csv $R/manifest_full.csv <cluster>:<RA LOGS_DIR>/
+TOPUP=1 MANIFEST=<RA LOGS_DIR>/manifest_wave3.csv \
+    bash scripts/ra_ddm_frontier/submit-ra-ddm-frontier-slices-bwunicluster.sh
+
+# d. after syncing back: re-aggregate (the u = 0 gate is now SIX-way) and
+#    re-run step a once — with frontier data at v ∈ {0.6, 0.8} it switches to
+#    the measured maps and performs the §2 gap-fill pass (chords > 2x budget);
+#    an empty top-up means the extension grids need no fill.
+```
+
+### 10. The DDM halt campaign (§2b, §12.9) — both bound families
+
+`CAMPAIGN=ddm` now IS the halt campaign: `ddm_manifest_halt.csv` (26 points =
+10 Bellman c_e verbatim + 2 ceiling extremes + 14 static b), tree
+`ra_ddm_frontier_ddm_halt/`, layout `points/<variant>/{ce_|b_}<bound>/`.
+Step 3 prints `ddm_halt_budget()` — z_halt, D(z_halt) and the censoring
+margin per point (censor risk only at c_e ∈ {3000, 30000}; time_limit stays
+60 s per §13, the censored tail is reported, not hidden). Submit as in
+step 5; then:
+
+```bash
+$PY scripts/ra_ddm_frontier/aggregate.py --campaign ddm \
+    --base-root <DDM halt root> \
+    --previous-rerun <frozen forced-choice root>/ddm_trials.parquet
+```
+
+The `--previous-rerun` gate (§9, BLOCKING) demands CI-overlap wherever
+halt_frac ≈ 0 — same calibration, same env seeds, so zero-halt points must
+reproduce; at halted points "slower + more accurate" is the policy fix's
+expected signature. `analyze_overlay.py` then emits `static_bstar.json`
+(b\*_cost, b\*_RR, bootstrap CIs, the Wald analytic anchor and its
+discrepancy) and draws both families with b\* marked in every figure.
 
 ## Traceability (§7)
 

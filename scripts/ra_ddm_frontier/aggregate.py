@@ -58,10 +58,14 @@ RA_TRIAL_FIELDS = [
     "n_ticks_logged", "git_sha", "config_hash", "error",
 ]
 DDM_TRIAL_FIELDS = [
-    "point_id", "c_e", "run_id", "env_seed_sensory", "model_seed",
+    "point_id", "variant", "bound", "c_e", "run_id",
+    "env_seed_sensory", "model_seed",
     "decided", "choice", "correct",
     "t_commit_ticks", "t_commit_fine", "t_arrival_s", "timeout",
     "committed", "committed_id", "commit_correct", "rt", "tick_commit",
+    # §2b halt-at-midpoint policy: halted = the trial reached the midpoint
+    # undecided; halt_duration = extra deliberation bought by the halt (s).
+    "halted", "halt_duration", "z_halt", "halt_guard_hits",
     "n_ticks_logged", "git_sha", "config_hash", "error",
 ]
 
@@ -118,6 +122,16 @@ def score_replicate(rep_dir: Path, campaign: str) -> dict | None:
     for k in fields:
         if k in meta:
             row[k] = meta[k]
+    if campaign == "ddm":
+        # Halt-campaign metadata carries (variant, bound); frozen wave-1/2
+        # metadata carries c_e only (always the Bellman family). Normalize so
+        # every trial has all three columns.
+        if row.get("variant") is None:
+            row["variant"] = "bellman"
+        if row.get("bound") is None and row.get("c_e") is not None:
+            row["bound"] = row["c_e"]
+        if row.get("c_e") is None and row["variant"] == "bellman":
+            row["c_e"] = row.get("bound")
     row.update({"decided": False, "timeout": False, "choice": "",
                 "correct": False, "error": ""})
 
@@ -174,6 +188,19 @@ def score_replicate(rep_dir: Path, campaign: str) -> dict | None:
                 "tick_commit": int(first_commit["tick"])})
         else:
             row["committed"] = False
+        if live:
+            # §2b halt logging: halted (reached the midpoint undecided),
+            # halt duration, z_halt, runaway-guard hits — read off the last
+            # live tick (the fields latch once set). Absent columns (frozen
+            # forced-choice logs) leave the Nones from the field init.
+            lastd = live[-1]
+            if "halt_event" in lastd:
+                row["halted"] = str(lastd.get("halt_event")).strip() in (
+                    "True", "true", "1")
+                row["halt_duration"] = _f(lastd.get("halt_duration"))
+                row["z_halt"] = _f(lastd.get("z_halt"))
+                guard = _f(lastd.get("halt_guard_hits"))
+                row["halt_guard_hits"] = int(guard) if guard is not None else 0
     return row
 
 
@@ -200,7 +227,7 @@ def _score_cell_dir(task) -> list[dict]:
 def summarise_cells(trials: list[dict], campaign: str) -> list[dict]:
     key = "cell_id" if campaign == "ra" else "point_id"
     ident_cols = (["sweep", "v", "u_hat", "u_star", "u"] if campaign == "ra"
-                  else ["c_e"])
+                  else ["variant", "bound", "c_e"])
     by_cell: dict[str, list[dict]] = {}
     for t in trials:
         by_cell.setdefault(t[key], []).append(t)
@@ -227,6 +254,18 @@ def summarise_cells(trials: list[dict], campaign: str) -> list[dict]:
                "median_commit_tick": (commit[len(commit) // 2]
                                       if commit else None),
                "n_errors": sum(1 for t in ts if t["error"])}
+        if campaign == "ddm":
+            # §2b: the halt makes the DT distribution bimodal by construction,
+            # so the halt fraction is reported per point; a trial still halted
+            # at time_limit never arrives and shows up in 1 - decided_frac.
+            halted = [t for t in ts if t.get("halted")]
+            durs = [t["halt_duration"] for t in halted
+                    if t.get("halt_duration") is not None]
+            row["halt_frac"] = len(halted) / n if n else float("nan")
+            row["median_halt_duration_s"] = (
+                sorted(durs)[len(durs) // 2] if durs else None)
+            row["halt_guard_hits"] = sum(
+                int(t.get("halt_guard_hits") or 0) for t in ts)
         out.append(row)
     return out
 
@@ -276,6 +315,8 @@ def regression_gate(points: list[dict], trials: list[dict], previous: Path,
         by_point.setdefault(t["point_id"], []).append(t)
     report, ok_all = [], True
     for row in points:
+        if row.get("c_e") in (None, ""):        # static family: no archive twin
+            continue
         ce = float(row["c_e"])
         sl = prev[prev["c_e"].astype(float) == ce]
         if sl.empty:
@@ -329,6 +370,83 @@ def regression_gate(points: list[dict], trials: list[dict], previous: Path,
     return True                       # never blocks: calibrations differ
 
 
+def halt_regression_gate(points: list[dict], trials: list[dict],
+                         previous: Path, dest: Path) -> bool:
+    """§9, re-scoped for the halt-at-midpoint policy: the halt rerun vs the
+    FROZEN forced-choice rerun (same calibration, same frontier-v1 env seeds).
+
+    Where the halt never triggers (halt_frac ≈ 0) behavior must reproduce —
+    CI overlap on acc_all and median arrival is BLOCKING; disagreement there
+    means environment or template drift. Where the halt does trigger, the
+    expected signature of the policy fix is slower + more accurate — reported,
+    never failed on. Bellman family only (the static family has no
+    forced-choice twin)."""
+    import pandas as pd
+    prev = pd.read_parquet(previous)
+    HALT_FREE = 0.005
+    report, ok_all = [], True
+    for row in points:
+        if row.get("variant") != "bellman" or row.get("c_e") in (None, ""):
+            continue
+        ce = float(row["c_e"])
+        sl = prev[prev["c_e"].astype(float) == ce]
+        if sl.empty:
+            report.append({"c_e": ce, "status": "NO PREVIOUS DATA"})
+            continue
+        n_prev = len(sl)
+        p_acc, p_lo, p_hi = wilson(int(sl["correct"].astype(bool).sum()),
+                                   n_prev)
+        p_arr = sl.loc[sl["decided"].astype(bool), "t_arrival_s"]
+        p_med, p_mlo, p_mhi = boot_median_ci(p_arr.astype(float).tolist())
+        halt_frac = float(row.get("halt_frac") or 0.0)
+        gated = halt_frac <= HALT_FREE
+        acc_ok = ci_overlap(row["acc_all_lo"], row["acc_all_hi"], p_lo, p_hi)
+        med_ok = ci_overlap(row["median_arrival_lo"], row["median_arrival_hi"],
+                            p_mlo, p_mhi)
+        if gated:
+            status = "PASS" if (acc_ok and med_ok) else "FAIL (zero-halt drift)"
+            ok_all &= acc_ok and med_ok
+        else:
+            expected = (row["acc_all"] >= p_acc - 1e-9
+                        and row["median_arrival_s"] >= p_med - 1e-9)
+            status = ("EXPECTED DEPARTURE (slower, more accurate)" if expected
+                      else "DEPARTURE IN THE WRONG DIRECTION — inspect")
+        report.append({
+            "c_e": ce, "halt_frac": halt_frac, "gated": gated,
+            "status": status,
+            "halt_acc": row["acc_all"],
+            "halt_acc_ci": [row["acc_all_lo"], row["acc_all_hi"]],
+            "prev_acc": p_acc, "prev_acc_ci": [p_lo, p_hi],
+            "halt_median_s": row["median_arrival_s"],
+            "halt_median_ci": [row["median_arrival_lo"],
+                               row["median_arrival_hi"]],
+            "prev_median_s": p_med, "prev_median_ci": [p_mlo, p_mhi],
+            "n_halt": row["n"], "n_prev": n_prev})
+    with open(dest, "w", encoding="utf-8") as fh:
+        json.dump({"gate": "PASS" if ok_all else "FAIL",
+                   "halt_free_threshold": HALT_FREE,
+                   "note": ("BLOCKING at zero-halt points: same calibration, "
+                            "same frontier-v1 seeds — behavior must "
+                            "reproduce. At halted points the departure "
+                            "(slower, more accurate) is the policy fix's "
+                            "expected signature, not drift (§9)."),
+                   "previous": str(previous), "points": report}, fh, indent=2)
+    print(f"\nhalt-policy regression gate vs the forced-choice rerun "
+          f"{previous}:")
+    for r in report:
+        if "halt_acc" in r:
+            print(f"  c_e={r['c_e']:>7g}  halt_frac={r['halt_frac']:.3f}  "
+                  f"{r['status']}  acc {r['halt_acc']:.3f} vs "
+                  f"{r['prev_acc']:.3f}  median {r['halt_median_s']:.2f}s vs "
+                  f"{r['prev_median_s']:.2f}s")
+        else:
+            print(f"  c_e={r['c_e']:>7g}  {r['status']}")
+    verdict = ("PASS" if ok_all
+               else "FAIL — halt and diagnose before any overlay (§9)")
+    print(f"  gate: {verdict}")
+    return ok_all
+
+
 # ---------------------------------------------------------------------------
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -336,8 +454,14 @@ def main(argv=None) -> int:
     ap.add_argument("--base-root", type=Path, required=True)
     ap.add_argument("--manifest", type=Path, default=None)
     ap.add_argument("--previous", type=Path, default=None,
-                    help="ddm: previous frontier tidy_trials.parquet "
-                         "(the §9 regression gate)")
+                    help="ddm: the ARCHIVED (white_rate 0.035) frontier "
+                         "tidy_trials.parquet — informational comparison only")
+    ap.add_argument("--previous-rerun", type=Path, default=None,
+                    help="ddm halt campaign: the frozen forced-choice rerun's "
+                         "ddm_trials.parquet (same calibration, same seeds). "
+                         "§9 BLOCKING gate at every Bellman c_e whose halt "
+                         "fraction ≈ 0; a documented departure (slower, more "
+                         "accurate) is expected where the halt triggers")
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args(argv)
 
@@ -345,20 +469,29 @@ def main(argv=None) -> int:
     if args.manifest is not None:
         manifest = args.manifest
     else:
-        # §9: once wave 2 exists, completeness is judged against the FULL
-        # manifest (all waves); fall back to the wave-1 name otherwise.
-        full = root / ("manifest_full.csv" if args.campaign == "ra"
-                       else "ddm_manifest_full.csv")
-        wave1 = root / (frontier.RA_MANIFEST_NAME if args.campaign == "ra"
-                        else frontier.DDM_MANIFEST_NAME)
-        manifest = full if full.is_file() else wave1
+        # §9: completeness is judged against the FULL manifest (all waves)
+        # when it exists; otherwise the campaign's own manifest — for the DDM
+        # that is the halt manifest first, then the frozen wave-1/2 name.
+        candidates = (["manifest_full.csv", frontier.RA_MANIFEST_NAME]
+                      if args.campaign == "ra" else
+                      [frontier.DDM_HALT_MANIFEST_NAME,
+                       "ddm_manifest_full.csv", frontier.DDM_MANIFEST_NAME])
+        manifest = next((root / c for c in candidates
+                         if (root / c).is_file()), root / candidates[0])
     rows_manifest = frontier.read_manifest(manifest) if manifest.is_file() else []
     if not rows_manifest:
         print(f"WARNING: no manifest at {manifest}; completeness not checkable")
 
     tree = root / ("cells" if args.campaign == "ra" else "points")
-    cell_dirs = sorted(d for d in tree.glob("**/") if d.name.startswith("u_")
-                       ) if args.campaign == "ra" else sorted(tree.glob("ce_*"))
+    if args.campaign == "ra":
+        cell_dirs = sorted(d for d in tree.glob("**/")
+                           if d.name.startswith("u_"))
+    else:
+        # Both layouts: the frozen wave-1/2 flat tree (points/ce_*) and the
+        # halt campaign's variant tree (points/<variant>/{ce_*,b_*}).
+        cell_dirs = sorted(list(tree.glob("ce_*"))
+                           + list(tree.glob("*/ce_*"))
+                           + list(tree.glob("*/b_*")))
     tasks = [(d, args.campaign) for d in cell_dirs]
     trials: list[dict] = []
     if args.workers > 1 and len(tasks) > 1:
@@ -401,7 +534,9 @@ def main(argv=None) -> int:
     # ---- campaign-specific gates ------------------------------------------
     ok = True
     if args.campaign == "ra":
-        u0 = [c for c in cells if c["cell_id"].startswith("U_") and
+        # §12: v is inert at u = 0, so ALL u = 0 cells (four in wave 1, six
+        # once U-v3 adds the v ∈ {0.6, 0.8} controls) are pure replicates.
+        u0 = [c for c in cells if c["sweep"] == "absolute" and
               float(c["u"]) == 0.0]
         if len(u0) >= 2:
             base = u0[0]
@@ -426,9 +561,13 @@ def main(argv=None) -> int:
                   f"0.035; this campaign runs at {frontier.WHITE_RATE} "
                   "(evidence-channel c = 2 x dQ), so lower accuracy is expected "
                   "(RECON D-10).")
-    elif args.previous is not None:
-        ok &= regression_gate(cells, trials, args.previous,
-                              root / "regression_gate.json")
+    else:
+        if args.previous is not None:
+            ok &= regression_gate(cells, trials, args.previous,
+                                  root / "regression_gate.json")
+        if args.previous_rerun is not None:
+            ok &= halt_regression_gate(cells, trials, args.previous_rerun,
+                                       root / "halt_regression_gate.json")
     return 0 if ok else 1
 
 

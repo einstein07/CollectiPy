@@ -52,8 +52,32 @@ import seeding    # noqa: E402
 from aggregate import wilson, boot_median_ci   # noqa: E402
 
 DISCRETISATION_LIMITED_CE = {0.03, 0.1}   # campaign/factors.py, the DDM figure convention
+
+#: Per-v colors — Okabe-Ito, no yellow (readable, colorblind-safe).
+V_COLORS = {0.2: "#0072B2", 0.3: "#009E73", 0.4: "#D55E00", 0.5: "#CC79A7",
+            0.6: "#E69F00", 0.8: "#56B4E9"}
+STATIC_COLOR = "#7A6FBE"                  # the §2b static-bound family
 MATCHED_ACC = [0.90, 0.95, 0.99]
 N_BOOT = 500
+#: b*_cost (§2b): the cost functional the collapsing policy optimizes, with
+#: c = 2ΔQ = 0.1 — expected error cost + c · E[T_decision].
+COST_TIME_RATE = frontier.NOISE_SCALE_C
+
+
+def ddm_families(ddm_df):
+    """(bellman_df, static_df). Frozen forced-choice tables have no `variant`
+    column — everything there is the Bellman family."""
+    if "variant" not in ddm_df.columns:
+        return ddm_df, ddm_df.iloc[0:0]
+    variant = ddm_df["variant"].fillna("bellman")
+    return ddm_df[variant == "bellman"], ddm_df[variant == "static"]
+
+
+def panel_vs(ra_df):
+    """The v panels actually present in the data, in V_GRID_ALL order —
+    figures stay correct before and after the U-v3 kernel extension."""
+    have = {round(float(v), 3) for v in ra_df["v"].astype(float).unique()}
+    return [v for v in frontier.V_GRID_ALL if round(v, 3) in have]
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +296,90 @@ def mcnemar(ra_df, ddm_df):
 
 
 # ---------------------------------------------------------------------------
+# §2b — the static family's optimum boundaries, DERIVED from the swept data
+# ---------------------------------------------------------------------------
+def static_bstar(static_df):
+    """b*_cost = argmin over the swept b of [P(error) + c·E[T_decision]] with
+    c = 2ΔQ = 0.1 (the collapsing policy's cost functional); b*_RR = argmax of
+    the reward rate P(correct)/E[T_arrival]. Both with bootstrap CIs over
+    trials, plus the Wald constant-drift analytic as a sanity anchor — the
+    embodied task's time-varying geometry means they will not coincide
+    exactly; the discrepancy is reported, not hidden."""
+    if static_df.empty:
+        return None
+    per_b = {}
+    for pid, g in static_df.groupby("point_id"):
+        b = float(g["bound"].iloc[0])
+        per_b[b] = g
+    bs = sorted(per_b)
+
+    def objectives(sample):
+        cost, rr = {}, {}
+        for b, g in sample.items():
+            err = 1.0 - float(g["correct"].mean())
+            rt = g.loc[g["decided"], "rt"].astype(float)
+            arr = g.loc[g["decided"], "t_arrival_s"].astype(float)
+            # Undecided (censored) trials count the full budget — scoring them
+            # cheaper than the timeout would reward censoring.
+            n_cens = int((~g["decided"]).sum())
+            mean_rt = ((rt.sum() + n_cens * frontier.DDM_TIME_LIMIT)
+                       / len(g)) if len(g) else float("nan")
+            mean_arr = ((arr.sum() + n_cens * frontier.DDM_TIME_LIMIT)
+                        / len(g)) if len(g) else float("nan")
+            cost[b] = err + COST_TIME_RATE * mean_rt
+            rr[b] = (1.0 - err) / mean_arr if mean_arr > 0 else float("nan")
+        b_cost = min(cost, key=cost.get)
+        b_rr = max(rr, key=rr.get)
+        return b_cost, b_rr, cost, rr
+
+    b_cost0, b_rr0, cost0, rr0 = objectives(per_b)
+    rng = np.random.default_rng(20260830)
+    boots_cost, boots_rr = [], []
+    for _ in range(N_BOOT):
+        sample = {b: g.iloc[rng.integers(0, len(g), len(g))]
+                  for b, g in per_b.items()}
+        bc, br, _c, _r = objectives(sample)
+        boots_cost.append(bc)
+        boots_rr.append(br)
+
+    def ci(vals):
+        return [float(np.percentile(vals, 2.5)),
+                float(np.percentile(vals, 97.5))]
+
+    # Wald constant-drift analytic: ER(b) = 1/(1+e^{kb}), DT(b) = (b/A)tanh(kb/2)
+    k = 2.0 * frontier.QUALITY_DELTA / frontier.NOISE_SCALE_C ** 2
+    A = frontier.QUALITY_DELTA
+    t_travel = frontier.R0 / frontier.LINEAR_VELOCITY
+    dense = np.geomspace(bs[0] / 2.0, bs[-1] * 2.0, 4000)
+    er = 1.0 / (1.0 + np.exp(k * dense))
+    dt = dense / A * np.tanh(0.5 * k * dense)
+    wald_cost = er + COST_TIME_RATE * dt
+    wald_rr = (1.0 - er) / (t_travel + dt)
+    b_cost_wald = float(dense[int(np.argmin(wald_cost))])
+    b_rr_wald = float(dense[int(np.argmax(wald_rr))])
+
+    return {
+        "b_grid": bs,
+        "cost_functional": ("P(error) + c*E[T_decision], c = 2*dQ = "
+                            f"{COST_TIME_RATE:g}; censored trials count the "
+                            f"full {frontier.DDM_TIME_LIMIT} s budget"),
+        "b_star_cost": {"estimate": b_cost0, "ci95": ci(boots_cost),
+                        "cost_at_b": {f"{b:g}": cost0[b] for b in bs}},
+        "b_star_rr": {"estimate": b_rr0, "ci95": ci(boots_rr),
+                      "rr_at_b": {f"{b:g}": rr0[b] for b in bs}},
+        "wald_analytic": {
+            "b_star_cost": b_cost_wald, "b_star_rr": b_rr_wald,
+            "note": ("constant-drift, constant-cost anchor; the embodied "
+                     "task's time-varying geometry shifts the empirical "
+                     "optimum — report the discrepancy, do not expect "
+                     "coincidence (§2b)"),
+            "discrepancy_cost": b_cost0 - b_cost_wald,
+            "discrepancy_rr": b_rr0 - b_rr_wald},
+        "n_boot": N_BOOT,
+    }
+
+
+# ---------------------------------------------------------------------------
 # §11 ceiling verification
 # ---------------------------------------------------------------------------
 def ceiling_check(ra_df, ddm_df, env_rows):
@@ -296,9 +404,12 @@ def ceiling_check(ra_df, ddm_df, env_rows):
                       "acc": acc, "acc_lo": lo, "acc_hi": hi, "n_eval": len(g)})
     clears_asym = all(p["acc_lo"] > asymptote for p in peaks)
     clears_ddm = all(p["acc_lo"] > ddm_best["acc_hi"] for p in peaks)
-    has_ceiling_points = any(
-        float(str(p).replace("D_ce", "")) > max(frontier.C_E_GRID)
-        for p in ddm_df["point_id"].unique())
+    bellman, _static = ddm_families(ddm_df)
+    ce_col = ("c_e" if "c_e" in bellman.columns else "bound"
+              if "bound" in bellman.columns else None)
+    has_ceiling_points = bool(ce_col) and any(
+        float(ce) > max(frontier.C_E_GRID)
+        for ce in bellman[ce_col].dropna().unique())
     return {
         "analytic_asymptote": asymptote,
         "asymptote_formula": "Phi((A/c)*sqrt(r0/v)); ideal full-horizon observer",
@@ -328,39 +439,90 @@ def _thinned(points, dt_min=0.4, dacc_min=0.02):
     return keep
 
 
-def draw_main_per_v(ra_df, ddm_df, out_stem: Path):
-    """§11 main figure: one panel per v — the absolute-u sweep (Set U + U-v2
-    pooled) against the DDM curve, points connected in u order."""
+def _point_bounds(df):
+    """point_id -> float bound (c_e or b); tolerant of the frozen schema."""
+    col = "bound" if "bound" in df.columns else "c_e"
+    return {pid: float(g[col].iloc[0]) for pid, g in df.groupby("point_id")
+            if g[col].notna().any()}
+
+
+def _draw_ddm_families(ax, ddm_df, bstar=None, label_points=True):
+    """The §11 DDM layer: Bellman labeled by c_e, static labeled by b with
+    b*_cost and b*_RR marked. Open markers: discretisation-limited (boundary
+    below the 1 s-tick evidence substep) or decided_frac < 1."""
+    n_ddm = int(ddm_df.groupby("point_id").size().median())
+    for fam_df, color, marker, name in (
+            (ddm_families(ddm_df)[0], "black", "o", "Bellman (c_e)"),
+            (ddm_families(ddm_df)[1], STATIC_COLOR, "^", "static (b)")):
+        if fam_df.empty:
+            continue
+        stats = sorted(group_stats(fam_df, "point_id"),
+                       key=lambda s: s["median_t"])
+        stats = [s for s in stats if s["median_t"] == s["median_t"]]
+        bounds = _point_bounds(fam_df)
+        ax.plot([s["median_t"] for s in stats],
+                [s["acc_all"] for s in stats], "-", color=color, lw=1.5,
+                zorder=3, label=f"DDM {name}, halt-at-midpoint, "
+                                f"n={n_ddm}/point")
+        pts = [(s["median_t"], s["acc_all"]) for s in stats]
+        lab = _thinned(pts) if label_points else set()
+        for i, s in enumerate(stats):
+            b = bounds.get(s["point_id"], float("nan"))
+            if name.startswith("Bellman"):
+                open_m = (b in DISCRETISATION_LIMITED_CE
+                          or s["decided_frac"] < 1)
+            else:
+                open_m = (b < frontier.EVIDENCE_SUBSTEP
+                          or s["decided_frac"] < 1)
+            ax.plot(s["median_t"], s["acc_all"], marker, ms=5, zorder=4,
+                    mfc="white" if open_m else color, mec=color)
+            if i in lab:
+                ax.annotate(f"{b:g}", pts[i], textcoords="offset points",
+                            xytext=(5, -10), fontsize=7, color=color)
+        if name.startswith("static") and bstar is not None:
+            # Distinct offsets: the two optima can land on the SAME grid point.
+            for key, mk, txt, off in (("b_star_cost", "*", "b*_cost", (6, 8)),
+                                      ("b_star_rr", "D", "b*_RR", (6, -16))):
+                b_opt = bstar[key]["estimate"]
+                s_opt = next((s for s in stats
+                              if abs(bounds[s["point_id"]] - b_opt)
+                              < 1e-9 * max(b_opt, 1)), None)
+                if s_opt is not None:
+                    ax.plot(s_opt["median_t"], s_opt["acc_all"], mk, ms=11,
+                            mfc="none", mec=STATIC_COLOR, mew=1.6, zorder=5)
+                    ax.annotate(txt, (s_opt["median_t"], s_opt["acc_all"]),
+                                textcoords="offset points", xytext=off,
+                                fontsize=7.5, color=STATIC_COLOR,
+                                fontweight="bold")
+
+
+def _panel_grid(plt, n_panels):
+    ncols = 2 if n_panels <= 4 else 3
+    nrows = max((n_panels + ncols - 1) // ncols, 1)
+    return plt.subplots(nrows, ncols, figsize=(6.5 * ncols, 4.7 * nrows),
+                        sharex=True, sharey=True, squeeze=False)
+
+
+def draw_main_per_v(ra_df, ddm_df, out_stem: Path, bstar=None):
+    """§11 main figure: one panel per v (six once U-v3 lands) — the absolute-u
+    sweep (all waves pooled) against BOTH DDM families, connected in u order."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    ddm_stats = sorted(group_stats(ddm_df, "point_id"),
-                       key=lambda s: s["median_t"])
     n_ra = int(ra_df.groupby("cell_id").size().median())
     n_ddm = int(ddm_df.groupby("point_id").size().median())
     asym = frontier.ddm_ideal_ceiling()
-    cmap = plt.get_cmap("viridis")
-    v_colors = {v: cmap(i / (len(frontier.V_GRID) - 1))
-                for i, v in enumerate(frontier.V_GRID)}
+    v_colors = V_COLORS
+    vs = panel_vs(ra_df)
 
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharex=True, sharey=True)
-    for ax, v in zip(axes.ravel(), frontier.V_GRID):
+    fig, axes = _panel_grid(plt, len(vs))
+    for ax in axes.ravel()[len(vs):]:
+        ax.set_visible(False)
+    for ax, v in zip(axes.ravel(), vs):
         ax.axhline(asym, color="crimson", ls="--", lw=1,
                    label="DDM infinite-patience asymptote")
-        ax.plot([s["median_t"] for s in ddm_stats],
-                [s["acc_all"] for s in ddm_stats], "-", color="black", lw=1.5,
-                zorder=3, label=f"DDM (Bellman, n={n_ddm}/point)")
-        ddm_pts = [(s["median_t"], s["acc_all"]) for s in ddm_stats]
-        lab = _thinned(ddm_pts)
-        for i, s in enumerate(ddm_stats):
-            ce = float(str(s["point_id"]).replace("D_ce", ""))
-            open_m = ce in DISCRETISATION_LIMITED_CE or s["decided_frac"] < 1
-            ax.plot(s["median_t"], s["acc_all"], "o", ms=5, zorder=4,
-                    mfc="white" if open_m else "black", mec="black")
-            if i in lab:
-                ax.annotate(f"{ce:g}", ddm_pts[i], textcoords="offset points",
-                            xytext=(5, -10), fontsize=7)
+        _draw_ddm_families(ax, ddm_df, bstar=bstar)
 
         import numpy as _np
         gv = ra_df[(ra_df["sweep"] == "absolute")
@@ -392,10 +554,14 @@ def draw_main_per_v(ra_df, ddm_df, out_stem: Path):
     fig.suptitle(
         "RA absolute-u sweep vs the DDM frontier, per kernel shape — "
         "δ_Q = 1 %, Δθ = 60°; c = 2ΔQ = 0.1; frontier-v1;\n"
-        f"n = {n_ra}/RA cell, {n_ddm}/DDM point; labels: u / c_e (thinned in "
-        "clusters); open markers: decided_frac < 1 or discretisation-limited",
+        "DDM motion policy: HALT-AT-MIDPOINT (undecided at the midpoint ⇒ "
+        "stop and keep integrating; Bellman bounds floor at z_halt, static "
+        "bounds b with derived b*_cost / b*_RR marked);\n"
+        f"n = {n_ra}/RA cell, {n_ddm}/DDM point; labels: u / c_e / b (thinned "
+        "in clusters); open markers: decided_frac < 1 or "
+        "discretisation-limited",
         fontsize=9)
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
     for ext in (".png", ".pdf"):
         fig.savefig(out_stem.with_suffix(ext), dpi=200)
     plt.close(fig)
@@ -409,11 +575,12 @@ def draw_tuning_curves(ra_df, out_stem: Path):
     import matplotlib.pyplot as plt
     import numpy as _np
 
-    cmap = plt.get_cmap("viridis")
-    v_colors = {v: cmap(i / (len(frontier.V_GRID) - 1))
-                for i, v in enumerate(frontier.V_GRID)}
-    fig, axes = plt.subplots(2, 2, figsize=(13, 9), sharex=True, sharey=True)
-    for ax, v in zip(axes.ravel(), frontier.V_GRID):
+    v_colors = V_COLORS
+    vs = panel_vs(ra_df)
+    fig, axes = _panel_grid(plt, len(vs))
+    for ax in axes.ravel()[len(vs):]:
+        ax.set_visible(False)
+    for ax, v in zip(axes.ravel(), vs):
         gv = ra_df[(ra_df["sweep"] == "absolute")
                    & _np.isclose(ra_df["v"].astype(float), v)]
         order = gv.groupby("cell_id")["u"].first().astype(float)
@@ -452,13 +619,11 @@ def draw_tuning_curves(ra_df, out_stem: Path):
     plt.close(fig)
 
 
-def draw_overlay(ra_df, ddm_df, env_rows, out_stem: Path):
+def draw_overlay(ra_df, ddm_df, env_rows, out_stem: Path, bstar=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    ddm_stats = sorted(group_stats(ddm_df, "point_id"),
-                       key=lambda s: s["median_t"])
     n_ra = int(ra_df.groupby("cell_id").size().median())
     n_ddm = int(ddm_df.groupby("point_id").size().median())
 
@@ -469,9 +634,7 @@ def draw_overlay(ra_df, ddm_df, env_rows, out_stem: Path):
         stair_by_dir[direction] = staircase(pts)
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.6), sharey=True)
-    cmap = plt.get_cmap("viridis")
-    v_colors = {v: cmap(i / max(len(frontier.V_GRID) - 1, 1))
-                for i, v in enumerate(frontier.V_GRID)}
+    v_colors = V_COLORS
 
     for ax, sweep, order_col, label_fmt in (
             (axes[0], "relative", "u_hat", "û={val:g}"),
@@ -492,24 +655,12 @@ def draw_overlay(ra_df, ddm_df, env_rows, out_stem: Path):
                             color="tab:orange", zorder=1,
                             label="RA envelope (cross-validated)")
 
-        # DDM frontier
-        td = [s["median_t"] for s in ddm_stats]
-        ad = [s["acc_all"] for s in ddm_stats]
-        ax.plot(td, ad, "-", color="black", lw=1.5, zorder=3,
-                label=f"DDM (bellman, n={n_ddm}/point)")
-        for s in ddm_stats:
-            ce = float(next(str(p).replace("D_ce", "") for p in [s["point_id"]]))
-            open_marker = (ce in DISCRETISATION_LIMITED_CE
-                           or s["decided_frac"] < 1.0)
-            ax.plot(s["median_t"], s["acc_all"], "o", ms=6, zorder=4,
-                    mfc="white" if open_marker else "black", mec="black")
-            ax.annotate(f"{ce:g}", (s["median_t"], s["acc_all"]),
-                        textcoords="offset points", xytext=(5, -9),
-                        fontsize=7, color="black")
+        # DDM frontier — both §2b families, halt-at-midpoint
+        _draw_ddm_families(ax, ddm_df, bstar=bstar)
 
         # RA slices, connected in û (Set R) / u (Set U) order — fold included
         sub = ra_df[ra_df["sweep"] == sweep]
-        for v in frontier.V_GRID:
+        for v in panel_vs(ra_df):
             gv = sub[np.isclose(sub["v"].astype(float), v)]
             stats = group_stats(gv, "cell_id")
             order = {s["cell_id"]: float(
@@ -544,7 +695,8 @@ def draw_overlay(ra_df, ddm_df, env_rows, out_stem: Path):
         f"c = √2·η = {frontier.NOISE_SCALE_C:g} = 2×ΔQ); "
         f"seed scheme {seeding.SCHEME}; n = {n_ra}/RA cell, {n_ddm}/DDM point; "
         f"both models at {frontier.RA_TICKS_PER_SECOND} tick/s (tick = 1 s) — "
-        f"seed-paired percept realizations; "
+        f"seed-paired percept realizations; DDM motion policy: "
+        f"halt-at-midpoint (§2b, both families); "
         f"open markers: decided_frac < 1 "
         f"or discretisation-limited", fontsize=9)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
@@ -605,6 +757,24 @@ def main(argv=None) -> int:
     print(f"\npaired McNemar: {len(mc)} Set-R cells vs nearest-time DDM "
           f"points; {len(sig)} with CI excluding zero -> mcnemar.csv")
 
+    # §2b: the static family's optimum boundaries, derived from the sweep.
+    _bellman_df, static_df = ddm_families(ddm)
+    bstar = static_bstar(static_df)
+    if bstar is not None:
+        with open(out / "static_bstar.json", "w", encoding="utf-8") as fh:
+            json.dump(bstar, fh, indent=2)
+        print(f"\nstatic family (§2b): b*_cost = "
+              f"{bstar['b_star_cost']['estimate']:g} "
+              f"CI95 {bstar['b_star_cost']['ci95']} (Wald analytic "
+              f"{bstar['wald_analytic']['b_star_cost']:.4g}); "
+              f"b*_RR = {bstar['b_star_rr']['estimate']:g} "
+              f"CI95 {bstar['b_star_rr']['ci95']} (Wald "
+              f"{bstar['wald_analytic']['b_star_rr']:.4g}) "
+              "-> static_bstar.json")
+    else:
+        print("\nstatic family (§2b): no static-variant trials in the DDM "
+              "table — run the halt campaign before the static overlay")
+
     # §11 ceiling verification — required before claiming the RA sub-critical
     # peak exceeds the DDM family.
     ceiling = ceiling_check(ra, ddm, env_rows)
@@ -627,9 +797,9 @@ def main(argv=None) -> int:
                "DOES NOT STAND (no CI separation)")
     print(f"  claim 'RA sub-critical peak exceeds the DDM family': {verdict}")
 
-    draw_main_per_v(ra, ddm, out / "overlay_main")
+    draw_main_per_v(ra, ddm, out / "overlay_main", bstar=bstar)
     draw_tuning_curves(ra, out / "tuning_curves")
-    draw_overlay(ra, ddm, env_rows, out / "overlay_slices")
+    draw_overlay(ra, ddm, env_rows, out / "overlay_slices", bstar=bstar)
     print(f"\nwrote {out / 'overlay_main.png'} (per-v absolute-u panels), "
           f"{out / 'tuning_curves.png'}, {out / 'overlay_slices.png'} "
           "(Set-R + envelope supplement), envelope.csv, regret.json, "

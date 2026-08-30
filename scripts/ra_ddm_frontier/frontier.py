@@ -48,9 +48,12 @@ QUALITY_WORSE = round(QUALITY_BETTER * (1.0 - DIFF), 8)   # 4.95
 CORRECT_TARGET_ID = "static_0.s#0"
 
 # ---------------------------------------------------------------------------
-# Design grids (§2). 52 + 48 = 100 RA cells; 10 DDM points.
+# Design grids (§2). 52 + 48 = 100 RA cells in wave 1; 10 DDM Bellman points.
 # ---------------------------------------------------------------------------
 V_GRID = [0.2, 0.3, 0.4, 0.5]
+#: Wave 3 (§2 Set U-v3): kernel extension beyond the frontier-dominant range.
+V_GRID_EXT = [0.6, 0.8]
+V_GRID_ALL = V_GRID + V_GRID_EXT
 UHAT_GRID = [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80,
              0.90, 1.00, 1.10, 1.25, 1.50]
 U_ABS_GRID = [0.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
@@ -109,6 +112,30 @@ DDM_TICKS_PER_SECOND = 1        # tick = 1 s, matching the RA
 DDM_TIME_LIMIT = 60             # seconds (61 ticks; arrival measured ~9-12 s)
 BELLMAN_DT = 1e-3
 
+#: §2b — the halt-at-midpoint motion policy, BOTH DDM families. An agent that
+#: reaches the midpoint undecided halts (v = 0) and keeps integrating against
+#: the flat threshold z_halt until a bound is crossed or time_limit hits.
+#: Wired in src as bellman.terminal = 'halt_sprt' (motor hold + flat plateau);
+#: halt_cost_rate = 1.0 is the physical value (halted = zero progress).
+#: time_limit is NOT raised for the halt campaign (§13: timeout changes are
+#: out of scope): trials still halted at 60 s are censored and reported —
+#: `ddm_halt_budget()` sizes that risk per point before submission.
+DDM_TERMINAL = "halt_sprt"
+DDM_HALT_COST_RATE = 1.0
+DDM_VARIANTS = ("bellman", "static")
+
+#: §2b Family 2 — static bounds. b swept log-spaced over
+#: [z*_quasistatic(min c_e) — the boundary of the fastest Bellman point, so
+#:  the same speed by construction —, b at the accuracy ceiling: Wald
+#:  acc(b) = 1/(1+exp(-k b)) = STATIC_ACC_CEILING with k = 2A/c²].
+#: The optimum boundaries b*_cost / b*_RR are DERIVED from the swept data in
+#: analyze_overlay.py, never assumed (§2b).
+STATIC_N_LEVELS = 14
+STATIC_ACC_CEILING = 0.995
+#: The evidence substep at the 1 s tick (RECON D-11): boundaries below it are
+#: discretisation-limited — the same convention as the Bellman c_e ∈ {0.03, 0.1}.
+EVIDENCE_SUBSTEP = 0.025        # c * sqrt(dt / n_sub) = 0.1 * sqrt(1/16)
+
 R0 = TARGET_RANGE * math.cos(math.radians(DTH_DEG) / 2.0)      # 0.4330127…
 BELLMAN_N_T = math.ceil((R0 / LINEAR_VELOCITY) / BELLMAN_DT)   # 8661
 POS_STATIC_0 = [TARGET_RANGE * math.cos(math.radians(DTH_DEG) / 2.0),
@@ -124,10 +151,15 @@ RA_TEMPLATE = _ROOT / "config" / "ra_ddm_frontier_ra_template.json"
 DDM_TEMPLATE = _ROOT / "config" / "ra_ddm_frontier_ddm_template.json"
 
 RA_MANIFEST_NAME = "manifest.csv"
-DDM_MANIFEST_NAME = "ddm_manifest.csv"
+DDM_MANIFEST_NAME = "ddm_manifest.csv"           # wave 1/2 (forced_choice) — frozen
+DDM_HALT_MANIFEST_NAME = "ddm_manifest_halt.csv"  # §2b rerun (halt_sprt, both families)
 RA_FIELDS = ["cell_id", "sweep", "v", "u_hat", "u_star", "u",
              "diff", "n_runs", "seed_scheme"]
-DDM_FIELDS = ["point_id", "c_e", "diff", "n_runs", "seed_scheme"]
+#: Wave-1/2 DDM schema, kept only so the frozen manifests on the cluster can
+#: still be read (the forced-choice tree is the §9 regression reference).
+DDM_FIELDS_V1 = ["point_id", "c_e", "diff", "n_runs", "seed_scheme"]
+#: §5 halt-campaign schema: `variant` ∈ {bellman, static}; `bound` = c_e or b.
+DDM_FIELDS = ["point_id", "variant", "bound", "diff", "n_runs", "seed_scheme"]
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +284,20 @@ def build_ddm_template() -> dict:
     bell["T_max_check_factor"] = None       # precompute runs the check once
     bell["N_t"] = int(BELLMAN_N_T)
     bell["table_cache_dir"] = None          # set at batch time
+    # §2b: BOTH families run under the halt-at-midpoint motion policy. The
+    # base config carries the researcher's setting; assert rather than set, so
+    # a hand edit back to forced_choice is caught instead of silently inherited.
+    if bell.get("terminal") != DDM_TERMINAL:
+        raise SystemExit(
+            f"{DDM_BASE_CONFIG}: bellman.terminal = {bell.get('terminal')!r}, "
+            f"expected {DDM_TERMINAL!r} — the §2b halt-at-midpoint campaign "
+            "requires it (RECON D-13)")
+    if float(bell.get("halt_cost_rate", 0.0)) != DDM_HALT_COST_RATE:
+        raise SystemExit(
+            f"{DDM_BASE_CONFIG}: bellman.halt_cost_rate = "
+            f"{bell.get('halt_cost_rate')!r}, expected {DDM_HALT_COST_RATE} "
+            "(the physical value; RECON D-13)")
+    bell["static_bound"] = None             # per point (static family only)
     _assert_frame(data, "ddm")
     return data
 
@@ -375,12 +421,32 @@ def patch_ra(template: dict, u: float, v: float) -> dict:
     return cfg
 
 
-def patch_ddm(template: dict, c_e: float, table_cache_dir: str | None) -> dict:
+def patch_ddm(template: dict, variant: str, bound: float,
+              table_cache_dir: str | None) -> dict:
+    """§2b: one template, two parameterizations — never a parallel implementation.
+
+    bellman: `bound` is c_e; the boundary is the Bellman solve (collapsing onto
+             the z_halt plateau under terminal 'halt_sprt').
+    static:  `bound` is the constant boundary height b, installed as a flat
+             table through the SAME bellman machinery (`bellman.static_bound`);
+             cost_ratio is not consumed for the boundary and is pinned to 0.0
+             so any stray read is loud in the diagnostics; no PDE solve, so no
+             table cache either.
+    """
     cfg = copy.deepcopy(template)
     blk = cfg["environment"]["agents"]["movable_0"]["embodied_pure_ddm"]
-    blk["cost_ratio"] = float(c_e)
-    blk["bellman"]["table_cache_dir"] = (str(table_cache_dir)
-                                         if table_cache_dir else None)
+    if variant == "bellman":
+        blk["cost_ratio"] = float(bound)
+        blk["bellman"]["static_bound"] = None
+        blk["bellman"]["table_cache_dir"] = (str(table_cache_dir)
+                                             if table_cache_dir else None)
+    elif variant == "static":
+        blk["cost_ratio"] = 0.0            # diagnostic only under static_bound
+        blk["bellman"]["static_bound"] = float(bound)
+        blk["bellman"]["table_cache_dir"] = None
+    else:
+        raise SystemExit(f"unknown DDM variant {variant!r} "
+                         f"(expected one of {DDM_VARIANTS})")
     return cfg
 
 
@@ -389,6 +455,10 @@ def apply_seeds(cfg: dict, model: str, run_id: int) -> dict:
 
     - sensory_stream.seed  <- env_seed(...)   the shared exogenous stream
     - arena random_seed    <- model_seed(...) every model-PRIVATE generator
+
+    `model` is the §3 model string: 'ra', 'ddm-bellman' or 'ddm-static'
+    (§6; the wave-1/2 forced-choice rerun used plain 'ddm' — the DDM draws no
+    private noise, so the re-key changes nothing physical; RECON D-13).
     """
     env = cfg["environment"]
     s = seeding.env_seed(DTH_DEG, DIFF_BP, run_id, "sensory")
@@ -528,6 +598,237 @@ def build_ddm_ceiling_rows(n_runs: int = N_RUNS) -> list[dict]:
             for ce in DDM_CEILING_CE]
 
 
+# ---------------------------------------------------------------------------
+# Wave 3 (spec v3): Set U-v3 — output-plane arc-length re-spacing at
+# v ∈ V_GRID + full kernel-extension grids at v ∈ V_GRID_EXT.
+# ---------------------------------------------------------------------------
+W3_PER_BRANCH = 9        # levels per branch at equal arc-length increments
+W3_ANCHORS = TOPUP_ANCHORS       # extension-v sub-branch anchors, units of u*
+W3_TAIL = TOPUP_TAIL             # deep tails û {1.75, 2.0, 2.4}, matched in û
+W3_SKIP_REL = TOPUP_SKIP_REL     # skip within 5 % of an existing level
+W3_GAPFILL_FACTOR = 2.0          # fill a realized chord > 2x the budget
+W3_MIN_MAP_CELLS = 6   # frontier cells at v needed before its own map is used
+
+
+def _w3_branch_levels(us, ts, accs, t_range, acc_range, n_levels):
+    """Levels at equal arc-length increments in normalized (t, acc) plane
+    coordinates along the monotone (PCHIP) interpolants of one branch."""
+    import numpy as np
+    from scipy.interpolate import PchipInterpolator
+    if len(us) < 2:
+        return []
+    t_i = PchipInterpolator(us, ts)
+    a_i = PchipInterpolator(us, accs)
+    grid = np.linspace(us[0], us[-1], 512)
+    dt = np.diff(t_i(grid)) / t_range
+    da = np.diff(a_i(grid)) / acc_range
+    s = np.concatenate([[0.0], np.cumsum(np.hypot(dt, da))])
+    if s[-1] <= 0.0:
+        return []
+    targets = np.linspace(0.0, s[-1], n_levels)
+    return [float(np.interp(t, s, grid)) for t in targets], float(s[-1])
+
+
+def _w3_v_levels(points, report):
+    """The §2 U-v3 rule for one v: `points` = sorted measured (u, t, acc).
+
+    Branch split at the measured accuracy peak; equal arc-length levels per
+    branch; then a gap-fill pass — realized chords between adjacent measured
+    points longer than W3_GAPFILL_FACTOR x the arc-length budget get equally
+    spaced u midpoints (the cliff stays steep: some chord length there is
+    irreducible physics, and the fill caps at 3 points per chord)."""
+    import numpy as np
+    us = np.array([p[0] for p in points], float)
+    ts = np.array([p[1] for p in points], float)
+    accs = np.array([p[2] for p in points], float)
+    t_range = max(float(ts.max() - ts.min()), 1e-9)
+    acc_range = max(float(accs.max() - accs.min()), 1e-9)
+    i_peak = int(np.argmax(accs))
+    report["u_peak"] = float(us[i_peak])
+    levels, lengths = [], []
+    for lo, hi in ((0, i_peak + 1), (i_peak, len(us))):
+        got = _w3_branch_levels(us[lo:hi], ts[lo:hi], accs[lo:hi],
+                                t_range, acc_range, W3_PER_BRANCH)
+        if got:
+            branch_levels, length = got
+            levels += branch_levels
+            lengths.append(length)
+    budget = (sum(lengths) / (len(lengths) * W3_PER_BRANCH)
+              if lengths else float("inf"))
+    report["arc_length_budget"] = budget
+    fills = []
+    for j in range(len(us) - 1):
+        chord = math.hypot((ts[j + 1] - ts[j]) / t_range,
+                           (accs[j + 1] - accs[j]) / acc_range)
+        if chord > W3_GAPFILL_FACTOR * budget:
+            n_fill = min(int(math.ceil(chord / budget)) - 1, 3)
+            fills += list(np.linspace(us[j], us[j + 1], n_fill + 2)[1:-1])
+    report["gap_fills"] = [float(f"{u:.4g}") for u in fills]
+    return levels + fills
+
+
+def build_wave3_rows(cells_csv: Path, factorial_csv: Path | None = None,
+                     n_runs: int = N_RUNS) -> tuple[list, dict]:
+    """Set U-v3 rows (§2), derived from measured data. Returns (rows, report).
+
+    v ∈ V_GRID: re-spacing top-up — the (t, acc) map comes from ALL existing
+    frontier cells at that v (both sweeps pooled on the u axis, waves 1+2+…).
+    v ∈ V_GRID_EXT: kernel extension — the map comes from the factorial's
+    n = 400 (û, v) sweep at that v (coarse but sufficient for placement;
+    t there is the commit tick ≡ seconds at 1 tick/s) until the frontier tree
+    itself holds ≥ W3_MIN_MAP_CELLS cells at that v, after which re-running
+    the generator performs the gap-fill pass on the measured map. Extension
+    grids additionally get the {0.3, 0.5}·u* sub-branch anchors (the factorial
+    never sampled below û = 0.5), the û ∈ {1.75, 2.0, 2.4} deep tails and a
+    u = 0 control — the §12 u = 0 replicate gate becomes six-way."""
+    cells = read_manifest(Path(cells_csv))
+    factorial = (read_manifest(Path(factorial_csv))
+                 if factorial_csv is not None else [])
+    rows, report = [], {}
+    for v in V_GRID_ALL:
+        rep = {"v": v}
+        us_v, _lam = u_star(v)
+        rep["u_star"] = us_v
+        mine = [c for c in cells if abs(float(c["v"]) - v) < 1e-9
+                and c.get("median_arrival_s") not in (None, "", "nan")]
+        existing = sorted({float(c["u"]) for c in mine})
+        extension = v in V_GRID_EXT
+        targets = []
+
+        if not extension or len(mine) >= W3_MIN_MAP_CELLS:
+            rep["map_source"] = "frontier"
+            pts = {}
+            for c in mine:
+                pts.setdefault(float(c["u"]), []).append(
+                    (float(c["median_arrival_s"]), float(c["acc_all"])))
+            points = sorted((u, sum(t for t, _a in g) / len(g),
+                             sum(a for _t, a in g) / len(g))
+                            for u, g in pts.items())
+            if len(points) < 4:
+                raise SystemExit(f"v={v}: only {len(points)} measured cells "
+                                 "in the frontier map — too few for U-v3")
+            targets += [(u, False) for u in _w3_v_levels(points, rep)]
+        else:
+            rep["map_source"] = "factorial"
+            fac = [c for c in factorial if abs(float(c["v"]) - v) < 1e-9]
+            if len(fac) < 4:
+                raise SystemExit(
+                    f"v={v}: kernel extension needs the factorial map — pass "
+                    "--factorial <uhat_v_sweep cells.csv> (or run wave 3 after "
+                    "frontier data exists at this v)")
+            fac_us = float(fac[0]["u_star"])
+            rep["u_star_factorial"] = fac_us
+            rep["u_star_rel_err"] = abs(us_v - fac_us) / fac_us
+            if rep["u_star_rel_err"] > ANCHOR_TOL:
+                raise SystemExit(
+                    f"v={v}: u*(v) = {us_v:.4f} here vs {fac_us:.4f} in the "
+                    "factorial — kernel builder drift; halt for human review")
+            points = sorted((float(c["u"]),
+                             float(c["t_commit_fine_median"]),
+                             float(c["acc_all"])) for c in fac)
+            targets += [(u, False) for u in _w3_v_levels(points, rep)]
+
+        if extension:
+            targets += [(a * us_v, False) for a in W3_ANCHORS]
+            targets += [(t * us_v, False) for t in W3_TAIL]
+
+        chosen = []
+        for t, _flag in targets:
+            u = _round25(t)
+            if u < 0.25:
+                continue
+            taken = existing + chosen
+            if any(abs(u - e) / e <= W3_SKIP_REL for e in taken if e > 0):
+                continue
+            chosen.append(u)
+        if extension and 0.0 not in existing:
+            chosen.append(0.0)              # the u = 0 control (§12 gate)
+        chosen = sorted(set(chosen))
+        rep["existing"] = existing
+        rep["new_u"] = chosen
+        report[v] = rep
+        for u in chosen:
+            rows.append({"cell_id": f"U3_v{v:g}_u{u:g}", "sweep": "absolute",
+                         "v": f"{v:g}", "u_hat": f"{u / us_v:.6f}",
+                         "u_star": f"{us_v:.6f}", "u": f"{u:.6f}",
+                         "diff": f"{DIFF:g}", "n_runs": str(int(n_runs)),
+                         "seed_scheme": seeding.SCHEME})
+    return rows, report
+
+
+# ---------------------------------------------------------------------------
+# §2b — the DDM halt campaign: Bellman (collapsing + floor) and static bounds
+# ---------------------------------------------------------------------------
+def _onset_c_tau() -> float:
+    """c_tau at evidence onset, from the SAME code path the model uses."""
+    from models.ddm_systems import DriftDiffusionSystem
+    return float(DriftDiffusionSystem.c_tau_linearised(
+        math.radians(DTH_DEG), predecision_motion="midpoint"))
+
+
+def _wald_k() -> float:
+    """k = 2A/c² of the evidence channel (A = ΔQ, c = 2ΔQ) — here 10 exactly."""
+    return 2.0 * QUALITY_DELTA / NOISE_SCALE_C ** 2
+
+
+def static_b_grid() -> list[float]:
+    """§2b: ~14 log-spaced boundary heights.
+
+    Lower end: the quasi-static z* of the fastest Bellman point (min c_e at the
+    onset geometry) — same boundary, same speed by construction. Upper end: the
+    b whose Wald accuracy 1/(1+e^{-kb}) reaches STATIC_ACC_CEILING. Both ends
+    are derived from the simulator's own solvers/constants, never typed."""
+    import numpy as np
+    from models.bellman_boundary import myopic_z
+    b_lo = myopic_z(QUALITY_DELTA, NOISE_SCALE_C, min(C_E_GRID), _onset_c_tau())
+    b_hi = math.log(STATIC_ACC_CEILING / (1.0 - STATIC_ACC_CEILING)) / _wald_k()
+    if not (0.0 < b_lo < b_hi):
+        raise SystemExit(f"static b grid derivation broke: [{b_lo}, {b_hi}]")
+    grid = np.geomspace(b_lo, b_hi, STATIC_N_LEVELS)
+    return [float(f"{b:.4g}") for b in grid]
+
+
+def build_ddm_halt_rows(n_runs: int = N_RUNS) -> list[dict]:
+    """The §2b campaign manifest: Bellman grid verbatim + the §11 ceiling
+    extremes + the static-b sweep, all variant-tagged (schema DDM_FIELDS)."""
+    rows = [{"point_id": f"D_ce{ce:g}", "variant": "bellman",
+             "bound": f"{ce:g}", "diff": f"{DIFF:g}",
+             "n_runs": str(int(n_runs)), "seed_scheme": seeding.SCHEME}
+            for ce in C_E_GRID + DDM_CEILING_CE]
+    rows += [{"point_id": f"S_b{b:g}", "variant": "static",
+              "bound": f"{b:g}", "diff": f"{DIFF:g}",
+              "n_runs": str(int(n_runs)), "seed_scheme": seeding.SCHEME}
+             for b in static_b_grid()]
+    return rows
+
+
+def ddm_halt_budget() -> list[dict]:
+    """Per halt-campaign point: z_halt, the mean extra deliberation D(z_halt),
+    and the margin against time_limit. A point whose mean total time plus
+    3·D(z_halt) exceeds the budget will show visible censoring — reported
+    here BEFORE submission (time_limit itself is out of scope, §13)."""
+    from models.bellman_boundary import halt_exit_potential, solve_z_halt
+    k = _wald_k()
+    A = QUALITY_DELTA
+    t_arrive = R0 / LINEAR_VELOCITY
+    out = []
+    for row in build_ddm_halt_rows(1):
+        b = float(row["bound"])
+        z_halt = (solve_z_halt(k, A, b, DDM_HALT_COST_RATE)
+                  if row["variant"] == "bellman" else b)
+        d_mean = float(halt_exit_potential(z_halt, k, A))
+        mean_total = t_arrive + d_mean
+        out.append({
+            "point_id": row["point_id"], "variant": row["variant"],
+            "bound": b, "z_halt": z_halt, "halt_mean_exit_s": d_mean,
+            "mean_total_s": mean_total,
+            "time_limit_s": DDM_TIME_LIMIT,
+            "censor_risk": mean_total + 3.0 * d_mean > DDM_TIME_LIMIT,
+            "discretisation_limited": z_halt < EVIDENCE_SUBSTEP,
+        })
+    return out
+
+
 def ddm_ideal_ceiling() -> float:
     """The fixed-bound infinite-patience asymptote (§11): an observer that
     integrates the full deliberation horizon T = r0/v and reports sign(x) has
@@ -552,10 +853,18 @@ def read_manifest(path: Path) -> list[dict]:
 
 def replicate_dir(base_root: Path, row: dict, run_id: int) -> Path:
     """§6 layout. The CSV's own strings key the directories, so the manifest,
-    the filesystem and run_meta.json can never disagree on formatting."""
+    the filesystem and run_meta.json can never disagree on formatting.
+
+    DDM: wave-1/2 rows (schema v1, `c_e` column) keep the flat `points/ce_*`
+    layout of the frozen forced-choice tree; halt-campaign rows (`variant` +
+    `bound`) get `points/<variant>/{ce_|b_}<bound>` in their own fresh tree."""
     if "cell_id" in row:            # RA
         return (Path(base_root) / "cells" / row["sweep"] / f"v_{row['v']}" /
                 f"u_{row['u']}" / f"replicate_{int(run_id)}")
+    if "variant" in row:            # DDM halt campaign (§2b)
+        prefix = "ce_" if row["variant"] == "bellman" else "b_"
+        return (Path(base_root) / "points" / row["variant"] /
+                f"{prefix}{row['bound']}" / f"replicate_{int(run_id)}")
     return (Path(base_root) / "points" / f"ce_{row['c_e']}" /
             f"replicate_{int(run_id)}")
 

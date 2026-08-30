@@ -316,6 +316,116 @@ asymptote and the best measured DDM point with CI separation.
 identical frontier-v1 seeds, at the three stiffest new cells (u = 23, 26.25,
 31.5 at v = 0.2) — result recorded below; blocking for the wave-2 submission.
 
+### D-13 (spec v3, 2026-08-30): the DDM halt campaign — halt-at-midpoint, both families, NEW tree
+
+§2b: both DDM families rerun under the **halt-at-midpoint** motion policy —
+`bellman.terminal = "halt_sprt"` (wired in `embodied_pure_ddm_model.py` /
+`bellman_boundary.py`: at arrival the undecided agent parks at the midpoint,
+v = 0 verified exactly in smoke, and keeps integrating against the flat
+plateau `z_halt`; runaway guard at `T_max + 10·D(z_halt)`, expected zero
+hits), `halt_cost_rate = 1.0` (the physical value). Decisions and mechanics:
+
+- **Exact parameterization** (the spec's recon slot): halt trigger =
+  `past_horizon` of the Bellman table (t_evidence ≥ T_max = r0/v); the
+  collapsing bound floors at b_min = z_halt = solve of `sinh(a)+a =
+  c_e·k·A/2`, a = k·z_halt (k = 2A/c² = 10); collapse shape = the Bellman
+  solve itself with the terminal slice V_T of the halted problem.
+- **New results tree** `ra_ddm_frontier_ddm_halt/` with manifest
+  `ddm_manifest_halt.csv` (schema `point_id, variant, bound, diff, n_runs,
+  seed_scheme`, 26 points) and layout `points/<variant>/{ce_|b_}<bound>/`.
+  The forced-choice wave-1/2 tree `ra_ddm_frontier_ddm/` is **frozen** and
+  becomes the §9 regression reference (same calibration, same env seeds).
+- **Model seeds re-keyed** per §3/§6: `model_seed("ddm-bellman", …)` /
+  `model_seed("ddm-static", …)` (was plain `"ddm"` in waves 1/2). Audit (d)
+  shows the DDM consumes **no private noise** in this configuration, so the
+  re-key changes nothing physical — which is exactly what lets the zero-halt
+  regression gate demand reproduction within CIs.
+- **Regression gate re-scoped** (§9): `aggregate.py --previous-rerun
+  <frozen ddm_trials.parquet>` — BLOCKING CI-overlap at every Bellman c_e
+  with halt_frac ≤ 0.005; where the halt triggers, the expected signature is
+  slower + more accurate (reported, not failed). The old `--previous`
+  (archived 0.035 frontier) comparison stays informational (D-10).
+- **time_limit stays 60 s** (§13 forbids timeout changes): `ddm_halt_budget()`
+  (printed at manifest generation) flags censor risk where mean total +
+  3·D(z_halt) > 60 s — the two ceiling points c_e ∈ {3000, 30000} (D ≈ 15/19 s).
+  Their censored fraction is visible in `1 − decided_frac` and `halt_frac`;
+  captions must carry it. Trials still halted at 60 s never arrive.
+- Per-trial logging (§2b): `halted` (halt_event), `halt_duration`, `z_halt`,
+  `halt_guard_hits` — new columns in `_ddm.csv` (dataHandling) and in
+  `ddm_trials.parquet`; `ddm_points.csv` gains `halt_frac`,
+  `median_halt_duration_s`, `halt_guard_hits`.
+- The researcher's hand edit adding `terminal`/`halt_cost_rate` to
+  `campaign_ddm_base.json` had (again) dropped the `termination` block —
+  restored, same accident as in D-01 step 2; `build_ddm_template()` asserts
+  the halt fields rather than setting them, so a hand-revert is caught.
+
+### D-14 (spec v3): the static-bound family — one code path, two parameterizations
+
+§2b Family 2, wired as the degenerate case as the spec demands:
+`bellman.static_bound = b` short-circuits the PDE solve and installs the flat
+table z(t) = b on [0, T_max] through `set_bellman_table` — the SAME
+hold-past-the-horizon rule and halt machinery then apply with z_halt = b.
+No parallel implementation; `cost_ratio` is pinned to 0.0 on static points
+(diagnostic only — the boundary never reads it). Validation refuses
+`static_bound` under any `threshold_policy` other than `bellman`.
+
+- **b grid derived, not typed** (`frontier.static_b_grid()`): 14 log-spaced
+  levels over [z*_quasistatic(c_e = 0.03) = 0.0028 — the fastest Bellman
+  point's own boundary, same speed by construction —, b(acc = 0.995) =
+  ln(199)/k = 0.5293]. Six levels sit below the 1 s-tick evidence substep
+  0.025 (RECON D-11) and are marked discretisation-limited, the Bellman
+  convention carried over.
+- **b\* derived from the swept data** (`analyze_overlay.static_bstar` →
+  `static_bstar.json`): b*_cost = argmin[P(err) + c·E[T_decision]], c = 2ΔQ
+  = 0.1 (the §2b cost functional; censored trials charged the full 60 s);
+  b*_RR = argmax[P(correct)/E[T_arrival]]. Bootstrap CIs over trials; Wald
+  constant-drift analytic (ER = 1/(1+e^{kb}), DT = (b/A)tanh(kb/2)) as the
+  sanity anchor with the discrepancy reported. Smoke (2 static points,
+  n = 20): b*_cost = 0.1055 vs Wald 0.1124 — coherent.
+- Smoke verification: 12/20 trials at b = 0.5293 halted; halt durations
+  4.8–28.7 s around the predicted D(b) = 10.5 s; **zero movement** during
+  every halted tick (the motor hold is exact).
+
+### D-15 (spec v3): Set U-v3 — output-plane arc-length placement + kernel extension
+
+`generate_manifest.py --wave3-from <cells.csv> --factorial <factorial
+cells.csv>` (rule in `frontier.build_wave3_rows`): per v, monotone PCHIP
+interpolants of (median arrival, acc_all) vs u, branches split at the
+measured accuracy peak, ~9 levels/branch at equal arc-length increments in
+per-v-normalized plane coordinates, rounded to 0.25, 5 % skip; plus a
+gap-fill pass — realized chords between adjacent measured points > 2× the
+arc-length budget get up to 3 equally spaced u midpoints. Generated
+2026-08-30 from the pooled waves-1+2 `cells.csv`:
+
+| v | map | new u |
+|---|---|---|
+| 0.2 | frontier | 1.25, 2.75, 4.25 |
+| 0.3 | frontier | 1.25, 2.25, 3.25 |
+| 0.4 | frontier | 0.75, 1.5, 1.75, 2.5 |
+| 0.5 | frontier | 0.75, 1.5, 2.25 |
+| 0.6 | factorial | 0, 1.75, 2.75–5.75 (cliff), 8.25, 9.75, 11.0, 13.25 |
+| 0.8 | factorial | 0, 1.5, 2.5–4.25 (cliff), 5.25, 6.0, 7.5, 8.75, 10.0, 12.0 |
+
+**45 cells × 1000 = 45 000 replicates** (`manifest_wave3.csv`;
+`manifest_full.csv` now 174 rows). Decisions:
+
+- Extension maps come from the factorial's n = 400 sweep (t there = commit
+  ticks ≡ s at 1 tick/s — placement only, so the different η = 0.035
+  calibration and t definition are acceptable); u*(v) is recomputed from the
+  live kernel builder and gated against the factorial's recorded value
+  (≤ 1 %; measured ≈ 2e-5). The factorial never sampled below û = 0.5, so
+  extension v gets the U-v2-style {0.3, 0.5}·u* anchors, the û ∈
+  {1.75, 2.0, 2.4} tails (13.25 / 12.0 ≈ 2.4·u*) and a u = 0 control —
+  the §12 u = 0 gate becomes six-way (aggregate.py now pools ALL
+  absolute-sweep u = 0 cells).
+- Re-running the generator after wave-3 data lands switches v ∈ {0.6, 0.8}
+  to their own frontier maps automatically (≥ 6 measured cells) and performs
+  the spec's gap-fill pass; already-manifested cells are excluded by id, so
+  it is a pure top-up in the same seed universe.
+- Step-halving (blocking): the three highest new-u cells at their v —
+  U3_v0.6_u11, U3_v0.8_u12, U3_v0.6_u13.25 (all far below the wave-2-checked
+  u = 31.5, but new per-v maxima) — result in the pre-flight table.
+
 ---
 
 ## Pre-flight results (this workstation, 2026-08-30 — final configuration: η = 0.07071068 (c = 0.1), both models at 1 tick/s)
@@ -336,3 +446,9 @@ identical frontier-v1 seeds, at the three stiffest new cells (u = 23, 26.25,
 | **Wave 2** ceiling point c_e = 30000, 3 local replicates | solver clean; rt 5.5–6.8 s of the 8.66 s horizon, all committed, arrival ~11 s |
 | **Wave 2** TOPUP dry runs | RA 29 tasks, DDM 2 + precompute |
 | Ceiling verdict on wave-1 data | claim **STANDS** vs the analytic asymptote (RA envelope eval-half peaks 0.984 / 0.994 vs 0.9294) and vs the measured DDM best (hi 0.9505) — empirical extreme-c_e confirmation pending the wave-2 DDM runs |
+| **Spec v3** §3 audit rerun (halt templates, `ddm-bellman`/`ddm-static` seeds, static arm added to (c)) | **ALL PASS** — env traces identical across models AND variants; DDM consumes no private noise (audit d), so the D-13 seed re-key is physically inert |
+| **Spec v3** static-bound smoke (b = 0.5293, n = 20; b = 0.1055, ce = 3, n = 3) | zero failures; 12/20 halted at b = 0.5293, halt durations 4.8–28.7 s around the predicted D = 10.5 s; **v = 0 exact** during every halted tick; flat table z ≡ b confirmed in `_ddm.csv`; RA 0.44–0.70 s/run |
+| **Spec v3** halt budget (`ddm_halt_budget()`) | censor risk flagged ONLY at c_e ∈ {3000, 30000} (D(z_halt) = 14.6 / 19.2 s vs the 60 s budget) — expect a visible censored tail there, carried in `halt_frac` / `decided_frac` |
+| **Spec v3** halt regression gate, smoke (ce = 3, n = 3) | PASS at halt_frac = 0 (machinery verified; the real gate runs on the full campaign) |
+| **Spec v3** overlay pipeline end-to-end (real RA waves 1+2 × smoke halt DDM) | envelope + regret + McNemar + `static_bstar.json` (b*_cost 0.1055, Wald 0.1124) + `ceiling_check.json` + all three figures render, both families + b\* markers |
+| **Wave 3** step-halving (200 trials/arm, dt 0.1 vs 0.05, identical seeds) | **PASS** at all three new per-v maxima — U3_v0.6_u11: Δ = +0.065 [−0.010, +0.140]; U3_v0.6_u13.25: +0.065 [−0.025, +0.150]; U3_v0.8_u12: +0.065 [−0.020, +0.145]; zero failures, max\|z\| ≈ 1.85. `dt_check_wave3_report.json` |
