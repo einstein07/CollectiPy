@@ -7,20 +7,25 @@ Covers:
   test_normalize_config_delay_default  — missing delay_ticks defaults to 0
   test_normalize_config_neg_delay      — negative delay_ticks raises ValueError
   test_normalize_config_same_ids       — duplicate IDs raises ValueError
+  test_normalize_config_attributes_default — no attributes key => ("position",)
+  test_normalize_config_attributes_valid   — valid attributes list normalises
+  test_normalize_config_attributes_invalid — invalid attributes raise ValueError
   test_find_first_bifurcation_in_snapshots       — finds event from spins data
   test_find_first_bifurcation_none_when_empty    — returns None when no events
   test_find_first_bifurcation_picks_earliest     — returns earliest tick event
   test_check_post_bif_swap_schedules_on_first_bif — first bif schedules swap (SWAP-01)
   test_check_post_bif_swap_ignores_subsequent    — second bif does not re-trigger (D-01, D-04)
   test_execute_post_bif_swap_positions — XY positions are exchanged (SWAP-01)
-  test_execute_post_bif_swap_strength  — strength values are exchanged (D-02, D-07)
+  test_execute_post_bif_swap_strength  — strength values are exchanged, attributes=["strength"]
   test_execute_post_bif_swap_event_schema — swap event matches D-05 schema (SWAP-02)
+  test_execute_swap_strength_color_keeps_positions — strength+color swap leaves positions untouched
+  test_execute_swap_default_is_position_only — default attributes is position-only (RA back-compat)
+  test_swap_event_records_attributes   — scheduled event carries the attributes list
   test_collect_swap_events_and_write   — DataHandling stores and writes swap_events (SWAP-02)
   test_delay_ticks_zero                — delay_ticks=0 fires swap at bifurcation tick
   test_no_bif_no_swap                  — no bifurcation means swap_events remains empty
-  test_multi_pair_swap                 — multiple pairs all get swapped
+  test_multi_pair_swap                 — multiple pairs all get swapped (position+strength)
   test_sweep_independence              — two runs with different delay_ticks are independent (SWAP-04)
-  test_execute_post_bif_swap_names    — names/IDs are exchanged (updated D-02)
 """
 
 import json
@@ -49,10 +54,24 @@ from dataHandling import DataHandling
 # Mock helpers
 # ---------------------------------------------------------------------------
 
-class _MockEntity:
-    """Duck-types a target entity with position, strength, and name.
+class _MockShape:
+    """Duck-types the Shape object drawn by the GUI (color()/set_color())."""
 
-    Matches the interface used by Arena._swap_object_xy_positions and
+    def __init__(self, color: str):
+        self._color = color
+
+    def color(self) -> str:
+        return self._color
+
+    def set_color(self, color: str) -> None:
+        self._color = color
+
+
+class _MockEntity:
+    """Duck-types a target entity with position, strength, name, and a shape.
+
+    Matches the interface used by Arena._swap_object_xy_positions,
+    Arena._swap_object_strengths, Arena._swap_object_colors, and
     Arena._execute_post_bif_swap.
     """
 
@@ -63,6 +82,7 @@ class _MockEntity:
         self.strength = strength
         self.uncertainty = uncertainty
         self.color = color
+        self._shape = _MockShape(color)
 
     def get_position(self) -> Vector3D:
         return self._pos
@@ -78,6 +98,9 @@ class _MockEntity:
 
     def entity(self) -> str:
         return "target"
+
+    def get_shape(self) -> _MockShape:
+        return self._shape
 
 
 class _MockDataHandling:
@@ -108,9 +131,12 @@ class _ArenaStub:
         delay_ticks: int = 0,
         objects: dict | None = None,
         data_handling=None,
+        attributes: list | None = None,
     ):
         if pairs is not None:
             raw_cfg = {"pairs": pairs, "delay_ticks": delay_ticks}
+            if attributes is not None:
+                raw_cfg["attributes"] = attributes
             self._post_bif_swap_cfg = Arena._normalize_post_bif_swap_config(raw_cfg)
         else:
             self._post_bif_swap_cfg = None
@@ -127,6 +153,8 @@ class _ArenaStub:
     _execute_post_bif_swap = Arena._execute_post_bif_swap
     _index_objects_by_name = Arena._index_objects_by_name
     _swap_object_xy_positions = staticmethod(Arena._swap_object_xy_positions)
+    _swap_object_strengths = staticmethod(Arena._swap_object_strengths)
+    _swap_object_colors = staticmethod(Arena._swap_object_colors)
 
 
 def _make_arena_stub(
@@ -134,9 +162,16 @@ def _make_arena_stub(
     delay_ticks: int = 0,
     objects: dict | None = None,
     data_handling=None,
+    attributes: list | None = None,
 ) -> _ArenaStub:
     """Return a minimal Arena-like stub for Phase 3 method testing."""
-    return _ArenaStub(pairs=pairs, delay_ticks=delay_ticks, objects=objects, data_handling=data_handling)
+    return _ArenaStub(
+        pairs=pairs,
+        delay_ticks=delay_ticks,
+        objects=objects,
+        data_handling=data_handling,
+        attributes=attributes,
+    )
 
 
 def _make_bif_snapshot(agent: str, tick: int) -> dict:
@@ -216,6 +251,42 @@ def test_normalize_config_same_ids():
     """Pair with identical IDs raises ValueError."""
     with pytest.raises(ValueError):
         Arena._normalize_post_bif_swap_config({"pairs": [["A", "A"]]})
+
+
+def test_normalize_config_attributes_default():
+    """No 'attributes' key defaults to position-only, back-compat with existing configs."""
+    cfg = {"pairs": [["A", "B"]]}
+    result = Arena._normalize_post_bif_swap_config(cfg)
+    assert result is not None
+    assert result["attributes"] == ("position",)
+
+
+def test_normalize_config_attributes_valid():
+    """Valid attribute lists parse; case/whitespace normalised; duplicates collapse."""
+    result = Arena._normalize_post_bif_swap_config(
+        {"pairs": [["A", "B"]], "attributes": ["strength", "color"]}
+    )
+    assert result["attributes"] == ("strength", "color")
+
+    result_case = Arena._normalize_post_bif_swap_config(
+        {"pairs": [["A", "B"]], "attributes": [" Strength ", "COLOR", "strength"]}
+    )
+    assert result_case["attributes"] == ("strength", "color")
+
+    result_pos_strength = Arena._normalize_post_bif_swap_config(
+        {"pairs": [["A", "B"]], "attributes": ["position", "strength"]}
+    )
+    assert result_pos_strength["attributes"] == ("position", "strength")
+
+
+def test_normalize_config_attributes_invalid():
+    """Empty list, non-list, and unknown attribute names all raise ValueError."""
+    with pytest.raises(ValueError):
+        Arena._normalize_post_bif_swap_config({"pairs": [["A", "B"]], "attributes": []})
+    with pytest.raises(ValueError):
+        Arena._normalize_post_bif_swap_config({"pairs": [["A", "B"]], "attributes": "strength"})
+    with pytest.raises(ValueError):
+        Arena._normalize_post_bif_swap_config({"pairs": [["A", "B"]], "attributes": ["quality"]})
 
 
 # ---------------------------------------------------------------------------
@@ -339,17 +410,21 @@ def test_execute_post_bif_swap_positions():
 
 
 def test_execute_post_bif_swap_strength():
-    """Strength values are exchanged between target entities (D-02, D-07)."""
+    """Strength values are exchanged between target entities under attributes=['strength']."""
     entity_a = _MockEntity("target_A", x=10.0, y=5.0, strength=2.0)
     entity_b = _MockEntity("target_B", x=-10.0, y=5.0, strength=0.5)
     objects = {"targets": ({"number": 2}, [entity_a, entity_b])}
     dh = _MockDataHandling()
-    stub = _make_arena_stub(pairs=[["target_A", "target_B"]], objects=objects, data_handling=dh)
+    stub = _make_arena_stub(
+        pairs=[["target_A", "target_B"]], objects=objects, data_handling=dh,
+        attributes=["strength"],
+    )
     stub._post_bif_swap_event = {
         "tick": 60,
         "pairs": [("target_A", "target_B")],
         "triggered_by_agent": "agent_0",
         "bifurcation_tick": 50,
+        "attributes": ["strength"],
     }
 
     Arena._execute_post_bif_swap(stub, tick=60)
@@ -357,31 +432,9 @@ def test_execute_post_bif_swap_strength():
     # Strengths exchanged: A now has 0.5, B now has 2.0
     assert entity_a.strength == pytest.approx(0.5)
     assert entity_b.strength == pytest.approx(2.0)
-
-
-def test_execute_post_bif_swap_names():
-    """Entity labels/IDs are exchanged between target entities (updated D-02)."""
-    entity_a = _MockEntity("target_A", x=10.0, y=5.0, strength=2.0)
-    entity_b = _MockEntity("target_B", x=-10.0, y=5.0, strength=0.5)
-    objects = {"targets": ({"number": 2}, [entity_a, entity_b])}
-    dh = _MockDataHandling()
-    stub = _make_arena_stub(pairs=[["target_A", "target_B"]], objects=objects, data_handling=dh)
-    stub._post_bif_swap_event = {
-        "tick": 60,
-        "pairs": [("target_A", "target_B")],
-        "triggered_by_agent": "agent_0",
-        "bifurcation_tick": 50,
-    }
-
-    Arena._execute_post_bif_swap(stub, tick=60)
-
-    # Labels move with the swap: each entity now carries the other's original ID
-    assert entity_a.get_name() == "target_B", (
-        f"Expected entity_a name 'target_B', got '{entity_a.get_name()}'"
-    )
-    assert entity_b.get_name() == "target_A", (
-        f"Expected entity_b name 'target_A', got '{entity_b.get_name()}'"
-    )
+    # Positions untouched (strength-only swap)
+    assert entity_a.get_position().x == pytest.approx(10.0)
+    assert entity_b.get_position().x == pytest.approx(-10.0)
 
 
 def test_execute_post_bif_swap_event_schema():
@@ -411,6 +464,90 @@ def test_execute_post_bif_swap_event_schema():
     assert ev["tick"] == 60
     assert ev["triggered_by_agent"] == "agent_0"
     assert ev["bifurcation_tick"] == 50
+
+
+def test_execute_swap_strength_color_keeps_positions():
+    """attributes=['strength','color'] exchanges strength+color, leaves positions untouched
+    (the DDM-correctness assertion: the accumulator signs x by target order, so a position
+    swap is a no-op on the evidence and the world change must be a strength exchange)."""
+    entity_a = _MockEntity("target_A", x=10.0, y=5.0, strength=2.0, color="red")
+    entity_b = _MockEntity("target_B", x=-10.0, y=5.0, strength=0.5, color="green")
+    objects = {"targets": ({"number": 2}, [entity_a, entity_b])}
+    dh = _MockDataHandling()
+    stub = _make_arena_stub(
+        pairs=[["target_A", "target_B"]], objects=objects, data_handling=dh,
+        attributes=["strength", "color"],
+    )
+    stub._post_bif_swap_event = {
+        "tick": 60,
+        "pairs": [("target_A", "target_B")],
+        "triggered_by_agent": "agent_0",
+        "bifurcation_tick": 50,
+        "attributes": ["strength", "color"],
+    }
+
+    Arena._execute_post_bif_swap(stub, tick=60)
+
+    # Strength exchanged
+    assert entity_a.strength == pytest.approx(0.5)
+    assert entity_b.strength == pytest.approx(2.0)
+    # Color exchanged on the entity attribute AND on the shape the GUI draws
+    assert entity_a.color == "green"
+    assert entity_b.color == "red"
+    assert entity_a.get_shape().color() == "green"
+    assert entity_b.get_shape().color() == "red"
+    # Positions IDENTICAL to their pre-swap values
+    assert entity_a.get_position().x == pytest.approx(10.0)
+    assert entity_a.get_position().y == pytest.approx(5.0)
+    assert entity_b.get_position().x == pytest.approx(-10.0)
+    assert entity_b.get_position().y == pytest.approx(5.0)
+
+
+def test_execute_swap_default_is_position_only():
+    """No 'attributes' anywhere: positions exchanged, strengths/colors untouched
+    (the RA back-compat guard)."""
+    entity_a = _MockEntity("target_A", x=10.0, y=5.0, strength=2.0, color="red")
+    entity_b = _MockEntity("target_B", x=-10.0, y=5.0, strength=0.5, color="green")
+    objects = {"targets": ({"number": 2}, [entity_a, entity_b])}
+    dh = _MockDataHandling()
+    stub = _make_arena_stub(pairs=[["target_A", "target_B"]], objects=objects, data_handling=dh)
+    stub._post_bif_swap_event = {
+        "tick": 60,
+        "pairs": [("target_A", "target_B")],
+        "triggered_by_agent": "agent_0",
+        "bifurcation_tick": 50,
+    }
+
+    Arena._execute_post_bif_swap(stub, tick=60)
+
+    # Positions exchanged
+    assert entity_a.get_position().x == pytest.approx(-10.0)
+    assert entity_b.get_position().x == pytest.approx(10.0)
+    # Strengths and colors untouched
+    assert entity_a.strength == pytest.approx(2.0)
+    assert entity_b.strength == pytest.approx(0.5)
+    assert entity_a.color == "red"
+    assert entity_b.color == "green"
+    assert entity_a.get_shape().color() == "red"
+    assert entity_b.get_shape().color() == "green"
+
+
+def test_swap_event_records_attributes():
+    """The event handed to collect_swap_events carries the applied 'attributes' list."""
+    entity_a = _MockEntity("target_A", x=10.0, y=5.0, strength=2.0)
+    entity_b = _MockEntity("target_B", x=-10.0, y=5.0, strength=0.5)
+    objects = {"targets": ({"number": 2}, [entity_a, entity_b])}
+    dh = _MockDataHandling()
+    stub = _make_arena_stub(
+        pairs=[["target_A", "target_B"]], objects=objects, data_handling=dh,
+        attributes=["strength", "color"],
+    )
+
+    snap = _make_bif_snapshot("agent_0", tick=50)
+    Arena._check_post_bif_swap(stub, tick=50, agent_snapshots=[snap])
+
+    assert len(dh._swap_events) == 1
+    assert dh._swap_events[0]["attributes"] == ["strength", "color"]
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +651,8 @@ def test_no_bif_no_swap():
 
 
 def test_multi_pair_swap():
-    """Multiple pairs in config are all swapped in one execution (D-03)."""
+    """Multiple pairs in config are all swapped in one execution, both position and
+    strength (D-03), under attributes=['position', 'strength']."""
     entity_a = _MockEntity("target_A", x=10.0, y=5.0, strength=2.0)
     entity_b = _MockEntity("target_B", x=-10.0, y=5.0, strength=0.5)
     entity_c = _MockEntity("target_C", x=0.0, y=10.0, strength=1.0)
@@ -526,12 +664,14 @@ def test_multi_pair_swap():
         delay_ticks=0,
         objects=objects,
         data_handling=dh,
+        attributes=["position", "strength"],
     )
     stub._post_bif_swap_event = {
         "tick": 50,
         "pairs": [("target_A", "target_B"), ("target_C", "target_D")],
         "triggered_by_agent": "agent_0",
         "bifurcation_tick": 50,
+        "attributes": ["position", "strength"],
     }
 
     Arena._execute_post_bif_swap(stub, tick=50)

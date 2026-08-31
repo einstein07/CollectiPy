@@ -430,7 +430,31 @@ class Arena():
             raise ValueError(
                 "environment.post_bifurcation_swap.delay_ticks must be >= 0"
             )
-        return {"pairs": parsed_pairs, "delay_ticks": delay_ticks}
+        attrs_raw = cfg.get("attributes")
+        allowed_attrs = ("position", "strength", "color")
+        if attrs_raw is None:
+            attrs = ("position",)
+        else:
+            if not isinstance(attrs_raw, (list, tuple)):
+                raise ValueError(
+                    "environment.post_bifurcation_swap.attributes must be a list"
+                )
+            seen = []
+            for raw_attr in attrs_raw:
+                norm_attr = str(raw_attr).strip().lower()
+                if norm_attr not in allowed_attrs:
+                    raise ValueError(
+                        f"environment.post_bifurcation_swap.attributes contains unknown "
+                        f"value '{raw_attr}'; allowed values are {allowed_attrs}"
+                    )
+                if norm_attr not in seen:
+                    seen.append(norm_attr)
+            if not seen:
+                raise ValueError(
+                    "environment.post_bifurcation_swap.attributes must not be empty"
+                )
+            attrs = tuple(seen)
+        return {"pairs": parsed_pairs, "delay_ticks": delay_ticks, "attributes": attrs}
 
     def _collect_bifurcation_events(self):
         """Transfer bifurcation events from all agents' detectors to DataHandling."""
@@ -520,11 +544,13 @@ class Arena():
                     "pairs": list(self._post_bif_swap_cfg["pairs"]),
                     "triggered_by_agent": bif_event.get("agent", "unknown"),
                     "bifurcation_tick": bif_event["tick"],
+                    "attributes": list(self._post_bif_swap_cfg["attributes"]),
                 }
                 logging.info(
-                    "Post-bifurcation swap scheduled at tick %d (bif_tick=%d + delay=%d, agent=%s)",
+                    "Post-bifurcation swap scheduled at tick %d (bif_tick=%d + delay=%d, agent=%s, attributes=%s)",
                     swap_tick, bif_event["tick"], self._post_bif_swap_cfg["delay_ticks"],
                     bif_event.get("agent", "unknown"),
+                    list(self._post_bif_swap_cfg["attributes"]),
                 )
         # Phase 2: If swap is scheduled and due, execute it
         if self._post_bif_swap_event is not None and tick >= self._post_bif_swap_event["tick"]:
@@ -535,6 +561,10 @@ class Arena():
         event = self._post_bif_swap_event
         if event is None:
             return
+        attrs = event.get("attributes")
+        if attrs is None:
+            cfg = getattr(self, "_post_bif_swap_cfg", None)
+            attrs = cfg["attributes"] if cfg else ("position",)
         objects_by_name = self._index_objects_by_name()
         for left_id, right_id in event.get("pairs", []):
             left_obj = objects_by_name.get(left_id)
@@ -545,10 +575,15 @@ class Arena():
                     left_id, right_id, tick,
                 )
                 continue
-            self._swap_object_xy_positions(left_obj, right_obj)
+            if "position" in attrs:
+                self._swap_object_xy_positions(left_obj, right_obj)
+            if "strength" in attrs:
+                self._swap_object_strengths(left_obj, right_obj)
+            if "color" in attrs:
+                self._swap_object_colors(left_obj, right_obj)
             logging.info(
-                "Post-bifurcation swap executed at tick %s: %s <-> %s (position)",
-                tick, left_id, right_id,
+                "Post-bifurcation swap executed at tick %s: %s <-> %s (%s)",
+                tick, left_id, right_id, ", ".join(attrs),
             )
         if self.data_handling is not None:
             self.data_handling.collect_swap_events([event])
@@ -596,6 +631,46 @@ class Arena():
         pos_second = second.get_position()
         first.set_position(Vector3D(pos_second.x, pos_second.y, pos_first.z))
         second.set_position(Vector3D(pos_first.x, pos_first.y, pos_second.z))
+
+    @staticmethod
+    def _swap_object_strengths(first, second) -> None:
+        """Swap the `strength` attribute of two objects (no set_strength; direct attr access)."""
+        if not hasattr(first, "strength") or not hasattr(second, "strength"):
+            logging.warning(
+                "Post-bif swap: cannot swap strengths, entity missing 'strength' attribute"
+            )
+            return
+        first_strength = first.strength
+        second_strength = second.strength
+        first.strength = second_strength
+        second.strength = first_strength
+
+    @staticmethod
+    def _swap_object_colors(first, second) -> None:
+        """Swap `entity.color` and the color on each entity's shape (what the GUI draws)."""
+        first_color = getattr(first, "color", None)
+        second_color = getattr(second, "color", None)
+        if first_color is not None and second_color is not None:
+            first.color = second_color
+            second.color = first_color
+        get_shape_first = getattr(first, "get_shape", None)
+        get_shape_second = getattr(second, "get_shape", None)
+        if not callable(get_shape_first) or not callable(get_shape_second):
+            logging.warning(
+                "Post-bif swap: cannot swap shape colors, entity missing get_shape()"
+            )
+            return
+        shape_first = get_shape_first()
+        shape_second = get_shape_second()
+        if not hasattr(shape_first, "set_color") or not hasattr(shape_second, "set_color"):
+            logging.warning(
+                "Post-bif swap: cannot swap shape colors, shape missing set_color()"
+            )
+            return
+        shape_first_color = shape_first.color()
+        shape_second_color = shape_second.color()
+        shape_first.set_color(shape_second_color)
+        shape_second.set_color(shape_first_color)
 
     def _apply_target_position_swap_event(self, event: dict, objects_by_name: dict, tick: int) -> None:
         """Apply a single configured target position swap event."""
