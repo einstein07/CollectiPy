@@ -1,0 +1,147 @@
+{
+    "environment": {
+        "logging": {
+            "console": true,
+            "console_level": "INFO",
+            "file_level": "INFO"
+        },
+        "collisions": false,
+        "time_limit": 600,
+        "_comment_time_limit": "Seconds. Budget = commitment + swap delay + reversal + traverse to the OTHER target. The worst informative cell (delta = 0.5%) needs ~14 + 1 + 35 + 70 = 120 s; the floor cells need far more and CENSOR BY CONSTRUCTION, which is the measurement, not a failure -- the censoring rate is a reported quantity per cell. Matched to the DDM arm's limit so the arms are censored on the same clock.",
+        "num_runs": 1,
+        "ticks_per_second": 1,
+        "_comment_ticks_per_second": "ARENA clock, dt = 1.0 s. MUST equal the agent's own ticks_per_second below: under sensory_stream.mode 'shared' that equality is a FATAL precondition checked in models/percept_stream.py (white_rate is a RATE, so an unequal pair leaves the stream's dt ambiguous and the two model families would not receive the same realisation).",
+        "sensory_stream": {
+            "mode": "shared",
+            "frozen_sd": 0.0,
+            "white_rate": 0.07071068,
+            "seed": null,
+            "_comment": "IDENTICAL to the DDM arm's block -- this is the object of the whole design. c = sqrt(2)*white_rate = 0.100 is the DDM's noise scale; the ring attractor has no 'c', but it consumes the SAME per-tick percept q_hat_i = q_i + beta_i + eps_i(t). The stream keys every draw by (trial_seed, kind, target_id, tick) only, so the realisation is independent of how many internal sub-steps a model takes: the DDM's n_sub = 16 and the RA's 500 field steps per tick both see one draw per arena tick. seed null resolves per trial from the arena random_seed; frozen_sd = 0 because a frozen bias imposes an accuracy ceiling Phi(A/s_beta) that flattens every curve."
+        },
+        "arenas": {
+            "arena_0": {
+                "random_seed": 0,
+                "side": 2,
+                "_comment_side": "SquareArena reads 'side' (spanning [-side/2, side/2]) and SILENTLY IGNORES 'radius'. The historical mean-field templates set 'radius': 1 and were therefore running the DEFAULT side, not a matched arena. Set explicitly here and matched to the DDM arm.",
+                "_id": "square",
+                "color": "white"
+            }
+        },
+        "termination": {
+            "type": "proximity",
+            "target_ids": [
+                "static_0.s#0",
+                "static_1.s#0"
+            ],
+            "radius": 0.05,
+            "agent_ids": "any"
+        },
+        "post_bifurcation_swap": {
+            "pairs": [["static_0.s#0", "static_1.s#0"]],
+            "delay_ticks": 1,
+            "attributes": ["strength", "color"]
+        },
+        "_comment_post_bifurcation_swap": "'attributes' IS MANDATORY HERE. arena._normalize_post_bif_swap_config defaults it to ('position',) when the key is absent, and a POSITION swap is a no-op for this experiment: both models sign their decision variable by target_ids order, so exchanging coordinates leaves q0 - q1 untouched and produces no drift reversal. Exchanging STRENGTH flips the drift sign while preserving |dQ|. The historical mean-field flexibility configs omitted this key and were therefore running a silent no-op swap. The color exchange is the on-screen sanity indicator. delay_ticks = 1 at ticks_per_second = 1 is a 1.0 s physical delay, matching the model-internal quality_swap.delay it replaces.",
+        "objects": {
+            "static_0": {
+                "number": [1],
+                "position": [[0.4330127018922193, -0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "green",
+                "strength": [5.0],
+                "uncertainty": [0],
+                "_comment": "R = 0.5 m at -30 deg; 60 deg separation from static_1. The BETTER target before the swap by construction; strengths are overwritten per condition with the mean-preserving pair Qbar*(1 +/- delta/2)."
+            },
+            "static_1": {
+                "number": [1],
+                "position": [[0.4330127018922193, 0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "red",
+                "strength": [5.0],
+                "uncertainty": [0]
+            }
+        },
+        "agents": {
+            "movable_0": {
+                "position": [[0.0, 0.0, 0.0]],
+                "orientation": [[0, 0, 0]],
+                "number": [1],
+                "shape": "cylinder",
+                "linear_velocity": 0.01,
+                "_comment_linear_velocity": "m/s. Travel budget T_b = R/v = 0.5/0.01 = 50 s. This value is what makes the design work: the reversal boundary in delta scales as 1/sqrt(T_b) while the tick-resolution ceiling does not move at all, so dropping v from 0.05 to 0.01 opens a band that is simultaneously reversal-feasible and time-resolved. Matched to the DDM arm.",
+                "angular_velocity": 120,
+                "_comment_angular_velocity": "deg/s. Minimum turn radius is v/omega = 0.01/(120*pi/180) = 0.0048 m, comfortably inside the 0.05 m termination radius, so the agent can turn around after a reversal instead of orbiting.",
+                "ticks_per_second": 1,
+                "height": 0.02,
+                "diameter": 0.033,
+                "color": "blue",
+                "detection": {
+                    "type": "GPS",
+                    "range": 5.0,
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "mean_field",
+                "mean_field_model": {
+                    "steps_per_tick": 1,
+                    "integration_time": 50,
+                    "integration_dt": 0.1,
+                    "_comment_integration": "500 field steps (integration_time / integration_dt) per ONE arena tick, with the tick's percept held constant across all of them (models/mean_field_systems.py). This is a QUASI-STATIC field: the bump is integrated to relaxation within each tick. Intended, but note it is exactly the assumption most at risk in the ra_uc arm, where critical slowing down makes the relaxation time diverge -- which is why bump amplitude is logged rather than assumed.",
+                    "sensory_time_mode": "world_time",
+                    "perception_width": 0.2,
+                    "perception_global_inhibition": 0.2,
+                    "num_neurons": 30,
+                    "use_thresholding": false,
+                    "g_threshold": 0.6,
+                    "scale_velocity": false,
+                    "scaling_mode": "norm",
+                    "norm_scale": 1.0,
+                    "tau_adapt": 3.2,
+                    "g_adapt": 0.0,
+                    "_comment_g_adapt": "ZERO BY CHOICE, not by default: with no spike-frequency adaptation the ring attractor has no internal mechanism to escape its own basin, so a reversal must be driven by the INPUT alone. That is what makes the rigidity claim for u = 8 clean. A g_adapt > 0 arm is the obvious follow-up if u = 8 proves absolutely rigid.",
+                    "num_targets": 2,
+                    "num_guards": 0,
+                    "target_ids": [
+                        "static_0.s#0",
+                        "static_1.s#0"
+                    ],
+                    "guard_ids": [],
+                    "guard_decay_rate": 6.0,
+                    "kappa": 20,
+                    "v": 0.5,
+                    "_comment_v": "Kernel amplitude, FIXED. u_c = 6.156868 is the critical coupling for THIS v (from the matched (v, u*) table used by the RA/DDM frontier sweep); changing v invalidates the ra_uc arm.",
+                    "u": 6.156868,
+                    "_comment_u": "Overridden per arm: ra_uc -> 6.156868 (the critical point ITSELF, not a supercritical offset), ra_u8 -> 8.",
+                    "sigma": 1.5,
+                    "_comment_sigma": "Internal NEURAL noise. Deliberately NOT shared with the DDM -- it has no DDM counterpart. Only the SENSORY channel is shared, via sensory_stream above.",
+                    "sigma_s": 0.0,
+                    "_comment_sigma_s": "MUST be 0 under sensory_stream.mode 'shared' (fatal check in models/percept_stream.py): the model-owned sensory noise has moved upstream into the shared stream, and leaving the historical 1.0 here would add a second, UNSHARED noise source on top and silently unpair the arms.",
+                    "beta": 1.0,
+                    "reference": "egocentric",
+                    "bifurcation": {
+                        "mode": "behavioral",
+                        "lambda_threshold": -0.1,
+                        "spike_min_separation": 10,
+                        "alignment_tolerance_deg": 5.0,
+                        "alignment_consecutive_ticks": 1,
+                        "gradient_window": 5,
+                        "gradient_threshold": 0.005
+                    },
+                    "_comment_bifurcation": "This detector is what TRIGGERS the arena's post_bifurcation_swap, so its settings are part of the world change, not just instrumentation. alignment_consecutive_ticks is set to 1 (the code default is 5) to match the DDM arm: at ticks_per_second = 1 the default would insert 5 s of extra slack between commitment and swap in this arm only, and the swap timing has to be identical across arms."
+                }
+            }
+        },
+        "results": {
+            "base_path": "./data/mean_field_flexibility/",
+            "agent_specs": ["base", "mean_field"],
+            "group_specs": [],
+            "snapshots_per_second": 1,
+            "_comment_snapshots_per_second": "Equal to the tick rate, i.e. per-tick rows. The code default of 1/s would be fine here only because the tick rate is also 1; kept explicit so a later tick-rate change does not silently under-sample the post-swap reversal, which is the whole object of this scenario."
+        }
+    }
+}

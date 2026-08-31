@@ -6,17 +6,17 @@
             "file_level": "INFO"
         },
         "collisions": false,
-        "time_limit": 60,
-        "_comment_time_limit": "Seconds. The decision plus post-commitment travel plus the 5 s swap delay and a reversal leg fit with margin at v = 0.05; a run that hits this limit is CENSORED, not scored.",
+        "time_limit": 600,
+        "_comment_time_limit": "Seconds. Budget = commitment + swap delay + reversal + traverse to the OTHER target. At v = 0.01 an UNCONTESTED traverse is already 50 s, so the historical 60 would have censored essentially every run. The worst informative cell (delta = 0.5%) needs ~14 + 1 + 35 + 70 = 120 s; the floor cells need far more and CENSOR BY CONSTRUCTION, which is the measurement, not a failure -- the censoring rate is a reported quantity per cell. Matched to the RA arm's limit so the arms are censored on the same clock.",
         "num_runs": 1,
         "ticks_per_second": 1,
-        "_comment_ticks_per_second": "ARENA clock. Separate from the agent's own ticks_per_second, which sets the DDM's dt; this one drives the simulation loop and the logging cadence. If they disagree the tick stamps alias against the snapshot offsets and a multi-second decision renders as one or two points. Keep them equal. Value is 10 (dt = 0.1 s). Under sensory_stream.mode 'shared' this equality is not advice but a FATAL precondition checked in percept_stream.py.",
+        "_comment_ticks_per_second": "ARENA clock, dt = 1.0 s. MUST equal the agent's own ticks_per_second below, which sets the DDM's dt: under sensory_stream.mode 'shared' that equality is not advice but a FATAL precondition checked in models/percept_stream.py (white_rate is a RATE, so an unequal pair leaves the stream's dt ambiguous). Both are 1.",
         "sensory_stream": {
             "mode": "shared",
             "frozen_sd": 0.0,
-            "white_rate": 0.035,
+            "white_rate": 0.07071068,
             "seed": null,
-            "_comment": "The white sensory noise lives HERE, upstream of the model, so eta_rate below is 0 accordingly and the DDM's noise scale becomes c = sqrt(2)*white_rate = 0.0495; seed null is resolved per trial from the arena random_seed; frozen_sd = 0 per Section 1.2 because a frozen bias imposes an accuracy ceiling Phi(A/s_beta) that flattens every curve."
+            "_comment": "The white sensory noise lives HERE, upstream of the model, so eta_rate below is 0 accordingly and the DDM's noise scale becomes c = sqrt(2)*white_rate = 0.100. IDENTICAL to the RA arm's block -- the stream keys every draw by (trial_seed, kind, target_id, tick) only, so the realisation does not depend on how many internal sub-steps a model takes: this arm's n_sub = 16 and the RA's 500 field steps per tick both see one draw per arena tick. seed null is resolved per trial from the arena random_seed; frozen_sd = 0 because a frozen bias imposes an accuracy ceiling Phi(A/s_beta) that flattens every curve."
         },
         "arenas": {
             "arena_0": {
@@ -51,7 +51,7 @@
             "delay_ticks": 1,
             "attributes": ["strength", "color"]
         },
-        "_comment_post_bifurcation_swap": "The world change is now a PHYSICAL arena event, not a model-internal quality relabel: the two targets exchange STRENGTH (and color) at FIXED positions, triggered by the first behavioral bifurcation event plus delay_ticks. delay_ticks = round(quality_swap.delay * ticks_per_second) = round(1.0 s * 1 tick/s) = 1, matching the quality_swap.delay this replaces. Why not a position swap: the DDM signs x by target_ids order, so exchanging positions leaves q0-q1 untouched and produces no drift reversal; exchanging strengths flips the drift SIGN while preserving |q0-q1| = 0.05, so A_source 'ensemble' with the expected 0.05 stays valid. The color exchange (red <-> green) is the on-screen sanity indicator that the world change fired. The strength reaches the model with no model changes: pack_objects_data ships get_strength() every tick -> GPS detection -> mf_target percept -> percept.s.",
+        "_comment_post_bifurcation_swap": "The world change is now a PHYSICAL arena event, not a model-internal quality relabel: the two targets exchange STRENGTH (and color) at FIXED positions, triggered by the first behavioral bifurcation event plus delay_ticks. delay_ticks = round(quality_swap.delay * ticks_per_second) = round(1.0 s * 1 tick/s) = 1, matching the quality_swap.delay this replaces. Why not a position swap: the DDM signs x by target_ids order, so exchanging positions leaves q0-q1 untouched and produces no drift reversal; exchanging strengths flips the drift SIGN while preserving |q0-q1| = Qbar*delta, so A_source 'ensemble' stays valid across the swap and ONE Bellman table per condition remains correct on both sides of it. NOTE the 'attributes' key is MANDATORY: arena._normalize_post_bif_swap_config defaults it to ('position',) when absent, i.e. silently to the no-op swap. The color exchange (red <-> green) is the on-screen sanity indicator that the world change fired. The strength reaches the model with no model changes: pack_objects_data ships get_strength() every tick -> GPS detection -> mf_target percept -> percept.s.",
         "objects": {
             "static_0": {
                 "number": [1],
@@ -60,10 +60,10 @@
                 "shape": "cylinder",
                 "height": 0.2,
                 "diameter": 0.05,
-                "color": "red",
+                "color": "green",
                 "strength": [5.0],
                 "uncertainty": [0],
-                "_comment": "The BETTER target by construction; scored as correct downstream."
+                "_comment": "R = 0.5 m at -30 deg; 60 deg separation from static_1. The BETTER target before the swap by construction; strengths are overwritten per condition with the mean-preserving pair Qbar*(1 +/- delta/2)."
             },
             "static_1": {
                 "number": [1],
@@ -72,8 +72,8 @@
                 "shape": "cylinder",
                 "height": 0.2,
                 "diameter": 0.05,
-                "color": "green",
-                "strength": [4.95],
+                "color": "red",
+                "strength": [5.0],
                 "uncertainty": [0]
             }
         },
@@ -84,9 +84,9 @@
                 "number": [1],
                 "shape": "cylinder",
                 "linear_velocity": 0.01,
-                "_comment_linear_velocity": "m/s, LOCKED (Section 1).",
+                "_comment_linear_velocity": "m/s. Travel budget T_b = R/v = 0.5/0.01 = 50 s. This value is what makes the design work: the reversal boundary in delta scales as 1/sqrt(T_b) while the tick-resolution ceiling does not move at all, so dropping v from 0.05 to 0.01 opens a band that is simultaneously reversal-feasible and time-resolved. Matched to the RA arm.",
                 "angular_velocity": 120,
-                "_comment_angular_velocity": "deg/s. Minimum turn radius is v/omega; at the locked v = 0.05 a 10 deg/s plant gives a 0.29 m turning circle and the agent orbits outside the 0.05 m termination radius forever; 120 deg/s gives 0.024 m. Post-commitment motion only, and percepts are heading-independent under attention_mode 'none', so decisions are untouched.",
+                "_comment_angular_velocity": "deg/s. Minimum turn radius is v/omega = 0.01/(120*pi/180) = 0.0048 m, comfortably inside the 0.05 m termination radius, so the agent can turn around after a reversal instead of orbiting outside it forever. Post-commitment motion only, and percepts are heading-independent under attention_mode 'none', so decisions are untouched.",
                 "ticks_per_second": 1,
                 "height": 0.02,
                 "diameter": 0.033,
@@ -108,7 +108,7 @@
                     "eta_rate": [0.0, 0.0],
                     "_comment_eta_rate": "REQUIRED to be 0 under sensory_stream.mode 'shared': the noise is drawn upstream, and the stream's white_rate is handed back to the DDM as the noise SCALE c on both channels.",
                     "n_sub": 16,
-                    "_comment_n_sub": "Section 1.3: integration step c*sqrt(dt/n_sub) = 0.0039, below the smallest useful boundary. The two lowest criterion points remain discretisation-limited and are flagged as such in the output.",
+                    "_comment_n_sub": "Integration step c*sqrt(dt/n_sub) = 0.100*sqrt(1/16) = 0.025 at the locked c and dt. Sub-stepping does NOT re-draw sensory noise: the shared stream is sampled once per arena tick and held across all 16 sub-steps, which is what keeps this arm's realisation identical to the RA's 500 field steps per tick.",
                     "dist_mode": "none",
                     "attention_mode": "none",
                     "threshold_policy": "bellman",
@@ -116,7 +116,7 @@
                     "A_source": "ensemble",
                     "geometric_error_mode": "terminal_categorical",
                     "cost_ratio": 3000.0,
-                    "_comment_cost_ratio": "The swept criterion (factor C); overridden per condition.",
+                    "_comment_cost_ratio": "c_e, the error-vs-time criterion [READ FROM CODE: _bellman_threshold sets c_e = float(self.cost_ratio)]. HELD FIXED across the whole flexibility campaign -- the swept factor here is the quality difference delta, not the criterion. It still enters the table cache key, so it must not drift between the precompute pass and the array.",
                     "delta_min": 0.001,
                     "z_min": 0.0001,
                     "_comment_z_min": "DELIBERATELY far below the historical 0.05: Section 1.3 requires the chance-level end of the curve to be measured (flagged, with the realised crossing log-odds recorded), and a 0.05 floor would replace the policy's z ~ 0.003 at c_e <= 0.1 with the floor itself. 1e-4 keeps the numerical guard without masking any grid point.",
@@ -139,8 +139,8 @@
                         "T_max_check_factor": null,
                         "_comment_T_max_check_factor": "Off for the bulk campaign; the precompute pass (campaign/precompute_tables.py) runs the 1.5x horizon check once per condition instead of once per replicate.",
                         "N_x": 1601,
-                        "N_t": 8660,
-                        "_comment_N_t": "Overridden per condition to ceil(T_max / 1e-3): dt = 1 ms everywhere on the grid (the boundary converges as O(sqrt(dt))).",
+                        "N_t": 43302,
+                        "_comment_N_t": "Overridden per condition to ceil(T_max / 1e-3): dt = 1 ms everywhere on the grid (the boundary converges as O(sqrt(dt))). The historical 8660 was derived from the OLD velocity (T_max = r0/v = 0.4330127/0.05 = 8.66 s). Note T_max itself is auto-derived from r0/v when null [READ FROM CODE: embodied_pure_ddm_model.py, T_max = float(cfg['T_max']) if set else r0/v], so a stale N_t does NOT solve on a short horizon -- it COARSENS the grid: 43.30 s over 8660 steps is dt = 5 ms, five times the intended resolution. 43302 = ceil((0.4330127/0.01) / 1e-3) restores dt = 1 ms at v = 0.01.",
                         "X_max_factor": 4.0,
                         "scheme": "crank_nicolson",
                         "terminal": "halt_sprt",
@@ -150,7 +150,7 @@
                         "table_cache_dir": null,
                         "_comment_table_cache_dir": "Set by the generator to the campaign's shared table cache (Section 7.3). null = solve in-process, the historical behaviour."
                     },
-                    "_comment_flexibility": "Post-commitment flexibility. The boundary is non-absorbing: committed <=> |x| >= z(t), re-evaluated every tick (Section 3.6). The agent must be able to reverse BEFORE it arrives (d/v must exceed delay + 2z/A). At the campaign values: d/v = 0.5/0.05 = 10 s against swap delay 5 s + 2z/A ~ 2 s (z ~ 0.049 at c = 0.0495, A = 0.05, Delta = 60 deg), so reversal before arrival remains feasible at the locked velocity. _check_reversal_feasibility logs both numbers at runtime and warns if the inequality flips.",
+                    "_comment_flexibility": "Post-commitment flexibility. The boundary is non-absorbing: committed <=> |x| >= z(t), re-evaluated every tick (Section 3.6). The agent must be able to reverse BEFORE it arrives: d/v must exceed delay + 2z/A. At the campaign values d/v = 0.5/0.01 = 50 s, against a 1 s swap delay plus a post-swap return trip T_rev = 2*zeta*(c/A)^2 that is 35 s at the delta = 0.5% reversal boundary and shrinks as 1/delta^2 above it. Unlike at v = 0.05, that inequality CROSSES INSIDE THE GRID, which is the point: _check_reversal_feasibility stops being a formality and becomes a per-cell diagnostic. It reads quality_swap['delay'], which is now 0.0 because that block is disabled below, so its logged margin is optimistic by the true arena delay (bifurcation latency + post_bifurcation_swap.delay_ticks ~ 1 s) -- negligible against 50 s, but the number it prints is not the whole delay.",
                     "flexibility": true,
                     "post_commit_accumulation": "unbounded",
                     "quality_swap": {
