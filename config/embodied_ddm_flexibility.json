@@ -9,7 +9,7 @@
         "time_limit": 60,
         "_comment_time_limit": "Seconds. The decision plus post-commitment travel plus the 5 s swap delay and a reversal leg fit with margin at v = 0.05; a run that hits this limit is CENSORED, not scored.",
         "num_runs": 1,
-        "ticks_per_second": 10,
+        "ticks_per_second": 1,
         "_comment_ticks_per_second": "ARENA clock. Separate from the agent's own ticks_per_second, which sets the DDM's dt; this one drives the simulation loop and the logging cadence. If they disagree the tick stamps alias against the snapshot offsets and a multi-second decision renders as one or two points. Keep them equal. Value is 10 (dt = 0.1 s). Under sensory_stream.mode 'shared' this equality is not advice but a FATAL precondition checked in percept_stream.py.",
         "sensory_stream": {
             "mode": "shared",
@@ -46,80 +46,48 @@
             "radius": 0.05,
             "agent_ids": "any"
         },
+        "post_bifurcation_swap": {
+            "pairs": [["static_0.s#0", "static_1.s#0"]],
+            "delay_ticks": 1,
+            "attributes": ["strength", "color"]
+        },
+        "_comment_post_bifurcation_swap": "The world change is now a PHYSICAL arena event, not a model-internal quality relabel: the two targets exchange STRENGTH (and color) at FIXED positions, triggered by the first behavioral bifurcation event plus delay_ticks. delay_ticks = round(quality_swap.delay * ticks_per_second) = round(1.0 s * 1 tick/s) = 1, matching the quality_swap.delay this replaces. Why not a position swap: the DDM signs x by target_ids order, so exchanging positions leaves q0-q1 untouched and produces no drift reversal; exchanging strengths flips the drift SIGN while preserving |q0-q1| = 0.05, so A_source 'ensemble' with the expected 0.05 stays valid. The color exchange (red <-> green) is the on-screen sanity indicator that the world change fired. The strength reaches the model with no model changes: pack_objects_data ships get_strength() every tick -> GPS detection -> mf_target percept -> percept.s.",
         "objects": {
             "static_0": {
-                "number": [
-                    1
-                ],
-                "position": [
-                    [
-                        0.4330127018922193,
-                        -0.25,
-                        0
-                    ]
-                ],
+                "number": [1],
+                "position": [[0.4330127018922193, -0.25, 0]],
                 "_id": "idle",
                 "shape": "cylinder",
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "red",
-                "strength": [
-                    5.0
-                ],
-                "_comment": "static_0 is now the BETTER target by construction (5.0 vs 4.95), matching the campaign convention and scored as correct downstream. This INVERTS the previous file, where static_1 was better (4.75 vs 4.0); the quality_swap 'exchange' semantics are unaffected because they only exchange the two values.",
-                "uncertainty": [
-                    0
-                ]
+                "strength": [5.0],
+                "uncertainty": [0],
+                "_comment": "The BETTER target by construction; scored as correct downstream."
             },
             "static_1": {
-                "number": [
-                    1
-                ],
-                "position": [
-                    [
-                        0.4330127018922193,
-                        0.25,
-                        0
-                    ]
-                ],
+                "number": [1],
+                "position": [[0.4330127018922193, 0.25, 0]],
                 "_id": "idle",
                 "shape": "cylinder",
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "green",
-                "strength": [
-                    4.95
-                ],
-                "uncertainty": [
-                    0
-                ]
+                "strength": [4.95],
+                "uncertainty": [0]
             }
         },
         "agents": {
             "movable_0": {
-                "position": [
-                    [
-                        0.0,
-                        0.0,
-                        0.0
-                    ]
-                ],
-                "orientation": [
-                    [
-                        0,
-                        0,
-                        0
-                    ]
-                ],
-                "number": [
-                    1
-                ],
+                "position": [[0.0, 0.0, 0.0]],
+                "orientation": [[0, 0, 0]],
+                "number": [1],
                 "shape": "cylinder",
-                "linear_velocity": 0.05,
+                "linear_velocity": 0.01,
                 "_comment_linear_velocity": "m/s, LOCKED (Section 1).",
                 "angular_velocity": 120,
                 "_comment_angular_velocity": "deg/s. Minimum turn radius is v/omega; at the locked v = 0.05 a 10 deg/s plant gives a 0.29 m turning circle and the agent orbits outside the 0.05 m termination radius forever; 120 deg/s gives 0.024 m. Post-commitment motion only, and percepts are heading-independent under attention_mode 'none', so decisions are untouched.",
-                "ticks_per_second": 10,
+                "ticks_per_second": 1,
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
@@ -131,113 +99,77 @@
                 "moving_behavior": "embodied_pure_ddm",
                 "_comment_timing": "One integration step per control tick, across ticks, in per-second units (with n_sub sub-steps). BY DESIGN \u2014 see EMBODIED_DDM_PLAN.md Section 0.3. Do not add internal relaxation steps.",
                 "embodied_pure_ddm": {
-                    "_comment_structure": "--- structure. K == 2 ONLY: the pure DDM is the SPRT for a binary hypothesis test, and there is no scalar log-likelihood ratio for K > 2. For K > 2 use moving_behavior 'embodied_ddm' with accumulator_mode 'race' (the MSPRT). Exactly 2 target_ids are required; their order fixes the sign of x (+z favours the first). ---",
-                    "target_ids": [
-                        "static_0.s#0",
-                        "static_1.s#0"
-                    ],
-                    "guard_ids": [],
+                    "target_ids": ["static_0.s#0", "static_1.s#0"],
                     "reference": "egocentric",
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
-                    "num_neurons": 30,
-                    "_comment_num_neurons": "Only sizes the SHARED detection ring so perception is bit-identical to the ring attractor. The DDM never reads it to decide.",
                     "task": "selection",
                     "sensory_time_mode": "world_time",
-                    "_comment_evidence": "--- evidence. eta_rate is a noise RATE: eta_i = eta_rate_i/sqrt(dt), so c^2 = sum of squares and results are tick-rate independent (Section 1.3). ---",
-                    "evidence_mode": "difference",
-                    "_comment_evidence_mode": "difference (default; the SPRT when eta_rate entries are equal) | llr (precision-weighted; needs the deferred per-target uncertainty field and currently raises).",
-                    "eta_rate": [
-                        0.0,
-                        0.0
-                    ],
-                    "_comment_eta_rate": "REQUIRED to be 0 under sensory_stream.mode 'shared' \u2014 the noise is drawn upstream and the stream's white_rate is handed back to the DDM as the noise SCALE c on both channels.",
-                    "dist_mode": "none",
-                    "_comment_dist_mode": "Shared with embodied_ddm and applied to q BEFORE sampling. none (default, matches the ring attractor) | exp | subtense | loom. Any non-none setting makes A time-varying and invalidates the closed-form ER/DT of Section 3.1.",
-                    "attention_mode": "none",
-                    "_comment_attention_mode": "none (default) | vonmises | saccade. Shared with embodied_ddm.",
-                    "target_quality_modulations": {},
-                    "extended": false,
-                    "_comment_extended": "Across-trial variability ([B06] Section 3): s_A > 0 gives slow errors, s_x > 0 gives fast errors. NOTE s_A > 0 is one of the assumptions whose violation JUSTIFIES collapsing bounds (Section 4.2), so it is theoretically linked to boundary_mode, not independent of it.",
-                    "x0": 0.0,
-                    "_comment_integration": "--- integration ---",
+                    "eta_rate": [0.0, 0.0],
+                    "_comment_eta_rate": "REQUIRED to be 0 under sensory_stream.mode 'shared': the noise is drawn upstream, and the stream's white_rate is handed back to the DDM as the noise SCALE c on both channels.",
                     "n_sub": 16,
-                    "_comment_n_sub": "Section 1.3 \u2014 integration step c*sqrt(dt/n_sub) = 0.0495*sqrt(0.1/16) = 0.0039, below the smallest useful boundary.",
-                    "_comment_boundary": "--- boundary. WARNING: threshold_policy bayes_risk / reward_rate give the optimal CONSTANT boundary. They do NOT justify a collapsing boundary \u2014 under their own assumptions the constant boundary is provably optimal (Section 4.1, Appendix C). Combining them with boundary_mode 'collapsing' logs a warning and stamps boundary_policy_incoherent into the record; never report that combination as optimal. ---",
-                    "boundary_mode": "collapsing",
-                    "collapse_form": "geometric",
-                    "_comment_collapse_form": "Only 'geometric' is meaningful here: it re-evaluates rho from the live angular separation each tick rather than applying a parametric decay. Ignored entirely when boundary_mode is 'static'. The descriptive forms (weibull/hyperbolic/exponential/linear) need their own shape parameters, which this template omits.",
-                    "_comment_boundary_mode": "static | collapsing",
-                    "threshold_policy": "geometric",
-                    "_comment_threshold_policy": "manual | bayes_risk | reward_rate | geometric. Coherent with collapsing: manual (descriptive) and geometric (derived) only.",
-                    "cost_ratio": 1.0,
-                    "_comment_cost_ratio": "c_e/c_tau. ONE parameter: only the ratio affects argmin BR (Section 3.3). Ignored under the geometric policy, which derives both costs from geometry.",
-                    "T0": 0.0,
-                    "_comment_T0": "Non-decision time = MEASURED actuator lag, not a fitted nuisance parameter. The decision latches internally on crossing and reaches the motors T0 seconds later.",
-                    "threshold_update_ticks": 1,
-                    "_comment_threshold_update_ticks": "0 = compute z* once at evidence onset; >0 = recompute every N ticks. Under geometric, z* is state-dependent (d and Delta change as the agent moves) so >0 is the meaningful setting \u2014 but do not combine a recomputed z* with an explicit collapse_form without logging both.",
-                    "geometric_error_mode": "terminal_categorical",
-                    "_comment_geometric_error_mode": "terminal_graded (c_e = A/lambda_t; rho = (A/c)^2 * c_e / c_tau(Delta), so rho ~ A^3) | terminal_categorical (options differ in kind, 0-1 loss: c_e = cost_ratio, rho = (A/c)^2 * cost_ratio / c_tau(Delta) with c_tau = 2 sin^2(Delta/4)). The error mode sets c_e ONLY; c_tau is shared with the other modes and carries ALL the angular dependence, hence the entire collapse. | correctable (c_e = 2 d sin(Delta/2)/v; rho ~ A^2 and DOES produce an arrival deadline).",
-                    "delta_min": 0.001,
-                    "_comment_delta_min": "Clamp on the angular separation: sin^2(Delta/4) -> 0 sends rho -> inf (targets in the same direction means deliberation is free). Keeps sinh() from overflowing.",
-                    "A_source": "ensemble",
-                    "_comment_drift_knowledge": "This config is the KNOWN-|A| model (TASK_A_KNOWN_DRIFT.md): the agent knows |A| but not its sign; ddm_systems.py permits only A_source 'ensemble' (A_expected, fixed for the block) or 'oracle' (the true per-trial |q0-q1|). A_expected is REQUIRED because the geometric policy makes A_hat determine the boundary. The estimation sources (online_evidence, online_lognormal) belong to TASK_B_UNKNOWN_DRIFT.md and are rejected here.",
+                    "_comment_n_sub": "Section 1.3: integration step c*sqrt(dt/n_sub) = 0.0039, below the smallest useful boundary. The two lowest criterion points remain discretisation-limited and are flagged as such in the output.",
+                    "dist_mode": "none",
+                    "attention_mode": "none",
+                    "threshold_policy": "bellman",
                     "drift_knowledge": "known_magnitude",
-                    "_comment_A_source": "Where the A entering rho AND z* comes from (it enters twice: rho ~ A^2*c_e/(c^2*c_tau) and z* = a*c^2/(2A)). 'ensemble' = A_expected, fixed for the whole block \u2014 the agent knows the magnitude characteristic of its environment. 'oracle' = the true per-trial |q0-q1|, equivalent to ensemble in a fixed scenario. The estimation sources (online_evidence, online_lognormal) are REJECTED under drift_knowledge 'known_magnitude'.",
-                    "evidence_target": "quality",
-                    "_comment_evidence_target": "quality (default) | net_value. Strictly, under an asymmetric layout the agent should accumulate net value q_i - lambda_t*d_i/v, since a nearer but slightly worse target can be the correct choice; net_value raises NotImplementedError for now and is irrelevant in the symmetric case.",
+                    "A_source": "ensemble",
+                    "geometric_error_mode": "terminal_categorical",
+                    "cost_ratio": 3000.0,
+                    "_comment_cost_ratio": "The swept criterion (factor C); overridden per condition.",
+                    "delta_min": 0.001,
                     "z_min": 0.0001,
-                    "_comment_z_min": "Deliberately far below the historical 0.05 so a small derived boundary is measured rather than replaced by the floor; 1e-4 keeps the numerical guard without masking the policy's answer.",
-                    "urgency_mode": "off",
-                    "_comment_urgency_mode": "off | boundary | gating. 'gating' low-pass filters the evidence and MULTIPLIES by urgency rather than integrating (Cisek et al.) \u2014 a genuinely different mechanism, NOT a reparameterisation of a collapsing bound.",
-                    "_comment_readout": "--- readout / motion ---",
-                    "readout_mode": "normalized",
-                    "_comment_readout_mode": "normalized (default; P1 = clip((1+x/z(t))/2,0,1), needs no drift estimate and sharpens automatically as a collapsing boundary closes) | posterior (P1 = sigmoid(2*A_hat*x/c^2); principled but presumes the agent knows the drift).",
+                    "_comment_z_min": "DELIBERATELY far below the historical 0.05: Section 1.3 requires the chance-level end of the curve to be measured (flagged, with the realised crossing log-odds recorded), and a 0.05 floor would replace the policy's z ~ 0.003 at c_e <= 0.1 with the floor itself. 1e-4 keeps the numerical guard without masking any grid point.",
                     "predecision_motion": "midpoint",
-                    "_comment_predecision_motion": "average (default; belief-weighted heading \u2014 a gradual turn toward the leader as x accumulates; the setting comparable to the ring attractor's pre-bifurcation spatial averaging) | midpoint (FIXED angular bisector of the two BEARINGS while deliberating, independent of x, then a STEP to the chosen bearing on commitment; beliefs are still computed and logged, only the heading ignores them) | forward (belief-weighted heading, constant speed) | stationary (the NON-EMBODIED control: no translation and no rotation, so bearings never change and there is no feedback loop). NOTE: coupled to the geometric c_tau derivation \u2014 under stationary c_tau == 1 identically, and under midpoint c_tau = 1 - cos(Delta/2) is EXACT rather than a near-tie approximation.",
-                    "_comment_embodiment_arms": "The embodiment loop has two arms: decision->motion (x influences the heading) and motion->threshold (pose changes Delta, which changes z* via rho(Delta)). stationary cuts both; midpoint cuts only the first; average keeps both. An effect present in average but not midpoint belongs to the first arm; one present in midpoint but not stationary belongs to the second.",
                     "scaling_mode": "constant",
-                    "_comment_scaling_mode": "concentration | constant | magnitude. Under midpoint, concentration == cos(Delta/2) and is PURELY GEOMETRIC: it carries no decision information and drives speed to zero as Delta -> pi, so the agent creeps to the midpoint and hovers until noise resolves the tie (the closest behavioural match to the ring attractor at a symmetric tie). Use constant to disable gating so midpoint does exactly one thing; use concentration deliberately if the hovering is the object of study.",
                     "norm_scale": 1.0,
-                    "_comment_norm_scale": "Scaling used when scaling_mode is 'constant'.",
-                    "bisector_eps": 1e-06,
-                    "_comment_bisector_eps": "Hold the previous heading when |sum of unit bearing vectors|/2 falls below this (Delta -> pi, where the vectors cancel and atan2(0,0) is undefined). A guard that fires repeatedly means the agent is parked between the targets \u2014 a result, not an error; it is logged per tick as bisector_guard_fired.",
-                    "allow_changes_of_mind": false,
-                    "A_expected": 0.05,
                     "bifurcation": {
                         "mode": "behavioral",
-                        "_comment_mode": "behavioral for ALL three models so switch counts and alignment events are measured by identical code.",
                         "lambda_threshold": -0.1,
                         "spike_min_separation": 10,
                         "alignment_tolerance_deg": 5.0,
-                        "alignment_consecutive_ticks": 5,
+                        "alignment_consecutive_ticks": 1,
                         "gradient_window": 5,
                         "gradient_threshold": 0.005
                     },
-                    "_comment_calibration": "The noise is upstream: c = sqrt(2)*0.035 = 0.0495. At 10 ticks/s one tick of noise is c*sqrt(dt) = 0.0157 and the sub-stepped integration step is c*sqrt(dt/n_sub) = 0.0039. The agent starts at (0,0) so Delta(onset) = 60 deg; cost_ratio 1.0 sits on the campaign's C_E_GRID.",
-                    "_comment_scope": "TEMPLATE for the geometric threshold policy under BOTH boundary regimes. Switch with two keys only: STATIC  -> boundary_mode: 'static',     threshold_update_ticks: 0  (z* derived once from the onset geometry, then held). COLLAPSING -> boundary_mode: 'collapsing', threshold_update_ticks: 1 (z* re-derived from the live Delta each tick; collapse_form 'geometric' IS that re-evaluation). Both start from the same z*(onset), so they differ in exactly one thing: whether the boundary may follow the geometry. Trimmed to the parameters read under geometric_error_mode: terminal_categorical, dist_mode: none, attention_mode: none, extended: false, readout_mode: normalized, urgency_mode: off, allow_changes_of_mind: false; anything omitted falls back to its code default. See config/embodied-pure-ddm-2-targets.json for the fully documented parameter set.",
+                    "_comment_bifurcation": "Made EXPLICIT (rather than relying on the code default) because under predecision_motion 'midpoint' the heading sits on the fixed angular bisector until commitment, so the behavioral detector can only align with a target AFTER the commit heading step -- which is exactly the trigger this scenario wants. The code default is alignment_consecutive_ticks: 5, which at ticks_per_second: 1 would add 5 s of slack before the swap; 1 keeps the total offset at commit + ~1 tick of alignment + delay_ticks, close to the old quality_swap delay of exactly 1.0 s after commit.",
+                    "bellman": {
+                        "T_max": null,
+                        "_comment_T_max": "null = r0/v from the onset geometry, per condition.",
+                        "T_max_check_factor": null,
+                        "_comment_T_max_check_factor": "Off for the bulk campaign; the precompute pass (campaign/precompute_tables.py) runs the 1.5x horizon check once per condition instead of once per replicate.",
+                        "N_x": 1601,
+                        "N_t": 8660,
+                        "_comment_N_t": "Overridden per condition to ceil(T_max / 1e-3): dt = 1 ms everywhere on the grid (the boundary converges as O(sqrt(dt))).",
+                        "X_max_factor": 4.0,
+                        "scheme": "crank_nicolson",
+                        "terminal": "halt_sprt",
+                        "_comment_terminal": "forced_choice | halt_sprt (BELLMAN_KNOWN_A_TERMINAL_HALT_DESIGN). forced_choice: commit at arrival whatever you believe, z(T_max) = 0 -- the terminal collapse; undecided mass becomes near-chance guesses and decision times clip at T_max, which caps the frontier's accuracy asymptote at large c_e. halt_sprt: at arrival the agent halts at the midpoint (v = 0) and keeps integrating at delay rate halt_cost_rate against the flat threshold z_halt (= myopic z* at c_tau = c_h), so z(T_max) = z_halt, accuracy tends to 1 - ER(z_halt), and decision times extend past arrival by ~D(z_halt) on average -- RECHECK time_limit at the top of the c_e grid before a halt campaign: a run that hits the limit mid-halt is censored. Known-|A| model only. The table cache key includes the mode, so both frontiers can share one cache.",
+                        "halt_cost_rate": 1.0,
+                        "_comment_halt_cost_rate": "c_h: delay rate while halted. 1.0 is the physical value (halted = zero progress recovers nothing). Only read under terminal: halt_sprt; other values are sensitivity knobs, and c_h < 1 voids the halt-only-at-arrival domination lemma.",
+                        "table_cache_dir": null,
+                        "_comment_table_cache_dir": "Set by the generator to the campaign's shared table cache (Section 7.3). null = solve in-process, the historical behaviour."
+                    },
                     "_comment_flexibility": "Post-commitment flexibility. The boundary is non-absorbing: committed <=> |x| >= z(t), re-evaluated every tick (Section 3.6). The agent must be able to reverse BEFORE it arrives (d/v must exceed delay + 2z/A). At the campaign values: d/v = 0.5/0.05 = 10 s against swap delay 5 s + 2z/A ~ 2 s (z ~ 0.049 at c = 0.0495, A = 0.05, Delta = 60 deg), so reversal before arrival remains feasible at the locked velocity. _check_reversal_feasibility logs both numbers at runtime and warns if the inequality flips.",
                     "flexibility": true,
                     "post_commit_accumulation": "unbounded",
                     "quality_swap": {
-                        "enabled": true,
+                        "enabled": false,
                         "trigger": "on_commit",
-                        "delay": 5.0,
+                        "delay": 1.0,
                         "at_time": null,
                         "mode": "exchange",
                         "new_qualities": null
-                    }
+                    },
+                    "_comment_quality_swap": "DISABLED: the arena now applies the world change via environment.post_bifurcation_swap above; leaving both enabled would make the two swaps cancel to a net no-op. Two consequences of disabling this: (a) pure_ddm_t_swap / dwell_before_swap / release-latency columns stay null -- the swap is instead recorded by the arena in the run's events.json via collect_swap_events; (b) _check_reversal_feasibility reads quality_swap['delay'] and now sees 0.0, so its logged feasibility margin is optimistic by the true arena delay (bifurcation latency + post_bifurcation_swap.delay_ticks). The block is kept (not deleted) purely for documentation of the value it used to hold."
                 }
             }
         },
         "results": {
             "base_path": "./data/embodied_ddm_flexibility/",
-            "agent_specs": [
-                "base",
-                "mean_field"
-            ],
+            "agent_specs": ["base", "mean_field"],
             "group_specs": [],
-            "snapshots_per_second": 10,
+            "snapshots_per_second": 1,
             "_comment_snapshots_per_second": "Equal to the tick rate, i.e. per-tick rows; the code default of 1 snapshot/s (src/dataHandling.py) would under-sample the post-commitment reversal, which is the whole object of this scenario."
         }
     }

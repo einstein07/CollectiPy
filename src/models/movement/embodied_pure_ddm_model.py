@@ -1687,6 +1687,13 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         data.update(self.percept_stream_record())
         if self.threshold_policy == "geometric" and self._geom_log:
             data.update({f"pure_ddm_{k}": v for k, v in self._geom_log.items()})
+        # Drain new bifurcation events detected this tick (Path A IPC: events flow through
+        # per-tick spin data from the agent process to the Arena, where the
+        # post-bifurcation swap trigger scans for them).
+        new_bif = list(self.bifurcation_detector.events) if hasattr(self, 'bifurcation_detector') else []
+        if new_bif:
+            self.bifurcation_detector.events.clear()
+        data["new_bifurcation_events"] = new_bif
         return data
 
 
