@@ -103,9 +103,18 @@ Z_MIN = 1e-4
 # ---------------------------------------------------------------------------
 # Quality-difference grid (Section 2)
 # ---------------------------------------------------------------------------
-NUM_DIFF_STEPS = 22           # 1 symmetric point + 21 log-spaced
-DIFF_MIN = 0.01               # 1%
+NUM_DIFF_STEPS = 22           # 1 symmetric point + 21 log-spaced, 1% -> 80%
+DIFF_MIN = 0.01               # 1%  — the anchor of the original leg
 DIFF_MAX = 0.80               # 80%
+
+#: Extra points BELOW DIFF_MIN, continuing the same log ratio downward. The original
+#: leg bottomed out at 1%, which is where both ring-attractor arms are still fully
+#: rigid and the DDM still reverses on every trial, so the sub-1% region was
+#: unresolved. Four more steps at the same 1.2450 ratio take the floor to 0.4163%,
+#: keeping the WHOLE leg uniform in log delta rather than grafting on a second
+#: spacing. delta = 0 is unaffected and stays RA-only: the DDM cannot deduce |A| from
+#: a zero gap, so it has no symmetric cell to add points near.
+EXTRA_LOW_STEPS = 4
 
 REPS = 100                    # replicates per (arm, delta)
 CHUNK = 10                    # replicates packed into one array task
@@ -116,7 +125,8 @@ def delta_grid() -> list[float]:
 
     delta = 0 is NOT filler: with equal strengths the exchange is a no-op, so that
     cell measures spontaneous symmetry-breaking and the SPONTANEOUS reversal rate --
-    the null distribution every other reversal count is scored against.
+    the null distribution every other reversal count is scored against. It is present
+    here and dropped per-arm for the DDM by `matrix.deltas_for`.
 
     Pure-math logspace rather than numpy's, so the grid does not depend on a numpy
     version, rounded to 6 dp exactly as the historical sweep script did so the delta
@@ -124,7 +134,10 @@ def delta_grid() -> list[float]:
     """
     lo, hi = math.log10(DIFF_MIN), math.log10(DIFF_MAX)
     n = NUM_DIFF_STEPS - 1
-    log_pts = [round(10.0 ** (lo + i * (hi - lo) / (n - 1)), 6) for i in range(n)]
+    step = (hi - lo) / (n - 1)
+    # i < 0 walks the same ratio below DIFF_MIN; i = 0 lands exactly on it.
+    log_pts = [round(10.0 ** (lo + i * step), 6)
+               for i in range(-EXTRA_LOW_STEPS, n)]
     return [0.0] + log_pts
 
 
@@ -157,16 +170,25 @@ def mean_drive(delta: float) -> float:
 #: Everything hash-derived descends from this one number.
 CAMPAIGN_SEED = 20260901
 
-#: THE ARM IS DELIBERATELY ABSENT from the seed key. The historical generator keyed
-#: the arena seed on md5(f"{u}_{diff}_{run}"), so every gain drew a DIFFERENT noise
-#: stream and the arms could not be paired. Dropping the arm makes all three arms
-#: replay the same realisation at the same (delta, replicate), which is what licenses
-#: the paired statistics of Section 6 -- McNemar on reversal, Wilcoxon signed-rank on
-#: latency, matched per (delta, replicate). Sharing the seed is necessary but not
-#: sufficient; the models must also CONSUME the stream identically, which they do:
-#: SharedPerceptStream keys each draw by (trial_seed, kind, target_id, tick) alone, so
-#: neither the DDM's n_sub = 16 nor the RA's 500 field steps per tick perturb it.
-SEED_KEY_INCLUDES_ARM = False
+#: TWO seeds per run, both written explicitly into every config -- see
+#: `flexibility/seeds.py`, which follows the convention already used by
+#: `ra_ddm_frontier_slices` and `ra_ddm_frontier_ddm*`:
+#:
+#:     sensory_stream.seed   H(seed, "sensory",  delta_token, replicate)   arm ABSENT
+#:     arena.random_seed     H(seed, "internal", delta_token, arm, rep)    arm PRESENT
+#:
+#: The arm's absence from the sensory key is what pairs the arms; its presence in the
+#: internal key keeps model-internal randomness independent, which is the honest
+#: relationship between a ring attractor and a DDM -- they consume randomness
+#: differently and at different rates, so a shared root would imply a coupling that
+#: does not exist. The historical generator keyed the arena seed on
+#: md5(f"{u}_{diff}_{run}"), putting the gain in the SENSORY path, so every arm drew a
+#: different realisation and nothing was paired at all.
+#:
+#: Matched seeds are necessary but not sufficient; the models must also CONSUME the
+#: stream identically, which they do: SharedPerceptStream keys each draw by
+#: (trial_seed, kind, target_id, tick) alone, so neither the DDM's n_sub = 16 nor the
+#: RA's 500 field steps per tick perturb it.
 
 # ---------------------------------------------------------------------------
 # Section 9: a short u-resolution check at delta = 0, run SEPARATELY from the main

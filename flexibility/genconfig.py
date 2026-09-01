@@ -265,10 +265,17 @@ def replicate_config(
     data = condition_config(cond, base=base, table_cache_dir=table_cache_dir)
     env = data["environment"]
 
-    seed = seeds.trial_seed(matrix.delta_token(cond.delta), replicate)
+    # BOTH seeds are written explicitly, never left null for the simulator to resolve.
+    # The sensory seed excludes the arm, so every arm replays the same realisation at
+    # this (delta, replicate); the arena seed includes it, so model-internal
+    # randomness is deliberately independent. Writing both out makes the pairing
+    # readable straight from the config rather than implied by a resolution rule.
+    token = matrix.delta_token(cond.delta)
+    env["sensory_stream"]["seed"] = int(seeds.sensory_seed(token, replicate))
+    internal = int(seeds.internal_seed(cond.arm, token, replicate))
     for arena in env["arenas"].values():
         if isinstance(arena, dict):
-            arena["random_seed"] = int(seed)
+            arena["random_seed"] = internal
 
     if horizon_check_factor is not None and cond.arm == "ddm_bellman":
         agent = next(iter(env["agents"].values()))
@@ -291,12 +298,19 @@ def output_dir(root: str, cond: Condition, replicate: int) -> str:
 # The check the design asks for in Section 9
 # ---------------------------------------------------------------------------
 def assert_arms_matched(arm_a: str, arm_b: str, delta: float, replicate: int) -> None:
-    """Verify two arms at the same (delta, replicate) differ ONLY in the model block.
+    """Verify two arms at the same (delta, replicate) are matched where it matters.
 
-    Section 9: two arms must carry the same arena.random_seed, the same white_rate
-    and the same linear_velocity, and differ only in the model block. This is the
-    machine-checkable form of that requirement, so it can run in the preflight rather
-    than being eyeballed from a diff.
+    Three separate requirements, checked rather than eyeballed from a diff:
+
+      1. the SENSORY seed is IDENTICAL -- this is what pairs the arms;
+      2. the arena (internal) seed DIFFERS -- model-internal randomness is deliberately
+         independent, and two arms sharing it would imply a coupling that does not
+         exist;
+      3. everything outside the model block is otherwise identical, so the arms differ
+         in the decision rule and in nothing else.
+
+    The arena seed is elided before the structural comparison precisely because it is
+    *expected* to differ; requirement 2 checks it explicitly instead.
     """
     def strip_models(cfg: dict) -> dict:
         cfg = copy.deepcopy(cfg)
@@ -306,6 +320,9 @@ def assert_arms_matched(arm_a: str, arm_b: str, delta: float, replicate: int) ->
                 agent.pop("embodied_pure_ddm", None)
                 agent.pop("moving_behavior", None)
         cfg["environment"]["results"]["base_path"] = "<elided>"
+        for arena in cfg["environment"]["arenas"].values():
+            if isinstance(arena, dict):
+                arena["random_seed"] = "<elided: checked separately>"
         return cfg
 
     conds = {c.name: c for c in matrix.build()}
@@ -324,12 +341,29 @@ def assert_arms_matched(arm_a: str, arm_b: str, delta: float, replicate: int) ->
     a = replicate_config(ca, replicate, "<out>")
     b = replicate_config(cb, replicate, "<out>")
 
-    seed_a = next(iter(a["environment"]["arenas"].values()))["random_seed"]
-    seed_b = next(iter(b["environment"]["arenas"].values()))["random_seed"]
-    if seed_a != seed_b:
+    # 1. The sensory seed MUST match — this is the pairing.
+    sens_a = a["environment"]["sensory_stream"]["seed"]
+    sens_b = b["environment"]["sensory_stream"]["seed"]
+    if sens_a is None or sens_b is None:
+        raise AssertionError(
+            f"{arm_a} or {arm_b} has a null sensory_stream.seed at delta={delta}, "
+            f"replicate={replicate}. Both seeds are written explicitly so the pairing "
+            "is readable from the config; a null here means the generator did not."
+        )
+    if sens_a != sens_b:
         raise AssertionError(
             f"{arm_a} and {arm_b} at delta={delta}, replicate={replicate} have "
-            f"different arena seeds ({seed_a} vs {seed_b}); the arms are UNPAIRED."
+            f"different SENSORY seeds ({sens_a} vs {sens_b}); the arms are UNPAIRED."
+        )
+
+    # 2. The arena (internal) seed must DIFFER — independence, not a defect.
+    int_a = next(iter(a["environment"]["arenas"].values()))["random_seed"]
+    int_b = next(iter(b["environment"]["arenas"].values()))["random_seed"]
+    if int_a == int_b:
+        raise AssertionError(
+            f"{arm_a} and {arm_b} at delta={delta}, replicate={replicate} share an "
+            f"arena seed ({int_a}). Model-internal randomness is meant to be "
+            "independent across arms; the arm is missing from the internal seed key."
         )
 
     sa, sb = strip_models(a), strip_models(b)

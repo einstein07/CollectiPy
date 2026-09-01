@@ -5,29 +5,38 @@
 #  This file is part of CollectyPy, released under the BSD 3-Clause License.
 # ------------------------------------------------------------------------------
 
-"""Seed derivation (Section 3).
+"""Seed derivation — TWO seeds per run, following `campaign/seeds.py`.
 
-    trial_seed = H(campaign_seed, "trial", delta_token, replicate)
+    sensory_seed  = H(campaign_seed, "sensory",  delta_token, replicate)
+    internal_seed = H(campaign_seed, "internal", delta_token, arm, replicate)
 
-THE ARM IS ABSENT FROM THE KEY, and that is the whole point. The historical
-generator used md5(f"{u}_{diff}_{run}"), which put the gain in the key, so every arm
-drew a different noise realisation and the four arms were UNPAIRED. Dropping the arm
-makes all four replay the same realisation at the same (delta, replicate), which is
-what licenses the paired statistics of Section 7 -- McNemar on reversal, Wilcoxon
-signed-rank on latency, matched per (delta, replicate).
+**The arm is ABSENT from the sensory seed and PRESENT in the internal one.** That
+asymmetry is the whole design:
 
-One seed, not two: the arena `random_seed` is the single trial seed, and the
-simulator hands it to the agent, which resolves the shared percept stream from it
-(`sensory_stream.seed: null`). Model-internal randomness descends from the same
-number. Splitting sensory from internal seeds -- as the frontier campaign does, to
-keep a speed/accuracy curve paired across its criterion axis -- would buy nothing
-here, because the criterion is fixed and the arms differ in the decision rule rather
-than in a swept model parameter.
+  * every arm sees the SAME sensory realisation at the same (delta, replicate), which
+    is what licenses the paired statistics -- McNemar on reversal, Wilcoxon
+    signed-rank on latency, matched per cell;
+  * model-internal randomness is deliberately NOT shared. Matching it across a ring
+    attractor and a DDM would be meaningless anyway, since they consume randomness
+    differently and at different rates; forcing a common root would imply a coupling
+    that does not exist.
+
+Both seeds are written EXPLICITLY into every generated config -- `sensory_stream.seed`
+and `arena.random_seed` -- rather than leaving the sensory one null for the simulator
+to resolve from the arena seed. Null works, but it makes the matching invisible: the
+config records `"seed": null` and a reader has to know the resolution rule to see that
+anything is matched at all. Writing it out makes each config self-documenting and the
+pairing auditable straight from the results directory. This mirrors the convention in
+`ra_ddm_frontier_slices` and `ra_ddm_frontier_ddm*`, where the sensory seed is
+identical across model variants while the arena seed differs.
 
 H is the project's existing derivation style: the percept stream keys every draw as
 `blake2b(digest_size=8)` over a '|'-joined coordinate string
 (src/models/percept_stream.py). The same construction is used here, reduced mod 2^31
 because arena `random_seed` values are 31-bit ints throughout the existing configs.
+
+Factor levels enter as CANONICAL TOKENS (e.g. "d1.0000pct"), never as raw floats, so
+the derivation cannot drift with float formatting.
 """
 
 from __future__ import annotations
@@ -44,7 +53,13 @@ def derive_seed(campaign_seed: int, *parts) -> int:
     return int.from_bytes(digest, "little") % (2 ** 31)
 
 
-def trial_seed(delta_token: str, replicate: int,
-               campaign_seed: int = factors.CAMPAIGN_SEED) -> int:
-    """The arena seed for one (delta, replicate) — identical across all four arms."""
-    return derive_seed(campaign_seed, "trial", delta_token, int(replicate))
+def sensory_seed(delta_token: str, replicate: int,
+                 campaign_seed: int = factors.CAMPAIGN_SEED) -> int:
+    """Seed of the shared percept stream. The ARM is deliberately absent."""
+    return derive_seed(campaign_seed, "sensory", delta_token, int(replicate))
+
+
+def internal_seed(arm: str, delta_token: str, replicate: int,
+                  campaign_seed: int = factors.CAMPAIGN_SEED) -> int:
+    """Seed of everything model-internal, via the arena. The ARM is included."""
+    return derive_seed(campaign_seed, "internal", delta_token, arm, int(replicate))

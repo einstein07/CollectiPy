@@ -55,13 +55,26 @@ CACHE_DIR="${CACHE_DIR:-$BASE_PATH_ROOT/table_cache}"
 THROTTLE="${THROTTLE:-100}"
 
 PARTITION="${PARTITION:-cpu}"
-PRECOMPUTE_TIME="${PRECOMPUTE_TIME:-01:00:00}"
+# Measured: 21 Crank-Nicolson solves at N_x=1601, N_t=45467, serial = 155 s.
+PRECOMPUTE_TIME="${PRECOMPUTE_TIME:-00:20:00}"
 PRECOMPUTE_MEM="${PRECOMPUTE_MEM:-8G}"
 PRECOMPUTE_CPUS="${PRECOMPUTE_CPUS:-1}"
 # Serial by default: each solve runs a simulator that forks ~4 processes, so nesting
-# a worker pool on top multiplies them. 23 solves at ~9 s is ~3.5 minutes serially.
+# a worker pool on top multiplies them. Measured serial: 21 solves in 155 s.
 PRECOMPUTE_WORKERS="${PRECOMPUTE_WORKERS:-1}"
-ARRAY_TIME="${ARRAY_TIME:-24:00:00}"
+# Per-TASK, not per-array. Sized from measurement, not habit:
+#
+#   RA replicate, worst case   13.4 s  (full 1000-tick run, forced never to
+#                                       terminate; per-tick cost is independent of
+#                                       delta, so this is a true ceiling)
+#   RA task = 10 replicates   ~134 s
+#   DDM task, warm cache       ~5 s;  cold table solve adds ~9 s once
+#
+# 30 min is ~13x the measured worst case, which absorbs a compute node slower than
+# the dev box several times over. It also matters for QUEUE time: a short walltime
+# backfills into gaps, whereas a 24 h request waits for a 24 h window. Raise it via
+# the environment if a cell turns out to be pathological.
+ARRAY_TIME="${ARRAY_TIME:-01:00:00}"
 ARRAY_MEM="${ARRAY_MEM:-4G}"
 
 # ---------------------------------------------------------------------------
