@@ -8,7 +8,7 @@
 """Execute one array task: one condition-point x one chunk of replicates.
 
     python3 -m flexibility.run_chunk --index <task_id> --results-root <dir> [...]
-    python3 -m flexibility.run_chunk --only ra_uc__d0.5674pct:3 --results-root <dir>
+    python3 -m flexibility.run_chunk --only ra_u8__d1.9296pct:3 --results-root <dir>
 
 Raw output is left in the sweep layout of Section 9.8,
 
@@ -115,7 +115,7 @@ def main(argv=None) -> int:
     sel = ap.add_mutually_exclusive_group(required=True)
     sel.add_argument("--index", type=int,
                      help="array task index into the task table")
-    sel.add_argument("--only", help="condition[:chunk], e.g. ra_uc__d0.5674pct:3")
+    sel.add_argument("--only", help="condition[:chunk], e.g. ra_u8__d1.9296pct:3")
     ap.add_argument("--results-root", required=True, type=Path)
     ap.add_argument("--cache-dir", type=Path, default=None,
                     help="Bellman table cache (default: <results-root>/table_cache)")

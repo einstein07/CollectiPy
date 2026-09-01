@@ -90,7 +90,10 @@ def check_templates(rep: Report) -> None:
 def check_arms_matched(rep: Report) -> None:
     """Section 3/9: arms differ ONLY in the model block, and share the trial seed."""
     grid = [d for d in factors.delta_grid()]
-    probes = [grid[0], factors.reference_delta(), grid[-1]]
+    # Probe the symmetric cell, the bottom and top of the log leg, and a mid point:
+    # the seed and the locked block must match at every delta, and these four catch
+    # anything that varies with it.
+    probes = [grid[0], grid[1], grid[len(grid) // 2], grid[-1]]
     for delta in probes:
         for i in range(len(factors.ARMS) - 1):
             try:
@@ -104,85 +107,66 @@ def check_arms_matched(rep: Report) -> None:
 
 
 def check_grid(rep: Report) -> None:
-    """Does the grid resolve the transition Section 4.3 says it should?"""
-    marks = {m["name"]: m for m in matrix.landmarks()}
+    """Is every cell one whose reversal rate means something?"""
     conds = [c for c in matrix.build() if c.arm == "ddm_bellman"]
+    live = [c for c in conds if not c.derived["is_symmetric"]]
 
-    band = matrix.usable_band()
-    if band["n_grid_points"] < 5:
-        best = max(((t, matrix.usable_band(ticks_per_second=t)) for t in (2, 5, 10, 20)),
-                   key=lambda tb: tb[1]["n_grid_points"])
-        rep.warn(
-            f"only {band['n_grid_points']} grid point(s) are USABLE (first choice "
-            "reliable enough for a reversal to be defined, and reversal latency "
-            "resolvable). The delta grid of Section 5 was placed around landmarks "
-            "derived at a constant zeta = 1.1; at a fixed cost of error those "
-            "landmarks move and three of them cease to exist, so the grid no longer "
-            "straddles anything. Two independent levers, neither applied here "
-            "because both are design decisions:\n"
-            f"           (a) tick rate — ticks_per_second = {best[0]} would give "
-            f"{best[1]['n_grid_points']} usable points (band ratio "
-            f"{best[1]['ratio']:.1f} vs {band['ratio'] or float('nan'):.1f}); it "
-            "raises only the UPPER edge, which is sampling resolution;\n"
-            f"           (b) grid placement — the usable band starts at "
-            f"{band['lo'] * 100:.2f}%, so the log leg's current span of 0.10%-4.00% "
-            "spends 11 of its 18 points below it, at near-chance accuracy."
-        )
-
-    infeasible = [c for c in conds
-                  if c.delta > 0.0 and not c.derived["pred_reversal_feasible"]
-                  and not c.derived["is_anchor"]]
-    if len(infeasible) > len(conds) / 2:
+    # THE precondition for the whole campaign. If the agent cannot physically get
+    # back before it arrives, a 0% reversal rate is the arena, not the model -- and
+    # it would look exactly like the rigidity result the RA arms are meant to show.
+    infeasible = [c for c in live if not c.derived["pred_reversal_feasible"]]
+    if infeasible:
+        worst = max(infeasible, key=lambda c: c.derived["pred_t_reversal"])
         rep.fail(
-            f"{len(infeasible)} of {len(conds) - 1} non-zero grid points cannot "
-            "reverse within the travel budget at all. A 0% reversal rate from those "
-            "cells is the arena, not the model. Either the cost of error "
-            "(factors.COST_OF_ERROR) or the velocity is wrong for this grid."
+            f"{len(infeasible)} of {len(live)} non-zero cells cannot reverse within "
+            f"the travel budget (worst: {worst.name}, needs "
+            f"{worst.derived['pred_t_reversal']:.1f} s against a "
+            f"{worst.derived['T_b']:.0f} s budget). A 0% reversal rate there is a "
+            "property of the arena, not of the model, and is indistinguishable from "
+            "the rigidity result. Fix the velocity or the cost of error."
         )
 
+    # Trials that commit to the WORSE option have nothing to reverse: the swap makes
+    # their choice correct. Section 6 analyses them separately, so a low-accuracy cell
+    # costs effective replicates rather than being wrong.
+    low = [c for c in live if c.derived["pred_initial_accuracy"] < 0.75]
+    if low:
+        worst = min(low, key=lambda c: c.derived["pred_initial_accuracy"])
+        rep.warn(
+            f"{len(low)} of {len(live)} cells have a predicted initial accuracy below "
+            f"75% (lowest {worst.derived['pred_initial_accuracy'] * 100:.1f}% at "
+            f"delta = {worst.delta * 100:.3f}%). In those cells a sizeable minority of "
+            "trials commit to the worse option, where the swap makes the choice "
+            "correct and there is nothing to reverse; they are analysed separately, so "
+            "budget for the reduced effective replicate count rather than discovering "
+            "it afterwards."
+        )
+
+    # Reversal RATE is observable everywhere; only the LATENCY needs the resolution.
+    unresolved = [c for c in live
+                  if not c.derived["pred_reversal_latency_resolvable"]]
+    if unresolved:
+        cutoff = min((c for c in live
+                      if c.derived["pred_reversal_latency_resolvable"]),
+                     key=lambda c: -c.delta, default=None)
+        edge = f"{cutoff.delta * 100:.3f}%" if cutoff else "nowhere on the grid"
+        rep.warn(
+            f"reversal latency is discretisation-limited above delta = {edge} "
+            f"({len(unresolved)} of {len(live)} cells have T_rev < 3 ticks at "
+            f"ticks_per_second = {factors.TICKS_PER_SECOND}). This is EXPECTED and "
+            "accepted: reversal RATE is the headline measurement and is fully "
+            "resolved at every cell. Report latency only below that edge."
+        )
+
+    # The Section 2 confound, surfaced with a number rather than left in prose.
+    lo, hi = factors.mean_drive(0.0), factors.mean_drive(factors.DIFF_MAX)
     rep.warn(
-        f"cost of error is FIXED at c_e = {factors.COST_OF_ERROR}, so zeta varies "
-        "across the grid (realised range "
-        f"{min(c.derived['pred_zeta'] for c in conds if c.delta > 0):.3f} to "
-        f"{max(c.derived['pred_zeta'] for c in conds if c.delta > 0):.3f}) and the "
-        "Section 4.3 landmarks and Section 5 grid -- both derived at a constant "
-        "zeta = 1.1 -- do NOT describe this campaign. Read the realised columns "
-        "above, not the design document's numbers."
+        f"pinned strengths mean the MEAN drive falls {lo:.2f} -> {hi:.2f} across the "
+        "sweep. The DDM is blind to this; the ring attractor is not, so at the top of "
+        "the grid the RA arms are driven differently, not merely discriminating a "
+        "larger difference. Chosen for continuity with the earlier RA sweeps; report "
+        "delta and mean drive together."
     )
-
-    # How many cells give a first choice reliable enough for a reversal to be
-    # defined on most trials? At a fixed cost of error this, not feasibility, is
-    # what limits the usable grid.
-    near_chance = [c for c in conds
-                   if c.delta > 0.0 and c.derived["pred_initial_accuracy"] < 0.75]
-    if near_chance:
-        rep.warn(
-            f"{len(near_chance)} of {len(conds) - 1} non-zero cells commit at under "
-            "75% accuracy (lowest: "
-            f"{min(c.derived['pred_initial_accuracy'] for c in near_chance) * 100:.1f}%"
-            f" at delta = {min(near_chance, key=lambda c: c.delta).delta * 100:.4f}%). "
-            "In those cells about half the trials commit to the WORSE option, where "
-            "the swap makes the choice correct and there is nothing to reverse. "
-            "Section 7 requires them analysed separately, so the effective replicate "
-            "count there is roughly half of REPS -- budget for it rather than "
-            "discovering it."
-        )
-
-    # Reversal latency is the DV's resolution limit at this tick rate.
-    unresolvable = [c for c in conds
-                    if c.delta > 0.0 and not c.derived["is_anchor"]
-                    and not c.derived["pred_reversal_latency_resolvable"]]
-    if len(unresolvable) > (len(conds) - 1) / 2:
-        rep.warn(
-            f"{len(unresolvable)} non-anchor cells have a reversal latency under 3 "
-            f"ticks at ticks_per_second = {factors.TICKS_PER_SECOND}; only the "
-            "occurrence of a reversal is observable there, not its timing."
-        )
-
-    rev = marks["reversal"]["delta"]
-    if rev is not None and rev >= max(c.delta for c in conds):
-        rep.fail("the reversal boundary lies above the top of the grid: no cell can "
-                 "reverse within the travel budget.")
 
 
 def check_time_limit(rep: Report) -> None:
@@ -194,8 +178,12 @@ def check_time_limit(rep: Report) -> None:
             continue
         if not c.derived["pred_reversal_feasible"]:
             continue
-        # commit + delay + reverse + traverse to the OTHER target
-        need = c.derived["pred_total"] + t_b
+        # commit + swap delay + reverse + traverse to the OTHER target
+        d = c.derived
+        need = (d["pred_t_commit"]
+                + factors.SWAP_DELAY_TICKS / factors.TICKS_PER_SECOND
+                + d["pred_t_reversal"]
+                + t_b)
         if worst is None or need > worst[1]:
             worst = (c, need)
     if worst and worst[1] > factors.TIME_LIMIT:
@@ -209,90 +197,60 @@ def check_time_limit(rep: Report) -> None:
 
 # ---------------------------------------------------------------------------
 def print_grid_table() -> None:
-    """The Section 4/5 report: what each cell will actually do."""
-    marks = matrix.landmarks()
+    """Report what each cell will actually do, before 660 tasks are queued."""
     g = matrix.geometry()
 
-    print("=" * 100)
+    print("=" * 96)
     print("FLEXIBILITY CAMPAIGN — PREFLIGHT")
-    print("=" * 100)
+    print("=" * 96)
     print(f"  arms              : {', '.join(factors.ARMS)}")
-    print(f"  cost of error     : c_e = {factors.COST_OF_ERROR}")
-    print(f"  c = sqrt(2)*eta   : {factors.NOISE_C:.6f}")
-    print(f"  v                 : {factors.LINEAR_VELOCITY} m/s   "
+    print(f"  RA kernel / gains : v = 0.5, u = "
+          f"{', '.join(str(factors.ARM_U[a]) for a in factors.RA_ARMS)}")
+    print(f"  cost of error     : c_e = {factors.COST_OF_ERROR} s")
+    print(f"  c = sqrt(2)*eta   : {factors.NOISE_C:.6f}  "
+          f"(white_rate = {factors.WHITE_RATE})")
+    print(f"  velocity          : {factors.LINEAR_VELOCITY} m/s   "
           f"T_b = R/v = {g['T_b']:.1f} s")
     print(f"  Bellman horizon   : T_max = r0/v = {g['T_max']:.4f} s   "
-          f"N_t = {g['N_t']} (dt = {factors.BELLMAN_DT})")
-    print(f"  swap delay        : {factors.SWAP_DELAY_TICKS} tick "
-          f"= {factors.SWAP_DELAY_TICKS / factors.TICKS_PER_SECOND:.1f} s")
+          f"N_t = {g['N_t']} (solver dt <= {factors.BELLMAN_DT})")
+    print(f"  tick rate         : {factors.TICKS_PER_SECOND} /s (arena and agent)   "
+          f"swap delay = {factors.SWAP_DELAY_TICKS} tick")
     print(f"  time limit        : {factors.TIME_LIMIT} s")
+    print(f"  strengths         : static_0 = {factors.QUALITY_BETTER} PINNED, "
+          f"static_1 = {factors.QUALITY_BETTER}*(1 - delta)")
+    print(f"  grid / replicates : {len(factors.delta_grid())} deltas x "
+          f"{factors.REPS} reps x {len(factors.ARMS)} arms")
     print(f"  runs / tasks      : {matrix.total_runs()} / {matrix.total_tasks()}")
     print()
 
-    print("LANDMARKS — solved on the REALISED policy, not on a fixed zeta")
-    print(f"  {'name':<22} {'delta':>9} {'A/c':>8} {'t_c':>9} {'T_rev':>9} "
-          f"{'init acc':>9}   meaning")
-    for m in marks:
-        if m["delta"] is None:
-            print(f"  {m['name']:<22} {'--':>9} {'--':>8} {'--':>9} {'--':>9} "
-                  f"{'--':>9}   NOT REACHED on delta in (0, 1]: {m['meaning']}")
-            continue
-        print(f"  {m['name']:<22} {m['delta_pct']:>8.4f}% {m['a_over_c']:>8.4f} "
-              f"{m['t_commit']:>8.2f}s {m['t_reversal']:>8.2f}s "
-              f"{m['initial_accuracy'] * 100:>8.2f}%   {m['meaning']}")
-    print()
-
-    print("GRID — realised per cell, from the model's own boundary solver")
-    print(f"  {'delta':>9} {'A/c':>8} {'c_e':>10} {'z':>8} {'zeta':>6} "
-          f"{'init acc':>9} {'t_c':>8} {'T_rev':>8} {'revers':>7} {'lat.res':>8}"
-          f"  regime")
+    print("PREDICTED DDM BEHAVIOUR — from the model's own boundary solver")
+    print(f"  {'delta':>9} {'mean drive':>11} {'A':>8} {'A/c':>7} {'z':>8} "
+          f"{'init acc':>9} {'t_c':>8} {'T_rev':>8} {'can rev':>8} {'lat res':>8}")
     for c in matrix.build():
         if c.arm != "ddm_bellman":
             continue
         d = c.derived
-        if d["A"] <= 0.0:
-            print(f"  {c.delta * 100:>8.4f}% {'--':>8} {'--':>10} {'--':>8} "
-                  f"{'--':>6} {'--':>9} {'--':>8} {'--':>8} {'--':>7} {'--':>8}"
-                  f"  {d['regime']}")
+        if d["is_symmetric"]:
+            print(f"  {c.delta * 100:>8.4f}% {d['mean_drive']:>11.3f} {'--':>8} "
+                  f"{'--':>7} {'--':>8} {'50.00%':>9} {'--':>8} {'--':>8} "
+                  f"{'n/a':>8} {'n/a':>8}   symmetric control")
             continue
-        print(f"  {c.delta * 100:>8.4f}% {d['a_over_c']:>8.4f} {d['c_e']:>10.3f} "
-              f"{d['pred_z']:>8.5f} {d['pred_zeta']:>6.3f} "
-              f"{d['pred_initial_accuracy'] * 100:>8.2f}% {d['pred_t_commit']:>7.2f}s "
-              f"{d['pred_t_reversal']:>7.2f}s "
-              f"{'yes' if d['pred_reversal_feasible'] else 'NO':>7} "
-              f"{'yes' if d['pred_reversal_latency_resolvable'] else 'NO':>8}"
-              f"  {d['regime']}")
-
-    counts: dict[str, int] = {}
-    for c in matrix.build():
-        if c.arm == "ddm_bellman":
-            counts[c.derived["regime"]] = counts.get(c.derived["regime"], 0) + 1
+        print(f"  {c.delta * 100:>8.4f}% {d['mean_drive']:>11.3f} {d['A']:>8.4f} "
+              f"{d['a_over_c']:>7.3f} {d['pred_z']:>8.5f} "
+              f"{d['pred_initial_accuracy'] * 100:>8.2f}% "
+              f"{d['pred_t_commit']:>7.2f}s {d['pred_t_reversal']:>7.2f}s "
+              f"{'yes' if d['pred_reversal_feasible'] else 'NO':>8} "
+              f"{'yes' if d['pred_reversal_latency_resolvable'] else 'no':>8}")
     print()
-    print("  regime map: " + ",  ".join(
-        f"{k} = {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1])))
-    print()
-
-    band = matrix.usable_band()
-    print("USABLE BAND — initial accuracy >= 75% AND reversal latency >= 3 ticks")
-    if band["lo"] is None:
-        print("  EMPTY at this tick rate: no delta satisfies both conditions.")
-    else:
-        print(f"  delta in [{band['lo'] * 100:.4f}%, {band['hi'] * 100:.4f}%]  "
-              f"(ratio {band['ratio']:.2f}), containing "
-              f"{band['n_grid_points']} of {len(factors.delta_grid()) - 1} "
-              f"non-zero grid points")
-    print("  The LOWER edge is set by the noise and the cost of error; it does not")
-    print("  move with the tick rate. The UPPER edge is pure sampling resolution:")
-    print(f"  {'ticks/s':>9} {'band':>24} {'ratio':>7} {'grid pts':>9}")
-    for tps in (1, 2, 5, 10, 20):
-        b = matrix.usable_band(ticks_per_second=tps)
-        here = "  <- current" if tps == factors.TICKS_PER_SECOND else ""
-        if b["lo"] is None:
-            print(f"  {tps:>9} {'--- empty ---':>24} {'--':>7} {0:>9}{here}")
-        else:
-            span = f"[{b['lo'] * 100:.4f}%, {b['hi'] * 100:.4f}%]"
-            print(f"  {tps:>9} {span:>24} {b['ratio']:>7.2f} "
-                  f"{b['n_grid_points']:>9}{here}")
+    live = [c for c in matrix.build()
+            if c.arm == "ddm_bellman" and not c.derived["is_symmetric"]]
+    n_feas = sum(1 for c in live if c.derived["pred_reversal_feasible"])
+    n_lat = sum(1 for c in live if c.derived["pred_reversal_latency_resolvable"])
+    n_acc = sum(1 for c in live if c.derived["pred_initial_accuracy"] >= 0.75)
+    print(f"  reversal physically possible : {n_feas}/{len(live)} cells")
+    print(f"  first choice >= 75% accurate : {n_acc}/{len(live)} cells")
+    print(f"  reversal latency resolvable  : {n_lat}/{len(live)} cells "
+          f"(rate is resolved at all {len(live)})")
     print()
 
 

@@ -120,13 +120,19 @@ def _patch_shared(env: dict, cond: Condition) -> None:
         "agent_ids": "any",
     }
 
-    # SquareArena reads 'side' and SILENTLY IGNORES 'radius', so a template carrying
-    # only 'radius' has been running the default side. Set side and drop radius.
+    # The arena is written WHOLESALE rather than patched, so no template key can
+    # survive to differ between arms -- not even a cosmetic one. SquareArena reads
+    # 'side' and SILENTLY IGNORES 'radius', so a template carrying only 'radius' runs
+    # the default side; dropping the whole block removes that trap too. The seed is
+    # filled in per replicate by `replicate_config`.
     arenas = _require(env, "arenas", "environment")
-    for arena in arenas.values():
-        if isinstance(arena, dict):
-            arena["side"] = factors.ARENA_SIDE
-            arena.pop("radius", None)
+    for name in list(arenas):
+        arenas[name] = {
+            "random_seed": 0,
+            "side": factors.ARENA_SIDE,
+            "_id": "square",
+            "color": "white",
+        }
 
     objects = _require(env, "objects", "environment")
     for oid, (pos, q, color) in {
@@ -189,7 +195,10 @@ def _patch_model(env: dict, cond: Condition) -> None:
 
 def _patch_ra(block: dict, cond: Condition) -> None:
     """Ring-attractor arm: the gain, and the shared-stream precondition."""
-    block["u"] = factors.U_CRITICAL if cond.arm == "ra_uc" else factors.U_RIGID
+    block["u"] = float(factors.ARM_U[cond.arm])
+    # The kernel is FIXED at v = 0.5: u = 6.2 is near-critical for THIS kernel, so
+    # changing v would silently invalidate the near-critical arm's identity.
+    block["v"] = 0.5
     # Fatal under sensory_stream.mode 'shared': the model-owned sensory noise has
     # moved upstream, and a non-zero sigma_s would add a second, UNSHARED noise
     # source on top -- silently unpairing the arms while every seed still matched.

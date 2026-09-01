@@ -99,9 +99,33 @@ def main(argv=None) -> int:
     """Solve every ddm_bellman table into the cache."""
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--cache-dir", required=True, type=Path)
-    ap.add_argument("--workers", type=int, default=4)
+    # DEFAULT 1, deliberately. Each solve runs a full simulator instance, and the
+    # simulator itself forks an arena process, one manager process per agent group
+    # and a collision detector -- so N workers means roughly 4N processes. Nesting a
+    # ProcessPoolExecutor on top of that is what produced "A subprocess exited
+    # unexpectedly" under a constrained process/CPU budget. The whole pass is only
+    # ~23 solves at ~9 s, so serial costs about 3.5 minutes and removes the failure
+    # mode entirely. Raise it only inside a job with cores actually allocated.
+    ap.add_argument("--workers", type=int, default=1,
+                    help="parallel solves; each spawns ~4 processes (default 1)")
     ap.add_argument("--only", help="a single condition name, for debugging")
+    ap.add_argument("--allow-no-slurm", action="store_true",
+                    help="run outside a SLURM job (workstation or interactive alloc)")
     args = ap.parse_args(argv)
+
+    if not os.environ.get("SLURM_JOB_ID") and not args.allow_no_slurm:
+        print(
+            "REFUSING TO RUN: no SLURM_JOB_ID in the environment, so this looks like\n"
+            "a login node. This pass runs the full simulator once per condition and\n"
+            "forks several processes per run -- on a login node it is both antisocial\n"
+            "and liable to be killed mid-solve, leaving a partial cache.\n\n"
+            "  On a cluster : submit it, e.g. via submit-flexibility-sweep-bwunicluster.sh,\n"
+            "                 which runs this as its own job and makes the array depend on it.\n"
+            "  On a workstation, or inside an interactive allocation:\n"
+            "                 re-run with --allow-no-slurm.",
+            file=sys.stderr,
+        )
+        return 2
 
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     conds = bellman_conditions()

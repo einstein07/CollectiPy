@@ -73,7 +73,7 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "red",
-                "strength": [5.0],
+                "strength": [1.0],
                 "uncertainty": [0]
             }
         },
@@ -115,7 +115,7 @@
                     "drift_knowledge": "known_magnitude",
                     "A_source": "ensemble",
                     "geometric_error_mode": "terminal_categorical",
-                    "cost_ratio": 3000.0,
+                    "cost_ratio": 1.0,
                     "_comment_cost_ratio": "c_e, the error-vs-time criterion [READ FROM CODE: _bellman_threshold sets c_e = float(self.cost_ratio)]. HELD FIXED across the whole flexibility campaign -- the swept factor here is the quality difference delta, not the criterion. It still enters the table cache key, so it must not drift between the precompute pass and the array.",
                     "delta_min": 0.001,
                     "z_min": 0.0001,

@@ -9,7 +9,7 @@
 
     python3 -m flexibility.u_resolution_check --results-root <dir> [--reps 200]
 
-The `ra_uc` arm sits at u = 6.156868, which is the critical coupling of the
+The `ra_u6.2` arm sits at u = 6.2, just above the critical coupling of the
 CONTINUUM mean-field theory at v = 0.5. Two things follow, and they are why this
 check exists rather than being assumed away:
 
@@ -59,8 +59,9 @@ def main(argv=None) -> int:
     from flexibility.run_chunk import InProcessRunner
 
     # delta = 0 with the RA template. The gain is overridden per value below, so the
-    # arm identity (ra_uc vs ra_u8) is irrelevant here -- ra_uc is the carrier.
-    cond = matrix.find_condition(f"ra_uc__{matrix.delta_token(0.0)}")
+    # arm identity is irrelevant here: ra_u6.2 is only the carrier for the template
+    # and the locked parameters.
+    cond = matrix.find_condition(f"ra_u6.2__{matrix.delta_token(0.0)}")
     runner = None if args.dry_run else InProcessRunner()
     root = args.results_root / "u_resolution"
 
@@ -77,7 +78,7 @@ def main(argv=None) -> int:
             rep_dir.mkdir(parents=True, exist_ok=True)
             cfg = genconfig.replicate_config(cond, rep, str(rep_dir))
             # Override the gain AFTER generation: the arm's own value is whatever
-            # ra_uc carries, and this check is precisely about varying it.
+            # the carrier arm holds, and this check is precisely about varying it.
             agent = next(iter(cfg["environment"]["agents"].values()))
             agent["mean_field_model"]["u"] = float(u)
             cfg_path = rep_dir / "config.json"
