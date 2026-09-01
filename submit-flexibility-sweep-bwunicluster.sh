@@ -45,7 +45,7 @@ set -euo pipefail
 
 PROJECT_DIR="${PROJECT_DIR:-/home/kn/kn_kn/kn_pop547841/CollectiPy}"
 VENV_BIN="$PROJECT_DIR/.venv/bin"
-WORKSPACE="${WORKSPACE:-/pfs/work9/workspace/scratch/kn_pop547841-mySpace/collectipy-data}"
+WORKSPACE="${WORKSPACE:-/pfs/work9/workspace/scratch/kn_pop547841-mySpace/collectipy-data/beta_1}"
 LOGS_DIR="${LOGS_DIR:-$WORKSPACE/flexibility_sweep}"
 BASE_PATH_ROOT="${BASE_PATH_ROOT:-$LOGS_DIR}"
 # The table cache MUST be shared across the array: at N_t ~ 45k a cold solve is
