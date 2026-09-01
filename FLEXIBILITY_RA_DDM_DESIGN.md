@@ -349,6 +349,13 @@ code; every arm's template carries the block that arm patches; two arms at the s
 (δ, replicate) carry the same `arena.random_seed`, `white_rate` and `linear_velocity` and
 differ only in the model block; and reversal is feasible at every cell.
 
+**Python >= 3.10 everywhere.** The simulator uses PEP 604 (`X | Y`) annotations, so
+the 3.9 that is the default `python3` on the login nodes fails at import, several
+frames deep in an unrelated module. The package guards its own version, and the
+submit script version-checks each interpreter candidate rather than taking the first
+that exists — otherwise a wrong interpreter is only discovered after the array is
+queued.
+
 **Benchmark before sizing `--time`**: one RA run at `u = 6.2`, δ = 1% (slowest — near
 critical *and* at the floor of the grid), and one DDM run at the same δ including a cold
 table solve.

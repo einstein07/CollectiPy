@@ -60,9 +60,11 @@ HORIZON_CHECK_FACTOR = 1.5
 def bellman_conditions() -> list[matrix.Condition]:
     """The conditions that actually solve a table.
 
-    delta = 0 is included deliberately: it is a real cell that runs, and it is the
-    one where the drift-dependent boundary degenerates, so it is worth seeing the
-    solver's answer before the array does.
+    Every ddm_bellman condition, which `matrix.deltas_for` has already stripped of
+    delta = 0 -- at an exact tie `A_source: 'ensemble'` has no gap to deduce |A| from
+    and raises. That is why this pass gates the array: solving each condition once
+    also EXERCISES it once, so a condition the model refuses to run fails here, in one
+    job, rather than in 100 array tasks.
     """
     return [c for c in matrix.build() if c.arm == "ddm_bellman"]
 

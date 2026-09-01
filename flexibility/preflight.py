@@ -89,7 +89,12 @@ def check_templates(rep: Report) -> None:
 
 def check_arms_matched(rep: Report) -> None:
     """Section 3/9: arms differ ONLY in the model block, and share the trial seed."""
-    grid = [d for d in factors.delta_grid()]
+    # Probe only deltas COMMON to every arm: the DDM has no delta = 0, and probing a
+    # cell one arm lacks would fail on the lookup rather than on the pairing.
+    common = set(matrix.deltas_for(factors.ARMS[0]))
+    for arm in factors.ARMS[1:]:
+        common &= set(matrix.deltas_for(arm))
+    grid = sorted(common)
     # Probe the symmetric cell, the bottom and top of the log leg, and a mid point:
     # the seed and the locked block must match at every delta, and these four catch
     # anything that varies with it.
@@ -218,8 +223,9 @@ def print_grid_table() -> None:
     print(f"  time limit        : {factors.TIME_LIMIT} s")
     print(f"  strengths         : static_0 = {factors.QUALITY_BETTER} PINNED, "
           f"static_1 = {factors.QUALITY_BETTER}*(1 - delta)")
-    print(f"  grid / replicates : {len(factors.delta_grid())} deltas x "
-          f"{factors.REPS} reps x {len(factors.ARMS)} arms")
+    print(f"  grid              : " + ",  ".join(
+        f"{a} = {len(matrix.deltas_for(a))} deltas" for a in factors.ARMS))
+    print(f"  replicates        : {factors.REPS} per (arm, delta)")
     print(f"  runs / tasks      : {matrix.total_runs()} / {matrix.total_tasks()}")
     print()
 

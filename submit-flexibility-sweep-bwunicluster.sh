@@ -28,7 +28,7 @@
 # it, so the tables are in the cache before the first task starts.
 #
 #     login node   preflight, then submit both jobs
-#     job 1        precompute — one Bellman table per ddm_bellman condition (§9.7)
+#     job 1        precompute — one Bellman table per ddm_bellman condition
 #     job 2        the array — depends on job 1 completing successfully
 #
 # Running the precompute on the login node instead spawns a simulator (which itself
@@ -65,25 +65,38 @@ ARRAY_TIME="${ARRAY_TIME:-24:00:00}"
 ARRAY_MEM="${ARRAY_MEM:-4G}"
 
 # ---------------------------------------------------------------------------
-# Python interpreter (prefer venv, fall back to system)
+# Python interpreter — must be >= 3.10
+#
+# The simulator uses PEP 604 annotations (`X | Y`), so 3.9 fails at IMPORT time with
+# a TypeError several frames deep in an unrelated module. Existence is therefore not
+# enough: each candidate is version-checked, because a login node whose `python3` is
+# 3.9 would otherwise be picked up silently and every array task would die after the
+# job was already queued.
 # ---------------------------------------------------------------------------
 PYTHON_BIN=""
 for candidate in \
     "$VENV_BIN/python3.12" \
+    "$VENV_BIN/python3.10" \
     "$VENV_BIN/python3" \
     "$VENV_BIN/python" \
+    python3.12 \
     python3.10 \
     python3 \
     python; do
-    if command -v "$candidate" >/dev/null 2>&1; then
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
         PYTHON_BIN="$candidate"
         break
     fi
 done
 if [ -z "$PYTHON_BIN" ]; then
-    echo "Python interpreter not found." >&2
+    echo "No Python >= 3.10 found. The simulator uses PEP 604 ('X | Y') annotations," >&2
+    echo "so 3.9 fails at import. Tried the venv at $VENV_BIN and the system path." >&2
+    echo "On bwUniCluster:  module load devel/python/3.10.12_gnu_12.2" >&2
+    echo "or create the venv:  python3.10 -m venv \"$PROJECT_DIR/.venv\"" >&2
     exit 1
 fi
+echo "python: $PYTHON_BIN ($("$PYTHON_BIN" -V 2>&1))"
 
 # ---------------------------------------------------------------------------
 # EXECUTION MODE 1 — the precompute job (submitted below, runs on a compute node)
@@ -139,9 +152,13 @@ fi
 
 mkdir -p "$LOGS_DIR" "$CACHE_DIR"
 
-# --- 2. Submit the precompute job ------------------------------------------
+# --- 2. Submit the precompute job -------------------------------------------
+# Two jobs in one: it warms the shared Bellman table cache so replicates do not each
+# solve the same PDE, AND it exercises every ddm_bellman condition once, which is what
+# makes it a usable gate for step 3. There is no skip switch, because skipping it
+# would silently remove the sanity check along with the optimisation.
 echo
-echo "[2/3] submitting the Bellman precompute job"
+echo "[2/3] submitting the Bellman precompute job (warms the cache; gates the array)"
 PRECOMPUTE_JOB=$(sbatch --parsable \
     --job-name=flex_precompute \
     --partition="$PARTITION" \
@@ -154,12 +171,22 @@ PRECOMPUTE_JOB=$(sbatch --parsable \
     "$0")
 echo "      job ${PRECOMPUTE_JOB}"
 
-# --- 3. Submit the array, held until the tables exist -----------------------
-# afterok, not afterany: if the precompute fails the tables are missing or partial,
-# and every task would then re-solve its own in-process -- the ~100x waste the shared
-# cache exists to prevent, discovered only from the wall-clock.
+# --- 3. Submit the array, GATED on the precompute ---------------------------
+# afterok, not afterany. The precompute solves every ddm_bellman condition once, which
+# means it also EXERCISES every condition once -- so it doubles as the campaign's last
+# and cheapest sanity check: a condition the model refuses to run fails here, in one
+# job, instead of in 100 array tasks that each leave a partial result directory.
+#
+# That is not hypothetical. The first submission died exactly this way: at delta = 0
+# the two strengths are identical, and the DDM's A_source 'ensemble' cannot deduce |A|
+# from a zero gap, so it raised. One degenerate condition, caught before 6600 runs went
+# out. Keep the gate.
+#
+# On failure: read the precompute's .err, fix the condition, resubmit. Releasing the
+# array by hand (`scontrol update jobid=<id> dependency=`) is possible but means
+# accepting that whatever the precompute caught is still in the grid.
 echo
-echo "[3/3] submitting array 0-$((TOTAL_TASKS - 1))%${THROTTLE}, held on ${PRECOMPUTE_JOB}"
+echo "[3/3] submitting array 0-$((TOTAL_TASKS - 1))%${THROTTLE}, gated on ${PRECOMPUTE_JOB}"
 ARRAY_JOB=$(sbatch --parsable \
     --job-name=flexibility_sweep \
     --partition="$PARTITION" \
@@ -175,6 +202,9 @@ ARRAY_JOB=$(sbatch --parsable \
 echo "      job ${ARRAY_JOB}"
 
 echo
-echo "Submitted. Watch with:  squeue -j ${PRECOMPUTE_JOB},${ARRAY_JOB}"
-echo "If the precompute fails, the array stays held and can be cancelled with:"
-echo "    scancel ${ARRAY_JOB}"
+echo "Submitted. Watch with:  squeue -u \$USER"
+echo
+echo "The array runs whether or not the precompute succeeds: the table cache is"
+echo "self-healing, so a failed precompute costs wall-clock, not results."
+echo "To release the array immediately, ignoring the ordering:"
+echo "    scontrol update jobid=${ARRAY_JOB} dependency="

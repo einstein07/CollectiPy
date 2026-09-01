@@ -40,9 +40,17 @@ Templates — never modified, deep-copied and overridden in memory:
 ## Running it
 
 ```bash
-python3 -m flexibility.preflight                 # always first; login-node safe
+.venv/bin/python -m flexibility.preflight        # always first; login-node safe
 bash submit-flexibility-sweep-bwunicluster.sh    # DRY_RUN=1 to stop before submission
 ```
+
+**Use the venv interpreter, not `python3`.** The simulator uses PEP 604 (`X | Y`)
+annotations, so Python 3.9 — the default `python3` on bwUniCluster login nodes —
+fails at import. `flexibility/__init__.py` raises a clear error rather than letting
+that surface as a bare `TypeError` deep in `src/plugin_base.py`, and the submit
+script version-checks every interpreter candidate rather than taking the first one
+that merely exists. On the cluster, `module load devel/python/3.10.12_gnu_12.2` also
+works.
 
 The submit script does the rest: it submits the Bellman precompute as its own compute
 job and then the array with `--dependency=afterok` on it. **Nothing is simulated on
@@ -52,7 +60,7 @@ the login node** — it runs only the preflight (a few seconds of arithmetic) an
 One task locally:
 
 ```bash
-python3 -m flexibility.run_chunk --only ra_u8__d1.9296pct:0 --results-root <dir>
+.venv/bin/python -m flexibility.run_chunk --only ra_u8__d1.9296pct:0 --results-root <dir>
 ```
 
 Output: `<root>/{arm}/diff_{pct}/replicate_{n}/`, the arm level replacing the

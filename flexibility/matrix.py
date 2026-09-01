@@ -210,12 +210,36 @@ def _derive(arm: str, delta: float, g: dict) -> dict:
     return d
 
 
+def deltas_for(arm: str) -> list[float]:
+    """The delta grid for one arm — NOT the same for every arm.
+
+    The DDM omits delta = 0. With identical strengths the gap is exactly zero, and
+    `A_source: 'ensemble'` deduces |A| from the declared target qualities, so there is
+    nothing to deduce: `resolve_ensemble_A` raises rather than inventing a drift, and
+    every known-|A| boundary would degenerate to z -> 0 anyway ("evidence is
+    worthless"). Running it would mean handing the DDM an ASSUMED discriminability it
+    has no basis for.
+
+    The ring attractor has no |A| to deduce, so delta = 0 is a real cell there: it
+    measures spontaneous symmetry-breaking, i.e. the rate at which the bump flips with
+    no quality difference at all. That is the noise floor the other cells are read
+    against, so it is kept.
+
+    Consequence for the analysis: delta = 0 is the one cell that is NOT a three-way
+    paired comparison. Every other cell has all three arms on the same seed.
+    """
+    grid = factors.delta_grid()
+    if arm in factors.DDM_ARMS:
+        return [d for d in grid if d > 0.0]
+    return grid
+
+
 def build() -> list[Condition]:
     """The ordered condition list. Deterministic; the array indexes into it."""
     g = geometry()
     conds, idx = [], 0
     for arm in factors.ARMS:
-        for delta in factors.delta_grid():
+        for delta in deltas_for(arm):
             conds.append(Condition(arm, delta, idx, _derive(arm, delta, g)))
             idx += 1
     return conds
