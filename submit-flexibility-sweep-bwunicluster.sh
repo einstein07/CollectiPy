@@ -52,6 +52,12 @@ BASE_PATH_ROOT="${BASE_PATH_ROOT:-$LOGS_DIR}"
 # ~8 s, so letting every replicate re-solve its condition's table would cost about
 # 100x what the campaign needs.
 CACHE_DIR="${CACHE_DIR:-$BASE_PATH_ROOT/table_cache}"
+# Concurrency cap: the `%N` in --array, i.e. the MOST tasks allowed to run at once.
+# It is a ceiling, not a reservation -- Slurm starts tasks as cores free up and never
+# holds resources waiting to reach N -- so raising it does not make any single task
+# harder to schedule. It does consume fairshare faster, which lowers priority for
+# later jobs, and the whole campaign is only ~7700 short runs, so there is nothing to
+# buy by pushing it. 100 is plenty.
 THROTTLE="${THROTTLE:-100}"
 
 PARTITION="${PARTITION:-cpu}"
@@ -62,19 +68,20 @@ PRECOMPUTE_CPUS="${PRECOMPUTE_CPUS:-1}"
 # Serial by default: each solve runs a simulator that forks ~4 processes, so nesting
 # a worker pool on top multiplies them. Measured serial: 21 solves in 155 s.
 PRECOMPUTE_WORKERS="${PRECOMPUTE_WORKERS:-1}"
-# Per-TASK, not per-array. Sized from measurement, not habit:
+# Per-TASK, not per-array — and this is the knob that actually decides how quickly
+# tasks get scheduled, because BACKFILL uses the REQUESTED time, not the actual one.
+# A short request drops into gaps between large reservations; a long one waits for a
+# long window even if the job finishes in seconds.
 #
-#   RA replicate, worst case   13.4 s  (full 1000-tick run, forced never to
-#                                       terminate; per-tick cost is independent of
-#                                       delta, so this is a true ceiling)
-#   RA task = 10 replicates   ~134 s
-#   DDM task, warm cache       ~5 s;  cold table solve adds ~9 s once
+# Measured at CHUNK = 25:
+#   typical task              19.2 s   (25 replicates, most terminating in ~50 ticks)
+#   worst case               ~335 s    (25 x a full 1000-tick RA run at 13.4 s, which
+#                                       is a true ceiling: RA per-tick cost does not
+#                                       depend on delta)
 #
-# 30 min is ~13x the measured worst case, which absorbs a compute node slower than
-# the dev box several times over. It also matters for QUEUE time: a short walltime
-# backfills into gaps, whereas a 24 h request waits for a 24 h window. Raise it via
-# the environment if a cell turns out to be pathological.
-ARRAY_TIME="${ARRAY_TIME:-01:00:00}"
+# 15 min is ~2.7x the worst case and ~45x the typical one. The earlier 1 h request was
+# ~190x typical and made these trivially short jobs look expensive to schedule.
+ARRAY_TIME="${ARRAY_TIME:-00:15:00}"
 ARRAY_MEM="${ARRAY_MEM:-4G}"
 
 # ---------------------------------------------------------------------------
@@ -110,6 +117,38 @@ if [ -z "$PYTHON_BIN" ]; then
     exit 1
 fi
 echo "python: $PYTHON_BIN ($("$PYTHON_BIN" -V 2>&1))"
+
+# ---------------------------------------------------------------------------
+# sbatch with retry.
+#
+# slurmctld answers EAGAIN ("Resource temporarily unavailable" / "temporarily unable
+# to accept job") when it is too loaded to take work. That is transient and says
+# nothing about the job, so a bare submission failing there is not a reason to make
+# the operator start over -- especially as this script submits TWO jobs and a failure
+# on the second would otherwise strand the first in the queue with nothing behind it.
+# ---------------------------------------------------------------------------
+submit_with_retry() {
+    local what="$1"; shift
+    local attempt=1 max=6 delay=15 jobid=""
+    while [ "$attempt" -le "$max" ]; do
+        if jobid=$(sbatch --parsable "$@" 2>/tmp/flex_sbatch_err.$$); then
+            rm -f "/tmp/flex_sbatch_err.$$"
+            printf '%s' "$jobid"
+            return 0
+        fi
+        if [ "$attempt" -lt "$max" ]; then
+            echo "      ${what}: sbatch attempt ${attempt}/${max} failed, retrying in ${delay}s" >&2
+            sed 's/^/        /' "/tmp/flex_sbatch_err.$$" >&2 || true
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+        attempt=$((attempt + 1))
+    done
+    echo "${what}: sbatch failed after ${max} attempts. Last error:" >&2
+    sed 's/^/  /' "/tmp/flex_sbatch_err.$$" >&2 || true
+    rm -f "/tmp/flex_sbatch_err.$$"
+    return 1
+}
 
 # ---------------------------------------------------------------------------
 # EXECUTION MODE 1 — the precompute job (submitted below, runs on a compute node)
@@ -172,7 +211,7 @@ mkdir -p "$LOGS_DIR" "$CACHE_DIR"
 # would silently remove the sanity check along with the optimisation.
 echo
 echo "[2/3] submitting the Bellman precompute job (warms the cache; gates the array)"
-PRECOMPUTE_JOB=$(sbatch --parsable \
+PRECOMPUTE_JOB=$(submit_with_retry "precompute" \
     --job-name=flex_precompute \
     --partition="$PARTITION" \
     --time="$PRECOMPUTE_TIME" \
@@ -200,7 +239,7 @@ echo "      job ${PRECOMPUTE_JOB}"
 # accepting that whatever the precompute caught is still in the grid.
 echo
 echo "[3/3] submitting array 0-$((TOTAL_TASKS - 1))%${THROTTLE}, gated on ${PRECOMPUTE_JOB}"
-ARRAY_JOB=$(sbatch --parsable \
+ARRAY_JOB=$(submit_with_retry "array" \
     --job-name=flexibility_sweep \
     --partition="$PARTITION" \
     --time="$ARRAY_TIME" \
@@ -211,7 +250,14 @@ ARRAY_JOB=$(sbatch --parsable \
     --output="${LOGS_DIR}/flexibility_%A_%a.out" \
     --error="${LOGS_DIR}/flexibility_%A_%a.err" \
     --export=ALL,BASE_PATH_ROOT="$BASE_PATH_ROOT",CACHE_DIR="$CACHE_DIR",PROJECT_DIR="$PROJECT_DIR" \
-    "$0")
+    "$0") || {
+        echo >&2
+        echo "The array could not be submitted, so the precompute job ${PRECOMPUTE_JOB}" >&2
+        echo "would be left queued with nothing behind it. Cancelling it:" >&2
+        scancel "${PRECOMPUTE_JOB}" 2>/dev/null || true
+        echo "  scancel ${PRECOMPUTE_JOB}   (done)" >&2
+        exit 1
+    }
 echo "      job ${ARRAY_JOB}"
 
 echo

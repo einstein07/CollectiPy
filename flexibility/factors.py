@@ -117,7 +117,21 @@ DIFF_MAX = 0.80               # 80%
 EXTRA_LOW_STEPS = 4
 
 REPS = 100                    # replicates per (arm, delta)
-CHUNK = 10                    # replicates packed into one array task
+
+#: Replicates packed into one array task. This sets the ARRAY SIZE, not the degree of
+#: parallelism -- concurrency is the submission throttle (`%N`), which is separate.
+#:
+#: 25 gives 308 array elements for 7700 runs, where 10 gave 770. Array elements each
+#: count as a job toward the cluster's MaxJobCount and toward any per-association
+#: MaxSubmitJobs, so a smaller array is easier for a loaded or limited controller to
+#: accept -- and submission started failing when the sub-1% points took the array from
+#: 650 to 770. Nothing about the science changes: same conditions, same seeds, same
+#: replicate count.
+#:
+#: The cost is restart granularity. A task that dies loses 25 replicates instead of
+#: 10, which at ~1 s per replicate (13.4 s worst case) is at most ~6 minutes of rework
+#: against a 1 h walltime.
+CHUNK = 25
 
 
 def delta_grid() -> list[float]:
