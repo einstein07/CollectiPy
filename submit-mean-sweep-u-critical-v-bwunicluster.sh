@@ -66,7 +66,7 @@ set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/home/kn/kn_kn/kn_pop547841/CollectiPy}"
 VENV_BIN="$PROJECT_DIR/.venv/bin"
 CONFIG_TEMPLATE="$PROJECT_DIR/config/mean_field_u_critical_v_sweep.json"
-LOGS_DIR="/pfs/work9/workspace/scratch/kn_pop547841-mySpace/collectipy-data/u_critical_v_sweep"
+LOGS_DIR="/pfs/work9/workspace/scratch/kn_pop547841-mySpace/collectipy-data/beta_1/u_critical_v_sweep"
 
 # ---------------------------------------------------------------------------
 # Sweep parameters
