@@ -28,6 +28,7 @@ Two questions, one campaign, one seed universe (`frontier-v1`, inherited):
 
 | file | role |
 |---|---|
+| `preflight.sh` | **steps 2–4 (+5 with `--dt-check`) in one command**, first failure stops it |
 | `qd.py` | §2 parameter block (single source of truth), templates, patchers **with the blocking §2 assertions**, manifests, seed routing, the §4 controller freeze |
 | `generate_manifest.py` | b\* cross-check (blocking) → manifests + templates + `frozen_controllers.json` |
 | `run_batch.py` | one array task: configs + metadata per replicate, `.done` sentinels, per-task failure files |
@@ -39,8 +40,18 @@ Two questions, one campaign, one seed universe (`frontier-v1`, inherited):
 
 ## Commands, in order (§10)
 
-Run 1–4 locally / on a login node. **Only step 5 submits, and you run it
-yourself.**
+**One-shot preflight** — steps 2–4 (add `--dt-check` for step 5) in a single
+command, stopping at the first failing gate; run it on the **workstation**
+(step 2 needs `../seoul-data` for the §4 b\* cross-check — the cluster only
+ever receives the shipped manifests):
+
+```bash
+bash scripts/qd_sweep_fixed_noise/preflight.sh --dt-check
+```
+
+It ends by printing the exact ship-and-submit commands for step 6, and warns
+loudly if the blocking step-halving gate has no passing report on record.
+The individual steps below remain for selective reruns.
 
 ```bash
 cd /home/sindiso/Documents/PhD/ring-attractor/CollectiPy
