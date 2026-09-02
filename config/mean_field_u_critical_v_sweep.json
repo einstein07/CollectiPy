@@ -98,10 +98,13 @@
                     "v": 0.5,
                     "u": 6.2,
                     "sigma": 1.5,
+                    "sigma_s": 0.0,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
                     "reference": "egocentric",
+                    "use_thresholding": false,
+                    "scale_velocity": false,
                     "norm_scale": 1.0,
                     "bifurcation": {
                         "mode": "behavioral",
