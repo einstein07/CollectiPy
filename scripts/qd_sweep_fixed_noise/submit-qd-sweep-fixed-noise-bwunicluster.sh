@@ -40,10 +40,19 @@ MANIFEST="${MANIFEST:-${LOGS_DIR}/${MANIFEST_NAME}}"
 
 RUNS_PER_CELL="${RUNS_PER_CELL:-100}"    # run_id 1..N, both arms (RECON D-12)
 # One task = one whole cell (~0.5-5 s/run -> ~1-9 min/task). The RA full
-# manifest is 2040 rows -> auto-chunked into MAX_ARRAY-sized sbatch arrays.
+# manifest is 1050 rows -> auto-chunked into MAX_ARRAY-sized sbatch arrays.
 RUNS_PER_TASK="${RUNS_PER_TASK:-100}"
 MAX_ARRAY="${MAX_ARRAY:-1000}"           # site array-size cap; auto-chunks
-THROTTLE="${THROTTLE:-100}"              # concurrent tasks
+THROTTLE="${THROTTLE:-500}"              # concurrent tasks (cpu nodes are
+#                                          shared; check `sacctmgr show assoc
+#                                          user=$USER` if jobs sit pending)
+# Declared walltime per task. At n = 100 the worst measured task is ~10-15
+# min, and a SHORT honest declaration makes tasks backfill into scheduler
+# gaps — the main queue-time lever. Raise it if you raise RUNS_PER_TASK /
+# RUNS_PER_CELL; a task killed at the limit is resumed by resubmitting
+# (.done idempotency), so an underestimate degrades gracefully.
+TIME_LIMIT="${TIME_LIMIT:-00:30:00}"
+PARTITION="${PARTITION:-cpu}"            # cpu | cpu_il (second shared pool)
 DRY_RUN="${DRY_RUN:-0}"
 
 PYTHON_BIN=""
@@ -99,9 +108,10 @@ if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
     while [ "$OFFSET" -lt "$TOTAL" ]; do
         CHUNK=$(( TOTAL - OFFSET )); [ "$CHUNK" -gt "$MAX_ARRAY" ] && CHUNK=$MAX_ARRAY
         if [ "$DRY_RUN" = "1" ]; then
-            echo "[dry run] sbatch --array=0-$((CHUNK - 1))%${THROTTLE} TASK_OFFSET=$OFFSET $0"
+            echo "[dry run] sbatch --array=0-$((CHUNK - 1))%${THROTTLE} --time=${TIME_LIMIT} --partition=${PARTITION} TASK_OFFSET=$OFFSET $0"
         else
             sbatch --array="0-$((CHUNK - 1))%${THROTTLE}" \
+                --time="$TIME_LIMIT" --partition="$PARTITION" \
                 --output="${LOGS_DIR}/%x_%A_%a.out" --error="${LOGS_DIR}/%x_%A_%a.err" \
                 --export=ALL,CAMPAIGN="$CAMPAIGN",TASK_OFFSET="$OFFSET",MANIFEST="$MANIFEST",BASE_PATH_ROOT="$BASE_PATH_ROOT",LOGS_DIR="$LOGS_DIR",PROJECT_DIR="$PROJECT_DIR",RUNS_PER_CELL="$RUNS_PER_CELL",RUNS_PER_TASK="$RUNS_PER_TASK" \
                 "$0"

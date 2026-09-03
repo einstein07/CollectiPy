@@ -304,12 +304,25 @@ since frontier-v1 seeds are trial-identity keyed and nothing re-keys):
    reference).
 2. **n = 100 runs/treatment** (both arms; was the spec's 1000). Wilson CIs
    widen to ≈ ±0.09 (the spec's ±0.03 target needed ≥600) — gates stay
-   valid CI-overlap tests, just lower-powered; volumes drop to 204 k RA +
-   12.6 k DDM runs (~30–90 core-h, ~21 GB). run_ids 1…100 are a prefix of
-   the halted campaign's 1…1000, so seed pairing with the reference holds.
+   valid CI-overlap tests, just lower-powered. run_ids 1…100 are a prefix
+   of the halted campaign's 1…1000, so seed pairing with the reference
+   holds.
 3. **No phasing** — both arms submit all three actual δ_Q at once (the
    §10.4 phase split and the manifest slices are removed); the across-δ_Q
    u = 0 monotonicity gate is evaluable from the first sync-back.
+4. **Δu = 1.0** (was the spec's 0.5): `U_GRID = [0, 2, 3, …, 35]` — 35
+   levels, still uniform, the 0→2 gap and u = 0 control untouched.
+   Rationale: the grid spacing is matched to the revised per-cell
+   resolution — at n = 100, adjacent Δu = 0.5 cells differ by less than
+   the ±0.09 CI almost everywhere, and the narrowest feature on the
+   surface (rise→peak→fall at v ≈ 1.0, spanning u ≈ 2–7) still gets 5–6
+   grid points. The gate-4 continuity cells (u ∈ {4, 6, 8}, v = 0.5), the
+   u = 35 step-halving endpoint and all u = 0 rows remain on-grid; dropped
+   half-levels can top up later in the same seed universe wherever the
+   data warrants (the frontier's wave-2 pattern).
+
+Resulting volumes: **1050 RA cells + 126 DDM points = 105 k + 12.6 k runs
+(~15–45 core-h, ~11 GB total)**.
 
 The §2 block above records the SPEC's pre-registered values; this decision
 is the operative deviation record (hard rule: discrepancies to RECON.md).

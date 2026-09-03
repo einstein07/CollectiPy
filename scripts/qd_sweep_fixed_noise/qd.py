@@ -56,7 +56,12 @@ WHITE_RATE = 0.07071068
 #: c = √2·white_rate. Fixed for every condition and both models.
 NOISE_SCALE_C = 0.1
 S0 = 5.0                            # static_0 strength; static_1 = S0·(1−diff)
-U_GRID = [0.0] + [round(2.0 + 0.5 * i, 1) for i in range(67)]   # 68 levels
+#: Researcher's revision (2026-09-03, RECON D-12): Δu = 1.0 (was the spec's
+#: 0.5) — the grid spacing matched to the n = 100 per-cell resolution
+#: (±0.09); still uniform, still 0 + 2…35, the 0→2 gap and the u = 0
+#: control untouched. Finer levels can top up later in the same seed
+#: universe wherever the data warrants.
+U_GRID = [0.0] + [float(u) for u in range(2, 36)]               # 35 levels
 V_GRID = [round(0.1 * i, 1) for i in range(1, 11)]              # 10 kernels
 #: Researcher's revision (2026-09-03, RECON D-12): n = 100 runs/treatment
 #: (was the spec's 1000; Wilson CIs widen to ~±0.09) and the FULL historic
@@ -89,7 +94,7 @@ if WHITE_RATE != 0.07071068:        # the §2 patcher assertion, at import
     raise SystemExit("WHITE_RATE drifted from the pinned 0.07071068")
 if abs(math.sqrt(2.0) * WHITE_RATE - NOISE_SCALE_C) > 1e-7:
     raise SystemExit("NOISE_SCALE_C must equal sqrt(2)*WHITE_RATE = 0.1")
-assert len(U_GRID) == 68 and U_GRID[1] == 2.0 and U_GRID[-1] == 35.0
+assert len(U_GRID) == 35 and U_GRID[1] == 2.0 and U_GRID[-1] == 35.0
 assert len(V_GRID) == 10 and V_GRID[0] == 0.1 and V_GRID[-1] == 1.0
 
 
