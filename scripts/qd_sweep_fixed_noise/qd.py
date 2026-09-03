@@ -146,7 +146,16 @@ write_manifest = frontier.write_manifest
 target_positions = frontier.target_positions
 first_crossing = frontier.first_crossing
 CORRECT_TARGET_ID = frontier.CORRECT_TARGET_ID
-EVIDENCE_SUBSTEP = frontier.EVIDENCE_SUBSTEP
+
+#: Researcher's instruction (2026-09-03, RECON D-13): ONE evidence substep
+#: per tick — dt_sub = dt/n_sub = 1 s — for every experiment, set at config
+#: level (the frontier template carried n_sub = 16). Per-tick evidence
+#: statistics are unchanged (N(A·dt, c²·dt) either way; R-1 still holds);
+#: what changes is the within-tick boundary check and the rt resolution
+#: (now 1 s), so the per-DRAW evidence step is c·√(dt/n_sub) = 0.1 — NOT
+#: the frontier's 0.025. Every boundary below it is single-draw dominated.
+DDM_N_SUB = 1
+EVIDENCE_SUBSTEP = round(NOISE_SCALE_C * math.sqrt(1.0 / DDM_N_SUB), 8)
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +182,7 @@ def build_ddm_template() -> dict:
     if blk.get("A_source") != "ensemble":
         raise SystemExit("DDM template A_source must be ensemble")
     blk["A_expected"] = None
+    blk["n_sub"] = int(DDM_N_SUB)   # dt_sub = 1 s (D-13)
     return data
 
 
@@ -418,6 +428,10 @@ def assert_config(cfg: dict, model: str, actual_bp: int,
         if [float(x) for x in blk["eta_rate"]] != [0.0, 0.0]:
             raise SystemExit("DDM eta_rate must be [0, 0] under the shared "
                              "stream — any other value is a second noise path")
+        if int(blk.get("n_sub", 0)) != DDM_N_SUB:
+            raise SystemExit(f"DDM n_sub = {blk.get('n_sub')!r} != "
+                             f"{DDM_N_SUB} (dt_sub must be 1 s for every "
+                             "experiment; RECON D-13)")
         if design_bp is None or blk.get("A_expected") != drift_A(design_bp):
             raise SystemExit(f"DDM A_expected = {blk.get('A_expected')!r} "
                              f"does not encode design δ_Q = {design_bp} bp")

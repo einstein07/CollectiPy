@@ -23,8 +23,10 @@ Two questions, one campaign, one seed universe (`frontier-v1`, inherited):
   plus static b\*_cost / b\*_RR — evaluated at every *actual* δ_Q: a 3 × 3
   design × actual matrix per controller (126 points) whose diagonal is the
   clairvoyant reference. Controllers are never re-tuned; freezing is the
-  experiment. Predictions pre-registered in spec §5. (Grid and n = 100
-  runs/treatment are the researcher's 2026-09-03 revision — RECON D-12.)
+  experiment. Predictions pre-registered in spec §5. (Full c_e grid,
+  n = 100 runs/treatment, Δu = 1.0 and dt_sub = 1 s — i.e. `n_sub = 1`,
+  one evidence draw per tick, per-draw step 0.1 — are the researcher's
+  2026-09-03 revisions: RECON D-12 / D-13.)
 
 ## Files
 

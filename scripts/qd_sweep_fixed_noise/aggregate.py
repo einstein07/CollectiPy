@@ -399,11 +399,23 @@ def continuity_gate(cells: list[dict], previous_csv: Path, dest: Path) -> bool:
 def diagonal_gate(points: list[dict], previous_parquet: Path,
                   dest: Path) -> bool:
     import pandas as pd
+    from models.bellman_boundary import solve_z_halt
     prev = pd.read_parquet(previous_parquet)
     report, ok = [], True
     diag = [p for p in points
             if int(p["design_bp"]) == 100 and int(p["actual_bp"]) == 100]
     for row in diag:
+        # D-13: this campaign runs n_sub = 1 (dt_sub = 1 s); the halted
+        # reference ran n_sub = 16. Per-tick evidence statistics are
+        # identical, so points whose halt plateau clears the per-draw step
+        # must still reproduce (BLOCKING); points below it are single-draw
+        # dominated and the within-tick crossing check differs by
+        # construction — reported, never failed on.
+        b = float(row["bound_param"])
+        z_halt = (solve_z_halt(qd.wald_k(100), qd.drift_A(100), b, 1.0)
+                  if row["variant"] == "bellman" else b)
+        row = dict(row, _z_halt=z_halt,
+                   _gated=z_halt >= qd.EVIDENCE_SUBSTEP)
         if row["variant"] == "bellman":
             sl = prev[(prev["variant"] == "bellman")
                       & (prev["bound"].astype(float)
@@ -425,11 +437,19 @@ def diagonal_gate(points: list[dict], previous_parquet: Path,
         acc_ok = ci_overlap(row["acc_all_lo"], row["acc_all_hi"], p_lo, p_hi)
         med_ok = ci_overlap(row["median_arrival_lo"],
                             row["median_arrival_hi"], p_mlo, p_mhi)
-        ok &= acc_ok and med_ok
+        if row["_gated"]:
+            ok &= acc_ok and med_ok
+            status = "PASS" if (acc_ok and med_ok) else "FAIL"
+        else:
+            status = ("INFORMATIONAL "
+                      + ("(agrees)" if (acc_ok and med_ok) else
+                         "(departs — single-draw dominated at n_sub = 1; "
+                         "reference ran n_sub = 16)"))
         report.append({
             "point_id": row["point_id"], "variant": row["variant"],
             "bound_param": row["bound_param"],
-            "status": "PASS" if (acc_ok and med_ok) else "FAIL",
+            "z_halt": row["_z_halt"], "gated": row["_gated"],
+            "status": status,
             "acc": row["acc_all"],
             "acc_ci": [row["acc_all_lo"], row["acc_all_hi"]],
             "ref_acc": p_acc, "ref_acc_ci": [p_lo, p_hi],
@@ -441,9 +461,14 @@ def diagonal_gate(points: list[dict], previous_parquet: Path,
             "n": row["n"], "n_ref": n_prev})
     with open(dest, "w", encoding="utf-8") as fh:
         json.dump({"gate": "PASS" if ok else "FAIL",
-                   "note": ("BLOCKING (§8.2): same condition, same seeds as "
-                            "the halted campaign's 1 % families — "
-                            "disagreement is template/noise drift."),
+                   "note": ("BLOCKING (§8.2) at points whose halt plateau "
+                            f"clears the {qd.EVIDENCE_SUBSTEP} per-draw step: "
+                            "same condition, same seeds as the halted "
+                            "campaign's 1 % families — disagreement there is "
+                            "template/noise drift. Below the step the "
+                            "within-tick crossing check differs by design "
+                            "(n_sub 1 here vs 16 in the reference; RECON "
+                            "D-13) — informational."),
                    "previous": str(previous_parquet), "points": report}, fh,
                   indent=2)
     print(f"\n1 %-diagonal regression gate (§8.2) vs {previous_parquet}:")

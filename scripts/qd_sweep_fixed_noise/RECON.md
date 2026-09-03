@@ -327,6 +327,35 @@ Resulting volumes: **1050 RA cells + 126 DDM points = 105 k + 12.6 k runs
 The §2 block above records the SPEC's pre-registered values; this decision
 is the operative deviation record (hard rule: discrepancies to RECON.md).
 
+### D-13 — researcher's instruction, 2026-09-03: dt_sub = 1 s (n_sub = 1), config level
+
+Every experiment runs ONE evidence substep per tick: `embodied_pure_ddm.
+n_sub = 1` (dt_sub = dt/n_sub = 1 s), set in `qd.build_ddm_template()` and
+asserted on every emitted config — never a submit-script knob. The frontier
+template carried n_sub = 16. Consequences:
+
+- **Per-tick evidence statistics are unchanged** — the tick increment is
+  N(A·dt, c²·dt) whether drawn as 16 substeps or 1 — so R-1, the noise
+  calibration, the Bellman solves (continuous-time PDE) and z_halt are all
+  untouched. The RA arm is untouched entirely (n_sub is DDM-only).
+- **What changes**: the within-tick boundary check happens once per tick
+  (was 16×), rt resolution coarsens to 1 s, and the per-DRAW evidence step
+  becomes c·√(dt/1) = **0.1** (was 0.025). Every boundary below 0.1 is now
+  single-draw dominated — that covers the whole static-cost family and the
+  low-c_e Bellman plateaus; the fast-guess floor accuracy rises (first
+  draw Φ(A/c) vs Φ(A/4c)). `qd.EVIDENCE_SUBSTEP = 0.1` now, and every
+  discretisation-limited flag (budget, static_analytic_check) keys off it.
+- **Gate §8.2 re-scoped**: the halted reference ran n_sub = 16, so the
+  diagonal is BLOCKING only at points whose halt plateau clears the 0.1
+  per-draw step (z_halt ≥ 0.1: bellman c_e ≥ ~20 and static-rr); below it
+  the crossing check differs by design and the comparison is reported as
+  informational. RA-side gates (§8.3/§8.4) and R-1 keep full drift-catching
+  power — they are n_sub-independent.
+- Manifests are UNCHANGED (n_sub is template-level, not a manifest field);
+  only the committed `config/qd_sweep_ddm_template.json` changes. Arm B
+  data produced at n_sub = 16 is not comparable and must be re-run; Arm A
+  data is unaffected.
+
 ---
 
 ## Pre-flight results (this workstation, 2026-09-02)

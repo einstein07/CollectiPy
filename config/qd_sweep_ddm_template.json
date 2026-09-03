@@ -126,7 +126,7 @@
             0.0,
             0.0
           ],
-          "n_sub": 16,
+          "n_sub": 1,
           "dist_mode": "none",
           "attention_mode": "none",
           "threshold_policy": "bellman",
