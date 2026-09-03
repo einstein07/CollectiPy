@@ -3,22 +3,17 @@
 # QD sweep at fixed noise (qd-sweep-fixed-noise-experiment.md)
 # bwUniCluster3.0 SLURM job array — manifest-driven, both arms, one script
 #
-# Usage (login node):
-#   CAMPAIGN=ddm bash submit-qd-sweep-fixed-noise-bwunicluster.sh   # Arm B (45 pts)
-#   MANIFEST=$LOGS_DIR/ra_manifest_actual100.csv \
-#       bash submit-qd-sweep-fixed-noise-bwunicluster.sh            # Arm A phase 1
-#   MANIFEST=$LOGS_DIR/ra_manifest_rest.csv \
-#       bash submit-qd-sweep-fixed-noise-bwunicluster.sh            # Arm A phase 2
+# Usage (login node) — both arms carry ALL THREE actual δ_Q (RECON D-12):
+#   CAMPAIGN=ddm bash submit-qd-sweep-fixed-noise-bwunicluster.sh   # Arm B (126 pts)
+#   bash submit-qd-sweep-fixed-noise-bwunicluster.sh                # Arm A (2040 cells)
 # Rerun failures:  resubmit the same command (done replicates are skipped)
 # Plan only:       DRY_RUN=1 bash submit-qd-sweep-fixed-noise-bwunicluster.sh
 #
 # MANIFESTS ARE NEVER GENERATED HERE. The §4 controller freeze needs the
 # halted campaign's swept trials (the b* cross-check is blocking), so
-# generate_manifest.py runs LOCALLY where seoul-data lives, and the four CSVs
+# generate_manifest.py runs LOCALLY where seoul-data lives, and the two CSVs
 # are copied into $LOGS_DIR before submission — the frontier's top-up
-# discipline, applied to the whole campaign. §10 order: Arm B and the
-# actual=100 slice of Arm A first (gates 2–4 resolvable early); the remaining
-# Arm A slices after those gates pass.
+# discipline, applied to the whole campaign.
 # =============================================================================
 #SBATCH --job-name=qd_sweep_fixed_noise
 #SBATCH --partition=cpu
@@ -43,10 +38,10 @@ LOGS_DIR="${LOGS_DIR:-/pfs/work9/workspace/scratch/kn_pop547841-mySpace/collecti
 BASE_PATH_ROOT="${BASE_PATH_ROOT:-${LOGS_DIR}}"
 MANIFEST="${MANIFEST:-${LOGS_DIR}/${MANIFEST_NAME}}"
 
-RUNS_PER_CELL="${RUNS_PER_CELL:-1000}"   # run_id 1..N, both arms
-# One task = one whole cell (~0.5-0.7 s/run -> ~10-17 min/task). The RA full
+RUNS_PER_CELL="${RUNS_PER_CELL:-100}"    # run_id 1..N, both arms (RECON D-12)
+# One task = one whole cell (~0.5-5 s/run -> ~1-9 min/task). The RA full
 # manifest is 2040 rows -> auto-chunked into MAX_ARRAY-sized sbatch arrays.
-RUNS_PER_TASK="${RUNS_PER_TASK:-1000}"
+RUNS_PER_TASK="${RUNS_PER_TASK:-100}"
 MAX_ARRAY="${MAX_ARRAY:-1000}"           # site array-size cap; auto-chunks
 THROTTLE="${THROTTLE:-100}"              # concurrent tasks
 DRY_RUN="${DRY_RUN:-0}"

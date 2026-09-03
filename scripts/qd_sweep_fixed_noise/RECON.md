@@ -81,8 +81,10 @@ constant-SNR pathology is measurably gone.
 ### R-2 — c_e ∈ FROZEN_CE presence in the halted campaign's results (gate §8.2)
 
 `seoul-data/beta-1/ra_ddm_frontier_ddm_halt/ra_ddm_frontier_ddm_halt_1.0/ddm_points.csv`
-carries `D_ce3` (acc 0.870, median 9.33 s), `D_ce20` (0.958, 9.84 s),
-`D_ce300` (0.996, 12.04 s) at n = 1000 — all three FROZEN_CE present — and
+carries the FULL Bellman grid at n = 1000 — D_ce0.03 … D_ce300 plus the
+ceiling extremes D_ce3000/D_ce30000, e.g. `D_ce3` (acc 0.870, median
+9.33 s), `D_ce20` (0.958, 9.84 s), `D_ce300` (0.996, 12.04 s) — so every
+FROZEN_CE value (D-12: all twelve) has its reference — and
 the static grid includes `S_b0.004189` (0.708) and `S_b0.1579` (0.907), the
 two sweep-derived optima. Gate 2 references exist and are seed-paired with
 this campaign at actual = 100 bp (verified: `env_seed(60, 100, 1)` =
@@ -232,15 +234,16 @@ differ at ~1e-15, so marginal trials can flip; gate §8.2 is CI-overlap (the
 spec's own criterion), not bitwise. Everything else on the diagonal —
 template, seeds, policy — is identical by construction.
 
-### D-07 — phased submission and manifest shipping
+### D-07 — manifest shipping (phasing since removed — see D-12)
 
-§10.4 (Arm B + the actual = 100 bp RA slice first) is implemented as manifest
-slices (`ra_manifest_actual100.csv` / `ra_manifest_rest.csv`) over ONE seed
-universe and one results tree — dropping or reordering cells never re-keys
-anything (seeds are trial-identity keyed). The submit script never generates
-manifests (the §4 freeze needs seoul-data, which lives off-cluster): they
+§10.4's phase split (Arm B + the actual = 100 bp RA slice first) was
+implemented as manifest slices and used for the first cluster deployment;
+**D-12 removed the phasing** — both arms now submit all three actual δ_Q at
+once. What stands from this decision: the submit script never generates
+manifests (the §4 freeze needs seoul-data, which lives off-cluster) — they
 are generated locally and shipped, the frontier's top-up discipline applied
-to the whole campaign.
+to the whole campaign; and everything lives in ONE seed universe and one
+results tree, so dropping or reordering cells never re-keys anything.
 
 ### D-08 — step-halving power (§3: "50 trials")
 
@@ -281,6 +284,35 @@ own guard (e.g. d200_a50_ce300: D_design 3.2 s vs D_actual 8.5 s);
 aggregator — data, not failure. Likewise censoring: `qd.ddm_budget` flags
 censor risk from D at the ACTUAL SNR (worst: d50_a*_ce300, D_actual up to
 25.7 s against the 60 s budget) — expected, reported, never hidden (§9).
+
+### D-12 — researcher's revision, 2026-09-03 (supersedes the spec's §2 values)
+
+Three directed changes, after inspecting the phase-1 tree on the cluster
+(existing cluster data deleted; the campaign restarts from scratch — safe,
+since frontier-v1 seeds are trial-identity keyed and nothing re-keys):
+
+1. **`FROZEN_CE` = the full historic grid** {0.03, 0.1, 0.3, 1, 3, 8, 20,
+   50, 125, 300, 3000, 30000} (campaign/factors.py verbatim + the two
+   ceiling extremes), frozen at every design — Arm B grows to (12 + 2) × 9 =
+   **126 points**. Consequences, all expected data: c_e ∈ {0.03…1} are
+   discretisation-limited at the 1 s tick (z_halt < substep 0.025 — the
+   fast-guess floor); the patient end designed at 50 bp censors heavily
+   (d50 ce300: D ≈ 25.7 s; ce3000/30000 designed at 50 bp: halt exit alone
+   exceeds the 60 s budget at every actual — near-total censoring, carried
+   in `decided_frac`/`halt_frac`, never hidden). Gate §8.2's diagonal now
+   covers all 12 Bellman c_e + both statics (all present in the halted 1 %
+   reference).
+2. **n = 100 runs/treatment** (both arms; was the spec's 1000). Wilson CIs
+   widen to ≈ ±0.09 (the spec's ±0.03 target needed ≥600) — gates stay
+   valid CI-overlap tests, just lower-powered; volumes drop to 204 k RA +
+   12.6 k DDM runs (~30–90 core-h, ~21 GB). run_ids 1…100 are a prefix of
+   the halted campaign's 1…1000, so seed pairing with the reference holds.
+3. **No phasing** — both arms submit all three actual δ_Q at once (the
+   §10.4 phase split and the manifest slices are removed); the across-δ_Q
+   u = 0 monotonicity gate is evaluable from the first sync-back.
+
+The §2 block above records the SPEC's pre-registered values; this decision
+is the operative deviation record (hard rule: discrepancies to RECON.md).
 
 ---
 

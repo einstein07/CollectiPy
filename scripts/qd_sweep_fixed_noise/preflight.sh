@@ -116,6 +116,6 @@ if [ "$DT_CHECK" != "1" ]; then
 fi
 echo
 echo "next (README step 6, cluster — you run it): ship the manifests, then"
-echo "  scp $R/{ra_manifest.csv,ra_manifest_actual100.csv,ra_manifest_rest.csv,ddm_manifest.csv,frozen_controllers.json} <cluster>:<LOGS_DIR>/"
+echo "  scp $R/{ra_manifest.csv,ddm_manifest.csv,frozen_controllers.json} <cluster>:<LOGS_DIR>/"
 echo "  CAMPAIGN=ddm bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh"
-echo "  MANIFEST=<LOGS_DIR>/ra_manifest_actual100.csv bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh"
+echo "  bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh"

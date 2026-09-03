@@ -18,11 +18,13 @@ Two questions, one campaign, one seed universe (`frontier-v1`, inherited):
   the old c = 2ΔQ coupling dead, SNR now genuinely scales with δ_Q
   (A/c = 0.25 / 0.5 / 1.0, k = 5 / 10 / 20).
 - **Arm B (supervisor's test):** DDM controllers **frozen at a design δ_Q**
-  — Bellman c_e ∈ {3, 20, 300} solved at (A_design, c = 0.1) via
-  `A_expected`, plus static b\*_cost / b\*_RR — evaluated at every *actual*
-  δ_Q: a 3 × 3 design × actual matrix per controller whose diagonal is the
+  — the full historic Bellman grid c_e ∈ {0.03, 0.1, 0.3, 1, 3, 8, 20, 50,
+  125, 300, 3000, 30000} solved at (A_design, c = 0.1) via `A_expected`,
+  plus static b\*_cost / b\*_RR — evaluated at every *actual* δ_Q: a 3 × 3
+  design × actual matrix per controller (126 points) whose diagonal is the
   clairvoyant reference. Controllers are never re-tuned; freezing is the
-  experiment. Predictions pre-registered in spec §5.
+  experiment. Predictions pre-registered in spec §5. (Grid and n = 100
+  runs/treatment are the researcher's 2026-09-03 revision — RECON D-12.)
 
 ## Files
 
@@ -70,8 +72,8 @@ $PY scripts/qd_sweep_fixed_noise/generate_manifest.py
 Needs `../seoul-data/beta-1/ra_ddm_frontier_ddm_halt/…_1.0/ddm_trials.parquet`
 (the §4 b\* re-derivation + cross-check against the sweep-derived
 0.004189 / 0.1579 — a mismatch HALTS). Writes `ra_manifest.csv` (2040 cells),
-the phased slices `ra_manifest_actual100.csv` / `ra_manifest_rest.csv`,
-`ddm_manifest.csv` (45 points), `frozen_controllers.json`, and both templates.
+`ddm_manifest.csv` (126 points), `frozen_controllers.json`, and both
+templates. Both arms carry all three actual δ_Q.
 
 ### 3. R-1 — the noise-convention gate (BLOCKING, §2)
 
@@ -88,8 +90,9 @@ streams identical across models, different across δ_Q). Writes
 ### 4. Smoke (§10.2) — the real script path, locally, no SLURM
 
 2 RA cells (`a100_v0.5_u6` = row 961, `a200_v0.5_u6` = row 1641) and 1 DDM
-point (`d100_a200_ce20`, an off-diagonal freeze = row 26), 20 replicates
-each, end-to-end through aggregation and one figure:
+point (`d100_a200_ce20`, an off-diagonal freeze = row 76), 20 replicates
+each, end-to-end through aggregation and one figure (`preflight.sh` resolves
+the rows from the manifests automatically):
 
 ```bash
 S=$PWD/results/qd_sweep_fixed_noise/smoke
@@ -98,7 +101,7 @@ for ROW in 961 1641; do
   env $COMMON CAMPAIGN=ra MANIFEST=$R/ra_manifest.csv TASK_OFFSET=0 SLURM_ARRAY_TASK_ID=$ROW \
       bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
 done
-env $COMMON CAMPAIGN=ddm MANIFEST=$R/ddm_manifest.csv TASK_OFFSET=0 SLURM_ARRAY_TASK_ID=26 \
+env $COMMON CAMPAIGN=ddm MANIFEST=$R/ddm_manifest.csv TASK_OFFSET=0 SLURM_ARRAY_TASK_ID=76 \
     bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
 
 $PY scripts/qd_sweep_fixed_noise/aggregate.py --arm ra  --base-root $S --manifest $R/ra_manifest.csv
@@ -126,42 +129,35 @@ Ship the manifests first (they are never generated on the cluster — the §4
 freeze needs seoul-data):
 
 ```bash
-scp $R/{ra_manifest.csv,ra_manifest_actual100.csv,ra_manifest_rest.csv,ddm_manifest.csv,frozen_controllers.json} \
+scp $R/{ra_manifest.csv,ddm_manifest.csv,frozen_controllers.json} \
     <cluster>:<LOGS_DIR>/
 ```
 
-§10.4 order — Arm B and the actual = 100 bp slice of Arm A first (gates
-2–4 resolvable early), remaining Arm A after those gates pass:
+Both arms carry all three actual δ_Q and submit in full (RECON D-12 —
+no phasing):
 
 ```bash
 # plan only
 DRY_RUN=1 CAMPAIGN=ddm bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
-DRY_RUN=1 MANIFEST=<LOGS_DIR>/ra_manifest_actual100.csv \
-    bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
+DRY_RUN=1 bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
 
-# phase 1: Arm B (45 tasks) + Arm A actual=100 (680 tasks)
+# for real: Arm B (126 tasks) + Arm A (2040 tasks)
 CAMPAIGN=ddm bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
-MANIFEST=<LOGS_DIR>/ra_manifest_actual100.csv \
-    bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
-
-# phase 2 (after gates 2-4 pass): the remaining 1360 RA cells
-MANIFEST=<LOGS_DIR>/ra_manifest_rest.csv \
-    bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
+bash scripts/qd_sweep_fixed_noise/submit-qd-sweep-fixed-noise-bwunicluster.sh
 ```
 
-One task = one cell (`RUNS_PER_TASK=1000`, ~10–17 min at ~0.5–0.7 s/run).
+One task = one cell (`RUNS_PER_TASK=100`, ~1–9 min at 0.5–5 s/run).
 Arrays auto-chunk at `MAX_ARRAY=1000` (shrink it if sbatch reports "Resource
 temporarily unavailable"). Re-running a command is free — `.done` replicates
 are skipped, so a partial array is fixed by resubmitting. The DDM submission
 first populates the Bellman table cache (replicate 1 of each point on the
-login node; 9 distinct tables — cache keys include A_design; `PRECOMPUTE=0`
-skips). Volume at defaults: **2.04 M RA + 45 k DDM runs ≈ 300–800
-core-hours** (0.45 s/run at mid-surface cells, but ~2.5–5 s/run in the
-stiff high-u corners at extreme v — see the RECON wall-time row; worst-case
-task length ≈ 85 min, far inside the 6 h limit). Cost knobs, in order (§3):
-`--n-runs-ra 600` at generation
-(Wilson CIs ≈ ±0.03); then `--ra-diffs 100` with the other two δ_Q on a
-reduced v set — **never thin `U_GRID`** (standing policy).
+login node; 36 distinct tables — 12 c_e × 3 designs, cache keys include
+A_design; `PRECOMPUTE=0` skips). Volume at n = 100: **204 k RA + 12.6 k DDM
+runs ≈ 30–90 core-hours, ~20 GB** (0.45 s/run at mid-surface cells, ~2.5–5
+s/run in the stiff high-u corners at extreme v — see the RECON wall-time
+row). Wilson CIs at n = 100 are ≈ ±0.09; raise `--n-runs-ra`/`--n-runs-ddm`
+at generation if sharper cells are needed (run_ids extend, nothing re-keys).
+Never thin `U_GRID` (standing policy).
 
 ### 7. Aggregate + gates (§8 — all blocking)
 
@@ -209,9 +205,8 @@ actual_bp, design_bp, resolved A/c/k, both seeds, scheme `frontier-v1`, git
 SHA), the simulator's native `config_folder_0/run_1.zip`, and `.done` on
 success. Any replicate re-executes with `python src/main.py -c
 <dir>/config.json`. Failures live in per-task files under `failures/`.
-Expect **~200 GB** for the full RA tree at 2.04 M replicates
-(~100 KB/run archive, the frontier's measured rate) — the §3 cost knobs
-shrink this proportionally; check the scratch quota before phase 2.
+Expect **~20 GB** for the full RA tree at 204 k replicates (~100 KB/run
+archive, the frontier's measured rate); the DDM tree adds ~1.3 GB.
 
 ## Out of scope (§11)
 

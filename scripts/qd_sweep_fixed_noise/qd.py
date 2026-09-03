@@ -58,10 +58,15 @@ NOISE_SCALE_C = 0.1
 S0 = 5.0                            # static_0 strength; static_1 = S0·(1−diff)
 U_GRID = [0.0] + [round(2.0 + 0.5 * i, 1) for i in range(67)]   # 68 levels
 V_GRID = [round(0.1 * i, 1) for i in range(1, 11)]              # 10 kernels
-N_RUNS_RA = 1000
-N_RUNS_DDM = 1000
+#: Researcher's revision (2026-09-03, RECON D-12): n = 100 runs/treatment
+#: (was the spec's 1000; Wilson CIs widen to ~±0.09) and the FULL historic
+#: c_e grid frozen at every design (was the spec's bold/balanced/patient
+#: {3, 20, 300}) — the campaign/factors.py grid verbatim plus the two
+#: ceiling extremes.
+N_RUNS_RA = 100
+N_RUNS_DDM = 100
 RA_SURFACE_DIFFS = list(DIFF_BP)    # subset this to trim RA volume
-FROZEN_CE = [3, 20, 300]            # bold / balanced / patient Bellman
+FROZEN_CE = [0.03, 0.1, 0.3, 1, 3, 8, 20, 50, 125, 300, 3000, 30000]
 #: Timeouts inherited from the halted campaign (recon slot in §2): the RA in
 #: its archived frame (1000 ticks ≡ s at 1 tick/s), the DDM at 60 s — both
 #: verified against the halted campaign's replicate configs (RECON R-0).
@@ -270,9 +275,10 @@ def build_ra_rows(n_runs: int = N_RUNS_RA,
 
 
 def build_ddm_rows(bstar100: dict, n_runs: int = N_RUNS_DDM) -> list[dict]:
-    """Arm B: (3 Bellman c_e + 2 static) × 3 design × 3 actual = 45 points.
-    `bound_param` is c_e for bellman rows and the RESOLVED frozen b for the
-    static rows; controllers are never re-tuned between conditions."""
+    """Arm B: (|FROZEN_CE| Bellman + 2 static) × 3 design × 3 actual points
+    (126 at the full 12-value c_e grid). `bound_param` is c_e for bellman
+    rows and the RESOLVED frozen b for the static rows; controllers are
+    never re-tuned between conditions."""
     rows = []
     for design in DIFF_BP:
         bounds = ([("bellman", f"{ce:g}") for ce in FROZEN_CE]
@@ -290,7 +296,7 @@ def build_ddm_rows(bstar100: dict, n_runs: int = N_RUNS_DDM) -> list[dict]:
                     "actual_bp": str(int(actual)), "bound_param": bound,
                     "n_runs": str(int(n_runs)),
                     "seed_scheme": seeding.SCHEME})
-    assert len(rows) == len(DIFF_BP) ** 2 * (len(FROZEN_CE) + 2) == 45
+    assert len(rows) == len(DIFF_BP) ** 2 * (len(FROZEN_CE) + 2)
     return rows
 
 

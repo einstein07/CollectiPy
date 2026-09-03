@@ -22,12 +22,12 @@ Blocking, in order, before anything is written:
 
 Outputs into --out-dir:
     ra_manifest.csv             Arm A, 680 cells × |RA_SURFACE_DIFFS|
-    ra_manifest_actual100.csv   the actual = 100 bp slice (§10 phase 1)
-    ra_manifest_rest.csv        the remaining slices (§10 phase 2)
-    ddm_manifest.csv            Arm B, 45 frozen-controller points
+    ddm_manifest.csv            Arm B, the frozen-controller design × actual
+                                matrix (126 points at the full c_e grid)
     frozen_controllers.json     the resolved freeze: b*(design), Wald anchors,
                                 z_halt + halt-exit budget per point
-plus `config/qd_sweep_{ra,ddm}_template.json`.
+plus `config/qd_sweep_{ra,ddm}_template.json`. Both arms carry all three
+actual δ_Q; submission is un-phased (researcher's revision, RECON D-12).
 """
 
 from __future__ import annotations
@@ -87,14 +87,8 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     ra_rows = qd.build_ra_rows(args.n_runs_ra, ra_diffs)
     ddm_rows = qd.build_ddm_rows(bstar100, args.n_runs_ddm)
-    ra100 = [r for r in ra_rows if r["actual_bp"] == "100"]
-    ra_rest = [r for r in ra_rows if r["actual_bp"] != "100"]
 
     jobs = [("ra", ra_rows, qd.RA_FIELDS, out / qd.RA_MANIFEST_NAME),
-            ("ra actual=100 slice", ra100, qd.RA_FIELDS,
-             out / "ra_manifest_actual100.csv"),
-            ("ra remaining slices", ra_rest, qd.RA_FIELDS,
-             out / "ra_manifest_rest.csv"),
             ("ddm", ddm_rows, qd.DDM_FIELDS, out / qd.DDM_MANIFEST_NAME)]
     for name, rows, fields, dest in jobs:
         if dest.exists() and not args.force:
@@ -162,9 +156,11 @@ def main(argv=None) -> int:
     print(f"\nvolumes: Arm A {len(ra_rows)} cells × {args.n_runs_ra} "
           f"= {n_ra:,} runs; Arm B {len(ddm_rows)} points × "
           f"{args.n_runs_ddm} = {n_ddm:,} runs")
-    print("cost knobs, in order (§3): --n-runs-ra 600 (Wilson CIs ≈ ±0.03); "
-          "then --ra-diffs 100 with the other δ_Q on a reduced v set — "
-          "NEVER thin U_GRID (standing policy)")
+    half = 1.96 * (0.25 / max(args.n_runs_ra, 1)) ** 0.5
+    print(f"precision at n = {args.n_runs_ra}: per-cell CIs up to ≈ "
+          f"±{half:.2f} (±0.03 needs --n-runs-ra 600; run_ids extend, "
+          "nothing re-keys). Trim volume via --ra-diffs — NEVER thin "
+          "U_GRID (standing policy)")
     print(f"\ngit sha: {qd.git_sha()}")
     print(json.dumps({"seed_scheme": qd.seeding.SCHEME,
                       "dth_deg": qd.DTH_DEG,
