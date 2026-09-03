@@ -53,6 +53,14 @@ THROTTLE="${THROTTLE:-500}"              # concurrent tasks (cpu nodes are
 # (.done idempotency), so an underestimate degrades gracefully.
 TIME_LIMIT="${TIME_LIMIT:-00:30:00}"
 PARTITION="${PARTITION:-cpu}"            # cpu | cpu_il (second shared pool)
+# Cells bundled into ONE array task, consecutively by manifest row. Every
+# array ELEMENT counts as a queued job toward the site's per-user submit
+# cap ("sbatch: Resource temporarily unavailable" = you hit it), so raise
+# this until N_CELLS/CELLS_PER_TASK fits under the cap (query it with
+#   sacctmgr show assoc user=$USER format=user,account,maxsubmitjobs,maxjobs)
+# and scale TIME_LIMIT with it: worst measured cell ~ 100 runs x 5 s
+# ~ 9 min, so e.g. CELLS_PER_TASK=5 wants TIME_LIMIT=01:00:00.
+CELLS_PER_TASK="${CELLS_PER_TASK:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 
 PYTHON_BIN=""
@@ -79,8 +87,9 @@ if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
 
     N_CELLS=$(( $(wc -l < "$MANIFEST") - 1 ))
     BATCHES=$(( (RUNS_PER_CELL + RUNS_PER_TASK - 1) / RUNS_PER_TASK ))
-    TOTAL=$(( N_CELLS * BATCHES ))
-    echo "campaign=${CAMPAIGN} cells=${N_CELLS} batches/cell=${BATCHES} total tasks=${TOTAL}"
+    N_GROUPS=$(( (N_CELLS + CELLS_PER_TASK - 1) / CELLS_PER_TASK ))
+    TOTAL=$(( N_GROUPS * BATCHES ))
+    echo "campaign=${CAMPAIGN} cells=${N_CELLS} cells/task=${CELLS_PER_TASK} batches/cell=${BATCHES} total tasks=${TOTAL}"
     echo "manifest=${MANIFEST}"
     echo "results under ${BASE_PATH_ROOT}/{ra,ddm}/actual_<bp>/..."
 
@@ -113,7 +122,7 @@ if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
             sbatch --array="0-$((CHUNK - 1))%${THROTTLE}" \
                 --time="$TIME_LIMIT" --partition="$PARTITION" \
                 --output="${LOGS_DIR}/%x_%A_%a.out" --error="${LOGS_DIR}/%x_%A_%a.err" \
-                --export=ALL,CAMPAIGN="$CAMPAIGN",TASK_OFFSET="$OFFSET",MANIFEST="$MANIFEST",BASE_PATH_ROOT="$BASE_PATH_ROOT",LOGS_DIR="$LOGS_DIR",PROJECT_DIR="$PROJECT_DIR",RUNS_PER_CELL="$RUNS_PER_CELL",RUNS_PER_TASK="$RUNS_PER_TASK" \
+                --export=ALL,CAMPAIGN="$CAMPAIGN",TASK_OFFSET="$OFFSET",MANIFEST="$MANIFEST",BASE_PATH_ROOT="$BASE_PATH_ROOT",LOGS_DIR="$LOGS_DIR",PROJECT_DIR="$PROJECT_DIR",RUNS_PER_CELL="$RUNS_PER_CELL",RUNS_PER_TASK="$RUNS_PER_TASK",CELLS_PER_TASK="$CELLS_PER_TASK" \
                 "$0"
         fi
         OFFSET=$(( OFFSET + CHUNK ))
@@ -124,21 +133,28 @@ fi
 # ----------------------------------------------------------------- EXECUTION
 GLOBAL_TASK=$(( ${TASK_OFFSET:-0} + SLURM_ARRAY_TASK_ID ))
 BATCHES=$(( (RUNS_PER_CELL + RUNS_PER_TASK - 1) / RUNS_PER_TASK ))
-ROW_IDX=$(( GLOBAL_TASK / BATCHES ))
+N_CELLS=$(( $(wc -l < "$MANIFEST") - 1 ))
+GROUP_IDX=$(( GLOBAL_TASK / BATCHES ))
 BATCH_IDX=$(( GLOBAL_TASK % BATCHES ))
 FIRST_RUN=$(( BATCH_IDX * RUNS_PER_TASK + 1 ))
 LAST_RUN=$(( FIRST_RUN + RUNS_PER_TASK - 1 ))
 [ "$LAST_RUN" -gt "$RUNS_PER_CELL" ] && LAST_RUN=$RUNS_PER_CELL
+ROW_FIRST=$(( GROUP_IDX * CELLS_PER_TASK ))
+ROW_LAST=$(( ROW_FIRST + CELLS_PER_TASK - 1 ))
+[ "$ROW_LAST" -ge "$N_CELLS" ] && ROW_LAST=$(( N_CELLS - 1 ))
 
-echo "[task ${GLOBAL_TASK}] campaign=${CAMPAIGN} row=${ROW_IDX} runs=${FIRST_RUN}-${LAST_RUN}"
+echo "[task ${GLOBAL_TASK}] campaign=${CAMPAIGN} rows=${ROW_FIRST}-${ROW_LAST} runs=${FIRST_RUN}-${LAST_RUN}"
 
 EXTRA=()
 if [ "$CAMPAIGN" = "ddm" ]; then
     EXTRA+=(--table-cache-dir "$BASE_PATH_ROOT/table_cache")
 fi
 
-"$PYTHON_BIN" "$BATCH" --arm "$CAMPAIGN" --manifest "$MANIFEST" \
-    --row "$ROW_IDX" --first-run "$FIRST_RUN" --last-run "$LAST_RUN" \
-    --base-root "$BASE_PATH_ROOT" --failures-dir "$LOGS_DIR/failures" \
-    --task-tag "$GLOBAL_TASK" "${EXTRA[@]}"
-exit $?
+RC=0
+for ROW_IDX in $(seq "$ROW_FIRST" "$ROW_LAST"); do
+    "$PYTHON_BIN" "$BATCH" --arm "$CAMPAIGN" --manifest "$MANIFEST" \
+        --row "$ROW_IDX" --first-run "$FIRST_RUN" --last-run "$LAST_RUN" \
+        --base-root "$BASE_PATH_ROOT" --failures-dir "$LOGS_DIR/failures" \
+        --task-tag "${GLOBAL_TASK}_r${ROW_IDX}" "${EXTRA[@]}" || RC=1
+done
+exit $RC
