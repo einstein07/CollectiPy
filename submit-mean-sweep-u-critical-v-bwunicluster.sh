@@ -12,8 +12,7 @@
 # here reproduces the curve already in seoul-data/beta-1/u_critical_sweep:
 #   - both targets carry strength 0.0, i.e. the bump forms spontaneously with
 #     no external drive; u is the only thing pushing the ring past threshold
-#   - mean steady-state ||z|| over RUNS_PER_U replicates at each u (20, the
-#     replicate count behind the published v = 0.5 curve)
+#   - mean steady-state ||z|| over RUNS_PER_U replicates at each u
 #   - 75 u values log-spaced from 1 to 100 (ratio ≈ 1.064, 6.4 %/step), which
 #     puts ~10 sample points in the 4–10 window bracketing u* ≈ 6.16 at v = 0.5
 #     while staying coarse in the flat saturation regime above ~20
@@ -36,7 +35,7 @@
 #
 # Environment overrides (all optional):
 #   V_VALUES="0.1 0.2"     sweep only these v values
-#   RUNS_PER_U=100         replicates per (v, u)          [default 20]
+#   RUNS_PER_U=20          replicates per (v, u)          [default 100]
 #   RUNS_PER_TASK=10       replicates packed per array task [default 10]
 #   MAX_CONCURRENT=50      per-array throttle             [default 50]
 #   SKIP_EXISTING=1        skip replicates whose run_1.zip already exists [default 1]
@@ -44,8 +43,9 @@
 #   DRY_RUN=1              print the sbatch commands instead of submitting
 #
 # One array is submitted per v value rather than one big array for the whole
-# grid: at RUNS_PER_U=100 that would be 7500 tasks and exceed MaxArraySize,
-# whereas at the default settings each per-v array is 150 tasks, well inside it. Each task derives its (u, run_id) pair from SLURM_ARRAY_TASK_ID
+# grid: 10 x 75 x 10 = 7500 tasks would exceed the cluster's MaxArraySize,
+# whereas each per-v array is 750 tasks — the exact size already proven by the
+# v = 0.5 run. Each task derives its (u, run_id) pair from SLURM_ARRAY_TASK_ID
 # and reads its v from the exported V_VALUE.
 # =============================================================================
 
@@ -75,7 +75,7 @@ U_MIN=1.0
 U_MAX=100.0
 NUM_U_STEPS=75            # log-spaced → ratio ≈ 1.064 (6.4 %/step)
 V_VALUES="${V_VALUES:-0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0}"
-RUNS_PER_U="${RUNS_PER_U:-20}"        # replicates per (v, u) — as in the v = 0.5 run
+RUNS_PER_U="${RUNS_PER_U:-100}"       # replicates per (v, u)
 RUNS_PER_TASK="${RUNS_PER_TASK:-10}"  # replicates packed into each array task
 MAX_CONCURRENT="${MAX_CONCURRENT:-50}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
