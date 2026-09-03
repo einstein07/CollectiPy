@@ -36,17 +36,29 @@
 # Environment overrides (all optional):
 #   V_VALUES="0.1 0.2"     sweep only these v values
 #   RUNS_PER_U=20          replicates per (v, u)          [default 100]
-#   RUNS_PER_TASK=10       replicates packed per array task [default 10]
+#   RUNS_PER_TASK=10       replicates packed per array task [default 50]
 #   MAX_CONCURRENT=50      per-array throttle             [default 50]
 #   SKIP_EXISTING=1        skip replicates whose run_1.zip already exists [default 1]
 #   BASE_PATH_ROOT=/path   results root                   [default LOGS_DIR]
+#   SUBMIT_DELAY=10        seconds between array submissions [default 10]
+#   SUBMIT_RETRIES=5       sbatch attempts per array        [default 5]
+#   CHAIN=1                run the v-arrays one after another via --dependency
 #   DRY_RUN=1              print the sbatch commands instead of submitting
 #
 # One array is submitted per v value rather than one big array for the whole
-# grid: 10 x 75 x 10 = 7500 tasks would exceed the cluster's MaxArraySize,
-# whereas each per-v array is 750 tasks — the exact size already proven by the
-# v = 0.5 run. Each task derives its (u, run_id) pair from SLURM_ARRAY_TASK_ID
-# and reads its v from the exported V_VALUE.
+# grid: 10 x 75 x 20 = 15000 tasks would exceed the cluster's MaxArraySize,
+# whereas each per-v array is 150 tasks. Each task derives its (u, run_id)
+# range from SLURM_ARRAY_TASK_ID and reads its v from the exported V_VALUE.
+#
+# Job-record pressure is the binding constraint here, not the array cap. At
+# RUNS_PER_TASK=10 the ten arrays put 7500 job records on slurmctld in one
+# burst, which it answers with
+#     sbatch: error: Slurm temporarily unable to accept job, sleeping and retrying
+# So the replicates are packed 50-per-task instead: 150 tasks per v, 1500
+# records for the whole sweep, at ~19 min of wall time per task (~23 s/run,
+# measured). SUBMIT_DELAY additionally spaces the ten sbatch calls out, and
+# CHAIN=1 holds each v-array behind the previous one when the controller is
+# busy enough that even that is too much at once.
 # =============================================================================
 
 # --- SLURM directives (only active when submitted via sbatch) ----------------
@@ -76,9 +88,14 @@ U_MAX=100.0
 NUM_U_STEPS=75            # log-spaced → ratio ≈ 1.064 (6.4 %/step)
 V_VALUES="${V_VALUES:-0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0}"
 RUNS_PER_U="${RUNS_PER_U:-100}"       # replicates per (v, u)
-RUNS_PER_TASK="${RUNS_PER_TASK:-10}"  # replicates packed into each array task
+# 50 replicates per task keeps the whole sweep to 1500 job records; at 10 it is
+# 7500 and slurmctld starts refusing submissions (see the note in the header).
+RUNS_PER_TASK="${RUNS_PER_TASK:-50}"
 MAX_CONCURRENT="${MAX_CONCURRENT:-50}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
+SUBMIT_DELAY="${SUBMIT_DELAY:-10}"
+SUBMIT_RETRIES="${SUBMIT_RETRIES:-5}"
+CHAIN="${CHAIN:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 
 BASE_PATH_ROOT="${BASE_PATH_ROOT:-${LOGS_DIR}}"
@@ -144,6 +161,8 @@ if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
     echo "  tasks per v-array : ${TASKS_PER_V}"
     echo "  total array tasks : $(( TASKS_PER_V * N_V ))"
     echo "  total runs        : $(( N_U * N_V * RUNS_PER_U ))"
+    echo "  est. per task     : ~$(( RUNS_PER_TASK * 23 / 60 )) min (wall limit is 24 h)"
+    echo "  submit delay      : ${SUBMIT_DELAY}s between arrays, chain=${CHAIN}"
     echo "  skip existing     : ${SKIP_EXISTING}"
     echo "  results base path : ${BASE_PATH_ROOT}"
     echo ""
@@ -160,21 +179,65 @@ if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
         mkdir -p "$LOGS_DIR"
     fi
 
-    for V_VALUE in "${V_LIST[@]}"; do
+    SUBMITTED=()
+    PREV_JOB=""
+    for V_IDX in "${!V_LIST[@]}"; do
+        V_VALUE="${V_LIST[$V_IDX]}"
         SBATCH_ARGS=(
+            --parsable
             --job-name="u_crit_v${V_VALUE}"
             --array="0-$((TASKS_PER_V - 1))%${MAX_CONCURRENT}"
             --output="${LOGS_DIR}/u_critical_v${V_VALUE}_%A_%a.out"
             --error="${LOGS_DIR}/u_critical_v${V_VALUE}_%A_%a.err"
             --export="ALL,V_VALUE=${V_VALUE},BASE_PATH_ROOT=${BASE_PATH_ROOT},PROJECT_DIR=${PROJECT_DIR},RUNS_PER_U=${RUNS_PER_U},RUNS_PER_TASK=${RUNS_PER_TASK},SKIP_EXISTING=${SKIP_EXISTING}"
-            "$0"
         )
+        # Each v-array starts only once the previous one has left the queue, so
+        # the controller never holds more than one array's worth of runnable work.
+        if [ "$CHAIN" = "1" ] && [ -n "$PREV_JOB" ]; then
+            SBATCH_ARGS+=( --dependency="afterany:${PREV_JOB}" )
+        fi
+        SBATCH_ARGS+=( "$0" )
+
         if [ "$DRY_RUN" = "1" ]; then
             echo "sbatch ${SBATCH_ARGS[*]}"
-        else
-            sbatch "${SBATCH_ARGS[@]}"
+            PREV_JOB="DRYRUN$((V_IDX + 1))"
+            continue
+        fi
+
+        # sbatch retries the "temporarily unable to accept job" case itself, but
+        # gives up eventually; back off and try again rather than losing this v.
+        JOB_ID=""
+        for ATTEMPT in $(seq 1 "$SUBMIT_RETRIES"); do
+            if OUT="$(sbatch "${SBATCH_ARGS[@]}" 2>&1)"; then
+                JOB_ID="${OUT%%;*}"
+                break
+            fi
+            echo "  v=${V_VALUE}: sbatch failed (attempt ${ATTEMPT}/${SUBMIT_RETRIES}): ${OUT}" >&2
+            sleep $(( SUBMIT_DELAY * ATTEMPT * 2 ))
+        done
+
+        if [ -z "$JOB_ID" ]; then
+            echo "" >&2
+            echo "giving up on v=${V_VALUE} after ${SUBMIT_RETRIES} attempts." >&2
+            echo "submitted so far: ${SUBMITTED[*]:-none}" >&2
+            REMAINING=("${V_LIST[@]:$V_IDX}")
+            echo "once the controller settles, submit the rest with:" >&2
+            echo "  V_VALUES=\"${REMAINING[*]}\" bash $0" >&2
+            echo "(SKIP_EXISTING=1 makes re-running a partially finished v harmless.)" >&2
+            exit 1
+        fi
+
+        SUBMITTED+=("v=${V_VALUE}:${JOB_ID}")
+        echo "  submitted v=${V_VALUE} as job ${JOB_ID}"
+        if [ "$V_IDX" -lt "$(( N_V - 1 ))" ]; then
+            sleep "$SUBMIT_DELAY"
         fi
     done
+
+    if [ "$DRY_RUN" != "1" ]; then
+        echo ""
+        echo "submitted ${#SUBMITTED[@]} arrays: ${SUBMITTED[*]:-none}"
+    fi
     exit 0
 fi
 
