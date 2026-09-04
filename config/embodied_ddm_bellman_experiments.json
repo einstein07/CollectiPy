@@ -121,7 +121,21 @@
                         "_comment_N_t": "The free boundary converges as O(sqrt(dt)) (smooth pasting makes the contact tangential), so dt <~ 1e-3 is needed to bring z(t) inside 2 dx. Still well under a second to solve.",
                         "X_max_factor": 4.0,
                         "_comment_X_max_factor": "Grid half-width in units of the quasi-static z(0). Raise it if the solver warns that part of the horizon has no contact set inside X_max.",
-                        "scheme": "crank_nicolson"
+                        "scheme": "crank_nicolson",
+                        "variant": "continuous",
+                        "_comment_variant": "continuous | discrete (BELLMAN_KNOWN_A_DERIVATION Sections 1-12 | Section 13). continuous: the free-boundary PDE in (x,t) -- the DIFFUSION LIMIT of the task, solved with N_x/N_t/X_max_factor/scheme above. discrete: the exact posterior-predictive Bellman recursion on the step lattice the accumulator actually integrates on -- one Gaussian observation per interval Delta_t (= dt/n_sub under in-model eta_rate noise; = the tick under a shared sensory stream, which draws once per tick), the exact per-step cost Delta_t + (d_{n+1}-d_n)/v, and a boundary SEQUENCE b_n with no smooth pasting. At the simulated intervals the two differ materially: the continuous boundary over-waits at every step (the per-step LLR sd sqrt(2 I Delta_t) is of order the threshold), so discrete is the normative policy for a step simulation; the continuous one is its limit and analytic cross-check. The discrete solver reads N_L/L_max_factor/quadrature/n_quad/tol_fixed_point/Delta_t below and IGNORES N_x/N_t/X_max_factor/scheme/T_max_check_factor. terminal and halt_cost_rate apply to both; 'continue_at_midpoint' is accepted as an alias of 'halt_sprt'. Known-|A| model only. Left at continuous here so this config's results are unchanged; flip to discrete to run Section 13.",
+                        "Delta_t": null,
+                        "_comment_Delta_t": "discrete only. null = the accumulator's own observation interval (dt/n_sub, or the tick under a shared stream) -- a TASK parameter, not a numerical one. A float overrides it (the recursion is then solved on a different lattice from the one the runtime tests |x| >= z on; logged as a warning, diagnostics only).",
+                        "N_L": 2001,
+                        "_comment_N_L": "discrete only. LLR grid points on the symmetric grid [-L_max, L_max]; raised automatically so the per-step kernel spans >= 8 cells when Delta_t is small.",
+                        "L_max_factor": 8.0,
+                        "_comment_L_max_factor": "discrete only. Grid half-width as a multiple of the midpoint threshold b_mid (LLR units).",
+                        "quadrature": "grid",
+                        "_comment_quadrature": "discrete only. grid | gauss_hermite. grid (default): the predictive-mixture expectation as a banded convolution of exact Gaussian densities on the LLR grid (rows rescaled to the exact normal-CDF mass, G integrated over the mass beyond the grid) -- uniformly second order in the grid spacing. gauss_hermite: the derivation's literal scheme (n_quad nodes per component, the value function interpolated at them); kept as a cross-check -- its node positions move with n_quad and wobble the boundary by ~0.3% at the intervals in use.",
+                        "n_quad": 40,
+                        "_comment_n_quad": "discrete only, read under quadrature gauss_hermite: Gauss-Hermite nodes per Gaussian component of the predictive mixture.",
+                        "tol_fixed_point": 1e-10,
+                        "_comment_tol_fixed_point": "discrete only. Tolerance of the midpoint fixed point W_mid = min{G, c_h Delta_t + E W_mid}."
                     }
                 }
             }

@@ -40,6 +40,31 @@ logger = logging.getLogger("sim.bellman_boundary")
 #: drift and the grid from being nonsense.
 _MAX_K_XMAX = 500.0
 
+#: Accepted spellings of the terminal condition. `continue_at_midpoint` is the name the
+#: derivation document (BELLMAN_KNOWN_A_DERIVATION Section 5.1 / 13.5) uses for what
+#: the code, the configs and the cache keys have always called `halt_sprt`: an agent
+#: that arrives undecided halts at the midpoint and keeps sampling. One mode, two names.
+_TERMINAL_ALIASES = {
+    "forced_choice": "forced_choice",
+    "halt_sprt": "halt_sprt",
+    "continue_at_midpoint": "halt_sprt",
+}
+
+
+def normalise_terminal(terminal) -> str:
+    """Return the canonical terminal mode (`forced_choice` | `halt_sprt`).
+
+    Raises `ValueError` -- with a message starting "terminal must be" -- for anything
+    else, so every caller rejects the same strings with the same words.
+    """
+    key = str(terminal).strip().lower()
+    if key not in _TERMINAL_ALIASES:
+        raise ValueError(
+            "terminal must be 'forced_choice', 'halt_sprt' or its alias "
+            f"'continue_at_midpoint'; got '{terminal}'"
+        )
+    return _TERMINAL_ALIASES[key]
+
 
 def myopic_z(A: float, c: float, c_e: float, c_tau: float) -> float:
     """The static (quasi-static) optimum `z*` from `sinh(a) + a = rho`.
@@ -118,13 +143,9 @@ def terminal_slice(
     corrupts the stopping-set extraction. Build piecewise, never by minimum — test
     B9(ii) is the gate for exactly this bug.
     """
-    terminal = str(terminal).strip().lower()
+    terminal = normalise_terminal(terminal)
     if terminal == "forced_choice":
         return obst.copy(), 0.0
-    if terminal != "halt_sprt":
-        raise ValueError(
-            f"terminal must be 'forced_choice' or 'halt_sprt'; got '{terminal}'"
-        )
     x = np.asarray(x, dtype=float)
     k, A, c_e, c_h = float(k), abs(float(A)), float(c_e), float(c_h)
     z_halt = solve_z_halt(k, A, c_e, c_h)
@@ -209,11 +230,7 @@ def bellman_boundary(
     `z_halt`, `g_min` and `halt_mean_exit_time = D(z_halt)`.
     """
     A, c, c_e, T_max = abs(float(A)), float(c), float(c_e), float(T_max)
-    terminal = str(terminal).strip().lower()
-    if terminal not in {"forced_choice", "halt_sprt"}:
-        raise ValueError(
-            f"terminal must be 'forced_choice' or 'halt_sprt'; got '{terminal}'"
-        )
+    terminal = normalise_terminal(terminal)
     halt_cost_rate = float(halt_cost_rate)
     if terminal == "halt_sprt" and halt_cost_rate <= 0.0:
         raise ValueError("halt_cost_rate must be > 0 under terminal 'halt_sprt'")

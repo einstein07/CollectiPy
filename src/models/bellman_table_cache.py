@@ -29,7 +29,10 @@ Design constraints, in order:
 The key is the sha1 of the canonical rendering of
 `(A, c, c_e, r0, L, v, T_max, N_x, N_t, X_max_factor, scheme)` — the spec's list plus
 `X_max_factor` and `scheme`, which also parameterise the solve; omitting them could
-alias two different tables under one key.
+alias two different tables under one key. The discrete variant (Section 13 of the
+derivation) appends its own parameters -- `variant`, `Delta_t`, `N_L`, `L_max_factor`,
+`n_quad`, `tol_fixed_point`, `predecision_motion`, `quadrature` -- so a discrete table can never
+alias a continuous one, while every continuous key stays exactly what it was.
 """
 
 from __future__ import annotations
@@ -64,13 +67,23 @@ def table_key(
     scheme: str,
     terminal: str = "forced_choice",
     halt_cost_rate: float = 1.0,
+    variant: str = "continuous",
+    Delta_t: Optional[float] = None,
+    N_L: Optional[int] = None,
+    L_max_factor: Optional[float] = None,
+    n_quad: Optional[int] = None,
+    tol_fixed_point: Optional[float] = None,
+    predecision_motion: Optional[str] = None,
+    quadrature: Optional[str] = None,
 ) -> str:
     """Return the cache key for one solve. Floats render via repr: bit-identical
     inputs give the same key, and any real difference in inputs changes it.
 
     The terminal condition parameterises the solve too (BELLMAN_KNOWN_A_TERMINAL_HALT
     Section 3), so it is part of the key — but only when it departs from the default,
-    so every existing forced-choice cache stays valid under its historical key.
+    so every existing forced-choice cache stays valid under its historical key. The
+    same rule applies to `variant`: the discrete solver's parameters are appended only
+    when `variant != 'continuous'`.
     """
     parts = [
         f"fmt={_FORMAT}",
@@ -84,6 +97,22 @@ def table_key(
     if str(terminal) != "forced_choice":
         parts.append(f"terminal={str(terminal)}")
         parts.append(f"halt_cost_rate={float(halt_cost_rate)!r}")
+    if str(variant) != "continuous":
+        parts.append(f"variant={str(variant)}")
+        for name, value in (
+            ("Delta_t", Delta_t), ("N_L", N_L), ("L_max_factor", L_max_factor),
+            ("n_quad", n_quad), ("tol_fixed_point", tol_fixed_point),
+            ("predecision_motion", predecision_motion), ("quadrature", quadrature),
+        ):
+            if value is None:
+                continue
+            if name in ("N_L", "n_quad"):
+                rendered = f"{int(value)}"
+            elif name in ("predecision_motion", "quadrature"):
+                rendered = str(value)
+            else:
+                rendered = f"{float(value)!r}"
+            parts.append(f"{name}={rendered}")
     return hashlib.sha1("|".join(parts).encode()).hexdigest()
 
 
@@ -112,6 +141,19 @@ def load_table(cache_dir, key: str):
                     [float(x) for x in data["input_values"]],
                 )},
                 "scheme": str(data["scheme"]),
+                # Optional, written by the discrete variant: the quasi-static
+                # comparator on the same lattice, and scalar diagnostics. Absent from
+                # every table written before the fields existed, hence the fallbacks.
+                "z_myopic_arr": (
+                    np.array(data["z_myopic_arr"], dtype=float)
+                    if "z_myopic_arr" in data else None
+                ),
+                "extras": (
+                    {k: v for k, v in zip(
+                        [str(s) for s in data["extra_names"]],
+                        [float(x) for x in data["extra_values"]],
+                    )} if "extra_names" in data else {}
+                ),
             }
     except Exception as exc:  # torn/foreign file: miss, never fatal
         logger.warning("bellman table cache: unreadable %s (%s); re-solving", path, exc)
@@ -130,14 +172,27 @@ def save_table(
     wall_time_s: float,
     scheme: str,
     horizon_ok: Optional[bool] = None,
+    z_myopic_arr: Optional[np.ndarray] = None,
+    extras: Optional[dict] = None,
 ) -> Optional[Path]:
     """Atomically persist one solved table. Failure to write is logged, never raised:
-    the solve already succeeded, and the run must not die on a full cache disk."""
+    the solve already succeeded, and the run must not die on a full cache disk.
+
+    `z_myopic_arr` (the comparator on the table's own lattice) and `extras` (scalar
+    diagnostics, floats only) are optional; they are what the discrete variant needs to
+    round-trip through a hit, and a table without them loads exactly as before."""
     cache_dir = Path(cache_dir)
     path = _path(cache_dir, key)
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         names = sorted(inputs)
+        extra_names = sorted(extras or {})
+        payload = {}
+        if z_myopic_arr is not None:
+            payload["z_myopic_arr"] = np.asarray(z_myopic_arr, dtype=float)
+        if extra_names:
+            payload["extra_names"] = np.array(extra_names)
+            payload["extra_values"] = np.array([float(extras[k]) for k in extra_names])
         fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as fh:
@@ -151,6 +206,7 @@ def save_table(
                     input_names=np.array(names),
                     input_values=np.array([float(inputs[k]) for k in names]),
                     scheme=np.array(str(scheme)),
+                    **payload,
                 )
             os.replace(tmp, path)          # atomic on POSIX: last writer wins, whole
         finally:                           # files only, no partial state visible

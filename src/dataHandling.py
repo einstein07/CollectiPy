@@ -732,6 +732,12 @@ class SpaceDataHandling(DataHandling):
             ("x_at_arrival", spin_values.get("pure_ddm_x_at_arrival")),
             ("halt_duration", spin_values.get("pure_ddm_halt_duration")),
             ("halt_guard_hits", spin_values.get("pure_ddm_halt_guard_hits")),
+            # --- which Bellman solver produced z(t) (BELLMAN_KNOWN_A_DERIVATION S13) ---
+            # 'continuous' (the PDE, Variant C) or 'discrete' (the exact step-lattice
+            # recursion, Variant D); Delta_t is the observation interval the discrete
+            # table was solved on. Appended last so positional readers are unaffected.
+            ("bellman_variant", spin_values.get("pure_ddm_bellman_variant")),
+            ("bellman_Delta_t", spin_values.get("pure_ddm_bellman_Delta_t")),
         ]
         if not ddm_entry["header_written"]:
             ddm_entry["writer"].writerow([name for name, _ in columns])

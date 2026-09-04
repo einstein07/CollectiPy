@@ -160,14 +160,16 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         #   forced_choice - commit at arrival whatever you believe; z(T_max) = 0.
         #   halt_sprt     - halt at the midpoint at arrival and keep integrating at
         #                   delay rate halt_cost_rate against the flat threshold z_halt.
-        self.bellman_terminal = str(
-            self.bellman_cfg.get("terminal", "forced_choice")
-        ).strip().lower()
-        if self.bellman_terminal not in {"forced_choice", "halt_sprt"}:
-            raise ValueError(
-                "bellman.terminal must be 'forced_choice' or 'halt_sprt'; got "
-                f"'{self.bellman_terminal}'"
+        #   continue_at_midpoint is the derivation document's name for halt_sprt
+        #   (BELLMAN_KNOWN_A_DERIVATION Sections 5.1 / 13.5); it is accepted and
+        #   normalised, so the cache keys, logs and GUI see one canonical name.
+        from models.bellman_boundary import normalise_terminal
+        try:
+            self.bellman_terminal = normalise_terminal(
+                self.bellman_cfg.get("terminal", "forced_choice")
             )
+        except ValueError as exc:
+            raise ValueError(f"bellman.{exc}") from None
         self.halt_cost_rate = float(self.bellman_cfg.get("halt_cost_rate", 1.0))
         if self.bellman_terminal == "halt_sprt":
             if self.halt_cost_rate <= 0.0:
@@ -190,6 +192,32 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                     "; c_h < 1 voids the halt-only-at-arrival domination lemma "
                     "(Section 1)." if self.halt_cost_rate < 1.0 else ".",
                 )
+        # --- which solver populates z(t) (BELLMAN_KNOWN_A_DERIVATION Section 13) ---
+        #   continuous - Variant C: the free-boundary PDE in (x, t), the diffusion LIMIT
+        #                of the task. Default, and the historical behaviour.
+        #   discrete   - Variant D: the exact posterior-predictive Bellman recursion on
+        #                the step lattice the accumulator actually integrates on. At the
+        #                simulated sampling intervals the two differ materially (the
+        #                continuous boundary over-waits at every step, Section 13.7), so
+        #                this is the normative policy for a step simulation. Solved once
+        #                at onset like the PDE; the table is exact at the lattice nodes.
+        self.bellman_variant = str(
+            self.bellman_cfg.get("variant", "continuous")
+        ).strip().lower()
+        if self.bellman_variant not in {"continuous", "discrete"}:
+            raise ValueError(
+                "bellman.variant must be 'continuous' or 'discrete'; got "
+                f"'{self.bellman_variant}'"
+            )
+        if self.bellman_variant == "discrete" and self.drift_knowledge != "known_magnitude":
+            # Section 13 solves for a KNOWN information rate I = 2A^2/c^2. Under the
+            # estimated-|A| arm the per-step kernel would change with the estimate and
+            # the midpoint problem is not stationary; refuse rather than approximate.
+            raise ValueError(
+                "bellman.variant 'discrete' requires drift_knowledge 'known_magnitude': "
+                "the recursion is solved for a known information rate (got "
+                f"drift_knowledge '{self.drift_knowledge}')."
+            )
         # Per-run halt state; re-initialised in reset() like the solver flags above.
         self._bellman_z_halt = None
         self._bellman_T_max = None
@@ -199,6 +227,10 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self._x_at_arrival = None
         self._t_halt_commit = None
         self._halt_guard_hits = 0
+        # Discrete variant: the observation interval the table was solved on, and the
+        # discrete quasi-static comparator on the same lattice (Section 13.6 (ii)).
+        self._bellman_Delta_t = None
+        self._bellman_zqs_table = None
 
         # --- static bounds as the degenerate case (RA-DDM frontier spec §2b) ---
         # bellman.static_bound = b > 0 replaces the PDE solve with the flat table
@@ -393,6 +425,8 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self._x_at_arrival = None            # x when the halt began
         self._t_halt_commit = None           # t_evidence of the post-arrival commit
         self._halt_guard_hits = 0            # forced commits by the runaway guard
+        self._bellman_Delta_t = None         # discrete variant: lattice of the table
+        self._bellman_zqs_table = None       # discrete quasi-static comparator (t, z)
         self._A_expected_resolved = False
         params = self.params
 
@@ -1112,6 +1146,11 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             )
             return float(b)
 
+        if self.bellman_variant == "discrete":
+            return self._bellman_threshold_discrete(
+                A, c, c_e, q, phi, d, cfg, delta0, v, r0, half_L, c_tau_of_t,
+            )
+
         # Optional disk cache (CAMPAIGN_SPEC Section 7.3). Default OFF: with
         # `bellman.table_cache_dir` unset (null) this block is inert and the solve
         # path below is byte-for-byte the historical behaviour. The key is computed
@@ -1224,13 +1263,214 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         }
         return float(z_arr[0])
 
+    # ------------------------------------------------------------------
+    # Discrete variant (BELLMAN_KNOWN_A_DERIVATION Section 13)
+    # ------------------------------------------------------------------
+    def _bellman_sampling_interval(self) -> float:
+        """The interval between the observations the accumulator actually integrates.
+
+        Under `legacy` sensory noise the DDM draws a fresh percept every sub-step and
+        tests `|x| >= z` after each one, so the observation lattice is `dt / n_sub`.
+        Under a shared percept stream the white noise is drawn ONCE per tick (the
+        stream keys it by the tick) and reused across the sub-steps, which merely
+        subdivide that one observation linearly -- so the lattice is the tick. Within a
+        tick the LLR path is then monotone and the tabulated boundary non-increasing, so
+        a sub-step crossing implies the end-of-tick crossing: the decisions coincide,
+        only the recorded RT keeps its sub-tick resolution.
+        """
+        dt = 1.0 / self._resolve_agent_tick_rate()
+        if getattr(self.ddm, "external_percept", False):
+            return dt
+        return dt / max(1, int(getattr(self.ddm, "n_sub", 1)))
+
+    def _install_discrete_table(self, t_grid, z_arr, z_qs, mean_exit) -> None:
+        """Hand the lattice table to the accumulator and record the terminal data.
+
+        `t_grid[n] = n Delta_t`, so the accumulator's linear interpolation is exact at
+        every node the runtime queries; past `t_N` it holds `z_N` -- `z_mid` under
+        halt_sprt, 0 under forced choice -- which is the Section 13.5 runtime rule.
+        """
+        t_grid = np.asarray(t_grid, dtype=float)
+        z_arr = np.asarray(z_arr, dtype=float)
+        self.ddm.set_bellman_table(t_grid, z_arr)
+        self._bellman_solved = True
+        self._bellman_zqs_table = (
+            None if z_qs is None else (t_grid.copy(), np.asarray(z_qs, dtype=float))
+        )
+        self._record_halt_terminal(float(t_grid[-1]), float(z_arr[-1]), mean_exit=mean_exit)
+
+    def _bellman_threshold_discrete(self, A, c, c_e, q, phi, d, cfg, delta0, v,
+                                    r0, half_L, c_tau_of_t) -> float:
+        """Variant D: the exact step-lattice recursion (derivation Section 13).
+
+        Same seam as the continuous path -- geometry resolved at onset, one solve,
+        `set_bellman_table` -- but the table is the sequence `z_n = b_n / k` on
+        `t_n = n Delta_t` with `Delta_t` the accumulator's own observation interval, the
+        per-step cost is the exact `Delta_t + (d_{n+1} - d_n)/v` of Section 13.4, and
+        the terminal slice is the discrete midpoint fixed point (or the obstacle). The
+        continuous keys `N_x`, `N_t`, `X_max_factor`, `scheme`, `T_max_check_factor` are
+        not read; `N_L`, `L_max_factor`, `tol_fixed_point`, `quadrature` (+ `n_quad`
+        under 'gauss_hermite') and the optional `Delta_t` override are (Section 13.10).
+        """
+        from models.bellman_discrete import discrete_bellman_boundary
+
+        Delta_t_runtime = self._bellman_sampling_interval()
+        raw = cfg.get("Delta_t")
+        Delta_t = Delta_t_runtime if raw is None else float(raw)
+        if Delta_t <= 0.0:
+            raise ValueError("bellman.Delta_t must be > 0")
+        if raw is not None and not math.isclose(Delta_t, Delta_t_runtime, rel_tol=1e-9):
+            logger.warning(
+                "%s: bellman.Delta_t = %.6g OVERRIDES the accumulator's observation "
+                "interval %.6g s (dt/n_sub under legacy noise, the tick under a shared "
+                "stream). The recursion is then solved on a different lattice from the "
+                "one the runtime tests |x| >= z on -- a diagnostic setting, not the "
+                "normative policy for this run.",
+                self.agent.get_name(), Delta_t, Delta_t_runtime,
+            )
+        self._bellman_Delta_t = Delta_t
+        T_max = cfg.get("T_max")
+        T_max = float(T_max) if T_max else None
+        solver_kw = dict(
+            r0=r0, half_L=half_L, v=v,
+            terminal=self.bellman_terminal, halt_cost_rate=self.halt_cost_rate,
+            predecision_motion=self.predecision_motion, T_max=T_max,
+            N_L=int(cfg.get("N_L", 2001)),
+            L_max_factor=float(cfg.get("L_max_factor", 8.0)),
+            n_quad=int(cfg.get("n_quad", 40)),
+            tol_fixed_point=float(cfg.get("tol_fixed_point", 1e-10)),
+            quadrature=str(cfg.get("quadrature", "grid")),
+        )
+        self._bellman_c_tau_of_t = c_tau_of_t
+        self._bellman_A, self._bellman_c, self._bellman_c_e = A, c, c_e
+        geom_log = {
+            "d_1": float(d[0]), "d_2": float(d[1]), "v": v, "delta": delta0,
+            "c_tau": float(c_tau_of_t(0.0)), "c_tau_eff": float(c_tau_of_t(0.0)),
+            "c_err_eff": c_e, "rho": float("nan"), "rho_branch": "bellman_discrete",
+            "a_star": float("nan"), "z_star": float("nan"),
+            "z_floor_analytic": float("nan"), "lambda_t_used": None,
+            "cost_ratio_used": c_e, "geometric_error_mode": self.geometric_error_mode,
+            "T_arr": None,
+        }
+
+        # Disk cache, same discipline as the continuous path: the key is computed HERE
+        # from the floats the solver receives, the discrete parameters included, so a
+        # discrete table can never alias a continuous one (bellman_table_cache).
+        cache_dir = cfg.get("table_cache_dir") or None
+        cache_key = None
+        if cache_dir:
+            from models.bellman_table_cache import load_table, table_key
+            T_key = T_max if T_max is not None else (r0 / v if v > 1e-12 else 10.0)
+            cache_inputs = dict(
+                A=A, c=c, c_e=c_e, r0=r0, L=2.0 * half_L, v=v, T_max=T_key,
+                N_x=int(cfg.get("N_x", 801)), N_t=int(cfg.get("N_t", 10000)),
+                X_max_factor=float(cfg.get("X_max_factor", 4.0)),
+                scheme=str(cfg.get("scheme", "crank_nicolson")),
+                terminal=self.bellman_terminal, halt_cost_rate=self.halt_cost_rate,
+                variant="discrete", Delta_t=Delta_t, N_L=solver_kw["N_L"],
+                L_max_factor=solver_kw["L_max_factor"], n_quad=solver_kw["n_quad"],
+                tol_fixed_point=solver_kw["tol_fixed_point"],
+                predecision_motion=self.predecision_motion,
+                quadrature=solver_kw["quadrature"],
+            )
+            cache_key = table_key(**cache_inputs)
+            hit = load_table(cache_dir, cache_key)
+            if hit is not None:
+                t_grid, z_arr, meta = hit
+                extras = meta.get("extras") or {}
+                self._install_discrete_table(
+                    t_grid, z_arr, meta.get("z_myopic_arr"),
+                    extras.get("halt_mean_exit_time"),
+                )
+                self._bellman_diag = {
+                    "z_myopic_onset": meta["z_myopic_onset"],
+                    "wall_time_s": meta["wall_time_s"],
+                    "table_cache": "hit", "variant": "discrete", "Delta_t": Delta_t,
+                    **{k: extras[k] for k in extras},
+                }
+                geom_log["z_star"] = float(z_arr[0])
+                self._geom_log = geom_log
+                logger.info(
+                    "%s: discrete bellman boundary LOADED from table cache (key %s) -- "
+                    "z(0)=%.4g on a %d-step lattice at Delta_t=%.4g s, solved "
+                    "elsewhere in %.2fs",
+                    self.agent.get_name(), cache_key[:12], z_arr[0], len(t_grid) - 1,
+                    Delta_t, meta["wall_time_s"],
+                )
+                return float(z_arr[0])
+
+        try:
+            t_grid, z_arr, diag = discrete_bellman_boundary(A, c, c_e, Delta_t, **solver_kw)
+        except ValueError as exc:
+            logger.error(
+                "%s: the discrete bellman solve failed (%s). Falling back to the "
+                "geometric quasi-static policy for this run.", self.agent.get_name(), exc,
+            )
+            self._bellman_solved = True
+            return self._geometric_threshold(A, c, q, phi, d)
+
+        self._install_discrete_table(
+            t_grid, z_arr, diag["z_myopic"], diag["halt_mean_exit_time"],
+        )
+        if cache_dir and cache_key:
+            from models.bellman_table_cache import save_table
+            save_table(
+                cache_dir, cache_key, t_grid, z_arr,
+                inputs={k: v_ for k, v_ in cache_inputs.items()
+                        if k not in ("scheme", "terminal", "variant",
+                                     "predecision_motion", "quadrature")},
+                z_myopic_onset=float(diag["z_myopic_onset"]),
+                wall_time_s=float(diag["wall_time_s"]),
+                scheme="discrete",
+                z_myopic_arr=diag["z_myopic"],
+                extras={
+                    "halt_mean_exit_time": diag["halt_mean_exit_time"],
+                    "halt_error_rate": diag["halt_error_rate"],
+                    "b_mid": diag["b_mid"],
+                    "b_star_continuous": diag["b_star_continuous"],
+                    "W0_at_zero": diag["W0_at_zero"],
+                    "N_steps": diag["N_steps"],
+                },
+            )
+        self._bellman_diag = diag
+        geom_log["z_star"] = float(z_arr[0])
+        self._geom_log = geom_log
+        z_qs0 = float(diag["z_myopic_onset"])
+        logger.info(
+            "%s: discrete bellman boundary solved -- %d steps at Delta_t=%.4g s "
+            "(per-step LLR sd %.3g = %.0f%% of b_mid) | z(0)=%.4g vs discrete "
+            "quasi-static z*(0)=%.4g (gap %.1f%%) | b_mid=%.4g vs continuous "
+            "b*=%.4g (%.1f%% below the diffusion limit) | halt: realised ER %.4f, "
+            "nominal ER(b_mid) %.4f, mean exit %.2fs | terminal '%s', %.2fs",
+            self.agent.get_name(), diag["N_steps"], Delta_t, diag["per_step_llr_sd"],
+            100.0 * diag["per_step_sd_over_b_mid"], z_arr[0], z_qs0,
+            100.0 * (z_qs0 - z_arr[0]) / max(z_qs0, 1e-12),
+            diag["b_mid"], diag["b_star_continuous"],
+            100.0 * (diag["b_star_continuous"] - diag["b_mid"])
+            / max(diag["b_star_continuous"], 1e-12),
+            diag["halt_error_rate"], diag["halt_nominal_error_rate"],
+            diag["halt_mean_exit_time"], self.bellman_terminal, diag["wall_time_s"],
+        )
+        return float(z_arr[0])
+
     def _bellman_myopic_now(self) -> Optional[float]:
         """`z_myopic(t)` at the current evidence time, for the Section 8 comparison.
 
-        One Newton solve per tick, which is what makes the Section 10 figure free.
+        Continuous variant: one Newton solve per tick (`b + sinh b = rho` at the live
+        `c_tau`), which is what makes the Section 10 figure free. Discrete variant: the
+        DISCRETE stationary fixed point at the frozen per-step cost, read from the
+        lattice table the solver produced -- the comparator against which the Section
+        13.6 ordering `b_n <= b_qs,n` is exact. Using the continuous closed form there
+        would conflate anticipation with discretisation.
         """
         if not self._bellman_solved or self._bellman_diag is None:
             return None
+        if self._bellman_zqs_table is not None:
+            t_tab, z_tab = self._bellman_zqs_table
+            t = float(self.ddm.t_evidence)
+            if t >= t_tab[-1]:
+                return float(z_tab[-1])          # held past arrival, like z itself
+            return float(np.interp(t, t_tab, z_tab))
         from models.bellman_boundary import myopic_z
         return myopic_z(self._bellman_A, self._bellman_c, self._bellman_c_e,
                         self._bellman_c_tau_of_t(self.ddm.t_evidence))
@@ -1238,12 +1478,17 @@ class EmbodiedPureDDMMovementModel(TargetModel):
     # ------------------------------------------------------------------
     # Terminal halt (BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3)
     # ------------------------------------------------------------------
-    def _record_halt_terminal(self, T_max: float, z_halt: float) -> None:
+    def _record_halt_terminal(self, T_max: float, z_halt: float,
+                              mean_exit: Optional[float] = None) -> None:
         """Stash the installed table's arrival data; no-op under forced choice.
 
         Called with `z_halt = z_arr[-1]` on a cache hit: under halt_sprt the persisted
         table's final row IS the explicitly recorded `z(T_max) = z_halt`, so the value
         round-trips without widening the cache format.
+
+        `mean_exit` sizes the runaway-guard cap `T_max + 10 D`. The discrete solver
+        passes the mean exit time of its own absorbed chain; otherwise the continuous
+        potential `D(z_halt)` is used, which is the diffusion-limit estimate of it.
         """
         if self.bellman_terminal != "halt_sprt":
             return
@@ -1252,7 +1497,10 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self._bellman_z_halt = float(z_halt)
         A = abs(float(self.ddm.A_hat))
         k = 2.0 * A / float(self.ddm.c) ** 2
-        self._halt_mean_exit = float(halt_exit_potential(z_halt, k, A))
+        if mean_exit is not None and math.isfinite(float(mean_exit)) and float(mean_exit) > 0.0:
+            self._halt_mean_exit = float(mean_exit)
+        else:
+            self._halt_mean_exit = float(halt_exit_potential(z_halt, k, A))
         if z_halt < self.ddm.z_min:
             logger.warning(
                 "%s: z_halt = %.4g sits below z_min = %.4g, so the runtime floor binds "
@@ -1667,6 +1915,12 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             "pure_ddm_bellman_terminal": (
                 self.bellman_terminal if self.threshold_policy == "bellman" else None
             ),
+            # Which solver produced the table (BELLMAN_KNOWN_A_DERIVATION Section 13)
+            # and, for the discrete one, the observation interval it was solved on.
+            "pure_ddm_bellman_variant": (
+                self.bellman_variant if self.threshold_policy == "bellman" else None
+            ),
+            "pure_ddm_bellman_Delta_t": self._bellman_Delta_t,
             "pure_ddm_z_halt": self._bellman_z_halt,
             "pure_ddm_bellman_T_max": self._bellman_T_max,
             "pure_ddm_halted": bool(self._halted_now),
