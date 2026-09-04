@@ -172,7 +172,7 @@ def analyze(args) -> int:
     import pandas as pd
 
     rows, trajs = [], {}
-    for tps_dir in sorted(args.out.glob("tps_*")):
+    for tps_dir in sorted(p for p in args.out.glob("tps_*") if p.is_dir()):
         for ctrl_dir in sorted(d for d in tps_dir.iterdir() if d.is_dir()):
             for rep in sorted(ctrl_dir.glob("replicate_*"),
                               key=lambda p: int(p.name.split("_")[1])):
@@ -220,7 +220,11 @@ def analyze(args) -> int:
             ref[["controller", "run_id", "committed_id", "rt"]],
             on=["controller", "run_id"], how="inner",
             suffixes=("", "_ref"))
-        same = ((merged["committed_id"] == merged["committed_id_ref"])
+        # Both-uncommitted (censored) trials agree: normalize ''/None/NaN.
+        cid = merged["committed_id"].fillna("").astype(str).replace("None", "")
+        cid_ref = (merged["committed_id_ref"].fillna("").astype(str)
+                   .replace("None", ""))
+        same = ((cid == cid_ref)
                 & ((merged["rt_s"] - merged["rt"].astype(float)).abs()
                    .fillna(0.0) < 1e-9))
         print(f"tps = 1 reproduction gate vs cluster: {int(same.sum())}/"
