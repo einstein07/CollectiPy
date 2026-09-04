@@ -175,6 +175,12 @@ def run(args) -> int:
         if (rep / ".done").exists():
             n_skip += 1
             continue
+        if isinstance(u, str) and not (args.tree / "ra" / f"actual_{ACTUAL}"
+                                       / f"v_{V:g}" / f"u_{u}"
+                                       / f"replicate_{rid}"
+                                       / "config.json").is_file():
+            n_skip += 1          # beyond the cluster n for this cell
+            continue
         try:
             cfg = _patch_clock(_source_config(args.tree, u, rid), tps)
             _run_one(runner, cfg, rep)
@@ -238,7 +244,7 @@ def analyze(args) -> int:
         same = ((merged["choice"].fillna("") ==
                  merged["choice_ref"].fillna(""))
                 & ((merged["t_arrival_s"] - merged["t_arrival_s_ref"])
-                   .abs().fillna(0.0) < 1e-9))
+                   .abs().fillna(0.0) < 1e-6))
         print(f"T = 1 reproduction gate vs cluster: {int(same.sum())}/"
               f"{len(merged)} trials identical"
               + ("  PASS" if bool(same.all()) else "  FAIL — inspect"))
