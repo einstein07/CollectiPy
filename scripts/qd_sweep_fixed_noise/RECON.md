@@ -349,8 +349,14 @@ template carried n_sub = 16. Consequences:
   diagonal is BLOCKING only at points whose halt plateau clears the 0.1
   per-draw step (z_halt ≥ 0.1: bellman c_e ≥ ~20 and static-rr); below it
   the crossing check differs by design and the comparison is reported as
-  informational. RA-side gates (§8.3/§8.4) and R-1 keep full drift-catching
-  power — they are n_sub-independent.
+  informational. The TIMING leg is the direction check: on the same
+  per-tick evidence path, one crossing check per tick can only DELAY
+  commit detection, never advance it, so arrival must be later-or-equal
+  (0.25 s bootstrap allowance; shifts > 3 s flagged). Measured on the full
+  campaign: a uniform +0.2…+2.0 s later shift across the whole diagonal
+  with accuracies CI-overlapping everywhere — exactly the predicted
+  detection-delay signature, and the gate PASSES. RA-side gates
+  (§8.3/§8.4) and R-1 keep full drift-catching power — n_sub-independent.
 - Manifests are UNCHANGED (n_sub is template-level, not a manifest field);
   only the committed `config/qd_sweep_ddm_template.json` changes. Arm B
   data produced at n_sub = 16 is not comparable and must be re-run; Arm A

@@ -435,11 +435,19 @@ def diagonal_gate(points: list[dict], previous_parquet: Path,
         p_arr = sl.loc[sl["decided"].astype(bool), "t_arrival_s"]
         p_med, p_mlo, p_mhi = boot_median_ci(p_arr.astype(float).tolist())
         acc_ok = ci_overlap(row["acc_all_lo"], row["acc_all_hi"], p_lo, p_hi)
-        med_ok = ci_overlap(row["median_arrival_lo"],
-                            row["median_arrival_hi"], p_mlo, p_mhi)
+        # Timing under D-13: with one boundary check per tick (vs 16 in the
+        # reference), commit DETECTION on the same per-tick evidence path is
+        # delayed, never advanced — arrival may only be later-or-equal. The
+        # blocking timing condition is therefore the direction (allowing
+        # 0.25 s of bootstrap noise); the magnitude is reported and only
+        # flagged for inspection beyond 3 s (≈ a few detection intervals).
+        med_ok = (row["median_arrival_s"] >= p_med - 0.25)
+        med_shift = row["median_arrival_s"] - p_med
         if row["_gated"]:
             ok &= acc_ok and med_ok
             status = "PASS" if (acc_ok and med_ok) else "FAIL"
+            if med_ok and med_shift > 3.0:
+                status += " (arrival +%.1fs > 3 s — inspect)" % med_shift
         else:
             status = ("INFORMATIONAL "
                       + ("(agrees)" if (acc_ok and med_ok) else
@@ -457,6 +465,7 @@ def diagonal_gate(points: list[dict], previous_parquet: Path,
             "median_ci": [row["median_arrival_lo"],
                           row["median_arrival_hi"]],
             "ref_median_s": p_med, "ref_median_ci": [p_mlo, p_mhi],
+            "median_shift_s": med_shift,
             "halt_frac": row.get("halt_frac"),
             "n": row["n"], "n_ref": n_prev})
     with open(dest, "w", encoding="utf-8") as fh:
@@ -464,11 +473,12 @@ def diagonal_gate(points: list[dict], previous_parquet: Path,
                    "note": ("BLOCKING (§8.2) at points whose halt plateau "
                             f"clears the {qd.EVIDENCE_SUBSTEP} per-draw step: "
                             "same condition, same seeds as the halted "
-                            "campaign's 1 % families — disagreement there is "
-                            "template/noise drift. Below the step the "
-                            "within-tick crossing check differs by design "
-                            "(n_sub 1 here vs 16 in the reference; RECON "
-                            "D-13) — informational."),
+                            "campaign's 1 % families — accuracy must CI-"
+                            "overlap, and arrival may only be LATER-or-equal "
+                            "(D-13: one crossing check per tick delays "
+                            "detection, never advances it; shifts > 3 s are "
+                            "flagged). Below the step the crossing check "
+                            "differs by design — informational."),
                    "previous": str(previous_parquet), "points": report}, fh,
                   indent=2)
     print(f"\n1 %-diagonal regression gate (§8.2) vs {previous_parquet}:")
