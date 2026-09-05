@@ -558,8 +558,10 @@ def _build_model(bellman=None, ticks=10, n_sub=4, sensory_stream=None, **cfg_ove
         "scaling_mode": "constant",
         "num_neurons": 30,
         "perception_width": 0.2,
-        "bellman": {"variant": "discrete", "terminal": "continue_at_midpoint",
-                    **(bellman or {})},
+        # pass a key as None to drop it (e.g. variant=None exercises the model default)
+        "bellman": {k: v for k, v in {"variant": "discrete",
+                                      "terminal": "continue_at_midpoint",
+                                      **(bellman or {})}.items() if v is not None},
     }
     cfg.update(cfg_overrides)
     agent_cfg = {"embodied_pure_ddm": cfg, "detection": "GPS"}
@@ -640,10 +642,31 @@ def test_discrete_variant_config_validation():
         _build_model(drift_knowledge="estimated", A_source="online_evidence")
     with pytest.raises(ValueError, match="terminal must be"):
         _build_model(bellman={"terminal": "halt"})
-    # the continuous default is untouched by the new keys
+    # continuous stays selectable, with its own keys
     agent, model, objs = _build_model(bellman={"variant": "continuous", "N_x": 401,
                                                "N_t": 2000})
     assert model.bellman_variant == "continuous"
+
+
+def test_default_variant_is_discrete(caplog):
+    """An absent bellman.variant means the Section 13 recursion (the normative policy
+    for a step simulation). The one exception is the estimated-|A| arm, which the
+    recursion cannot serve: there an ABSENT key resolves to the continuous PDE with a
+    warning so pre-Section-13 configs keep running, while an EXPLICIT discrete request
+    is still refused."""
+    import logging
+    agent, model, objs = _build_model(bellman={"variant": None, "terminal": "forced_choice"})
+    assert model.bellman_variant == "discrete"
+    model.step(agent, 0, None, objs, {})
+    assert model._bellman_diag["variant"] == "discrete"
+    assert model._bellman_Delta_t == pytest.approx(0.1 / 4)
+
+    with caplog.at_level(logging.WARNING, logger="sim.embodied_pure_ddm"):
+        agent, model, objs = _build_model(bellman={"variant": None, "terminal": "forced_choice"},
+                                          drift_knowledge="estimated",
+                                          A_source="online_evidence")
+    assert model.bellman_variant == "continuous"
+    assert any("bellman.variant not set" in r.getMessage() for r in caplog.records)
 
 
 def test_delta_t_override_is_honoured_and_flagged(caplog):

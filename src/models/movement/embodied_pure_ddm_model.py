@@ -193,17 +193,34 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                     "(Section 1)." if self.halt_cost_rate < 1.0 else ".",
                 )
         # --- which solver populates z(t) (BELLMAN_KNOWN_A_DERIVATION Section 13) ---
-        #   continuous - Variant C: the free-boundary PDE in (x, t), the diffusion LIMIT
-        #                of the task. Default, and the historical behaviour.
         #   discrete   - Variant D: the exact posterior-predictive Bellman recursion on
         #                the step lattice the accumulator actually integrates on. At the
         #                simulated sampling intervals the two differ materially (the
         #                continuous boundary over-waits at every step, Section 13.7), so
-        #                this is the normative policy for a step simulation. Solved once
-        #                at onset like the PDE; the table is exact at the lattice nodes.
-        self.bellman_variant = str(
-            self.bellman_cfg.get("variant", "continuous")
-        ).strip().lower()
+        #                this is the normative policy for a step simulation and the
+        #                DEFAULT. Solved once at onset like the PDE; the table is exact
+        #                at the lattice nodes.
+        #   continuous - Variant C: the free-boundary PDE in (x, t), the diffusion LIMIT
+        #                of the task and the historical behaviour; select it explicitly
+        #                to reproduce pre-Section-13 tables. It is also what an
+        #                UNSPECIFIED variant resolves to under the estimated-|A| arm,
+        #                which the discrete recursion cannot serve (below): a config
+        #                that ran before Section 13 keeps running, with a warning.
+        variant_cfg = self.bellman_cfg.get("variant")
+        if variant_cfg is None:
+            if self.drift_knowledge == "known_magnitude":
+                self.bellman_variant = "discrete"
+            else:
+                self.bellman_variant = "continuous"
+                if self.threshold_policy == "bellman":
+                    logger.warning(
+                        "%s: bellman.variant not set and drift_knowledge '%s' cannot use "
+                        "the discrete recursion (known-|A| only); using the continuous "
+                        "PDE. Set bellman.variant explicitly to silence this.",
+                        agent.get_name(), self.drift_knowledge,
+                    )
+        else:
+            self.bellman_variant = str(variant_cfg).strip().lower()
         if self.bellman_variant not in {"continuous", "discrete"}:
             raise ValueError(
                 "bellman.variant must be 'continuous' or 'discrete'; got "
