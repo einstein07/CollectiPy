@@ -1,5 +1,5 @@
 {
-    "environment": {
+"environment": {
         "logging": {
             "console": true,
             "console_level": "INFO",
@@ -8,24 +8,17 @@
         "collisions": false,
         "time_limit": 1000,
         "num_runs": 1,
+        "ticks_per_second": 1,
         "target_position_swaps": [],
-            "post_bifurcation_swap": {
-                "pairs": [
-                    [
-                        "static_0.s#0",
-                        "static_1.s#0"
-                    ]
-                ],
-                "delay_ticks": 1
-            },
-        "termination": {
-            "type": "proximity",
-            "target_ids": ["static_0.s#0", "static_1.s#0"],
-            "radius": 0.05,
-            "agent_ids": "any"
+        "post_bifurcation_swap": {
+            "pairs": [
+                [
+                    "static_0.s#0",
+                    "static_1.s#0"
+                ]
+            ],
+            "delay_ticks": 1
         },
-        
-        
         "gui": {
             "_id": "2D",
             "on_click": [
@@ -33,10 +26,19 @@
             ],
             "view": ["detection"]
         },
+        "termination": {
+            "type": "proximity",
+            "target_ids": [
+                "static_0.s#0",
+                "static_1.s#0"
+            ],
+            "radius": 0.05,
+            "agent_ids": "any"
+        },
         "arenas": {
             "arena_0": {
-                "random_seed": 232961375,
-                "side": 2,
+                "random_seed": 81,
+                "radius": 1,
                 "_id": "square",
                 "color": "gray"
             }
@@ -61,18 +63,17 @@
                 "height": 0.2,
                 "diameter": 0.05,
                 "color": "red",
-                "strength": [4.0],
+                "strength": [4.95],
                 "uncertainty": [0]
             }    
         },
-        
         "agents": {
             "movable_0": {
                 "position": [[0.0,0.00,0]],
                 "orientation": [[0, 0, 0]],
                 "number": [1],
                 "shape": "cylinder",
-                "linear_velocity": 0.001,
+                "linear_velocity": 0.01,
                 "angular_velocity": 10,
                 "height": 0.02,
                 "diameter": 0.033,
@@ -89,13 +90,21 @@
                     "perception_width": 0.2,
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
+                    "_comment_readout": "--- readout: how the ring activity z is turned into a heading command and a forward-speed command. ---",
+                    "_comment_use_thresholding": "true: only units whose activity exceeds g_threshold contribute to the heading; the rest are silenced. false: every unit contributes to the heading in proportion to its activity, and g_threshold / threshold_readout are ignored.",
+                    "_comment_g_threshold": "Activity level a unit must strictly exceed to take part in the heading readout, in the same units as z. Also acts as the 'no bump' test: when no unit exceeds it the agent stops moving.",
+                    "_comment_threshold_readout": "How the units that pass g_threshold are combined into a heading. 'weighted': each unit's preferred direction is weighted by its activity, so the heading follows the shape of the bump. 'unweighted': each passing unit weighs exactly 1, so the heading is the plain average of the preferred directions of the active units and depends only on WHICH units are active, not on how active they are.",
+                    "_comment_scale_velocity": "true: forward speed is max_absolute_velocity multiplied by a gate chosen by scaling_mode (default 'magnitude' when use_thresholding is true: the length of the readout vector, not clipped; 'norm' when false: L2 norm of z, clipped to [0,1]; 'concentration': angular coherence of the readout in [0,1]). false: constant forward speed of max_absolute_velocity * norm_scale whenever a bump exists, zero otherwise; the readout then only steers.",
+                    "_comment_norm_scale": "With scale_velocity false: gain on the constant forward speed (1.0 = full max_absolute_velocity). With scale_velocity true: only used by scaling_mode 'norm', as a gain on the L2 norm before clipping.",
                     "use_thresholding": true,
                     "g_threshold": 0.6,
-                    "tau_adapt": 7.5,
-                    "g_adapt": 0,
+                    "threshold_readout": "unweighted",
+                    "scale_velocity": false,
+                    "norm_scale": 1.0,
+                    "tau_adapt": 3.2,
+                    "g_adapt": 0.0,
                     "num_targets": 2,
                     "num_guards": 0,
-                    "guard_qualities": [],
                     "target_ids": [
                         "static_0.s#0",
                         "static_1.s#0"
@@ -105,13 +114,12 @@
                     "kappa": 20,
                     "v": 0.5,
                     "u": 6.2,
-                    "sigma": 1.5,
-                    "sigma_s": 0.0,
+                    "sigma": 0.15,
+                    "sigma_s": 0.5,
                     "beta": 1.0,
                     "integration_time": 50,
                     "integration_dt": 0.1,
                     "reference": "egocentric",
-                    "norm_scale": 1.0,
                     "bifurcation": {
                         "mode": "behavioral",
                         "lambda_threshold": -0.1,

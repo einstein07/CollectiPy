@@ -23,13 +23,21 @@ import math
 import numpy as np
 
 
-def circular_readout(weights, angles, threshold: float = 0.0):
+def circular_readout(weights, angles, threshold: float = 0.0, weighting: str = "weighted"):
     """Thresholded circular mean.
 
     Args:
         weights: activity/accumulator values placed at ``angles`` (any shape, flattened).
         angles: angle (radians) associated with each weight.
         threshold: values at or below this are zeroed before the circular mean.
+        weighting: how the surviving units enter the sum.
+            ``"weighted"`` (default) keeps their value, so each surviving unit pulls
+            the heading in proportion to its activity.
+            ``"unweighted"`` replaces every surviving value with 1, giving the plain
+            circular mean of the preferred directions of the units above threshold.
+            The heading is then set purely by WHICH units are active, not by how
+            active they are; magnitude counts coherent active units and
+            concentration is their angular coherence.
 
     Returns:
         (heading, magnitude, concentration) where
@@ -37,7 +45,13 @@ def circular_readout(weights, angles, threshold: float = 0.0):
           magnitude     = hypot(Sum w sin, Sum w cos)   >= 0, scales with total weight
           concentration = magnitude / (Sum w + eps)     in [0, 1], angular coherence
     """
-    w = np.where(weights > threshold, weights, 0.0)
+    active = np.asarray(weights) > threshold
+    if weighting == "weighted":
+        w = np.where(active, weights, 0.0)
+    elif weighting == "unweighted":
+        w = active.astype(float)
+    else:
+        raise ValueError(f"weighting must be 'weighted' or 'unweighted', got {weighting!r}")
     sin_sum = float(np.sum(w * np.sin(angles)))
     cos_sum = float(np.sum(w * np.cos(angles)))
     heading = math.atan2(sin_sum, cos_sum)

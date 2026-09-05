@@ -78,6 +78,11 @@ class MeanFieldSystem:
         # Thresholding parameters
         g_threshold: float = 0.6,
         use_thresholding: bool = True,
+        # How units above g_threshold enter the circular readout (use_thresholding only):
+        #   "weighted" (default) -> weighted by z_i (the legacy thresholded readout).
+        #   "unweighted"         -> every active unit weighs 1: the plain circular mean
+        #                           of the preferred directions with z_i > g_threshold.
+        threshold_readout: str = "weighted",
         # Readout scaling: which order parameter drives forward speed.
         #   "concentration" (default) -> angular coherence in [0, 1], bounded.
         #   "magnitude"               -> raw readout magnitude (legacy use_thresholding=True).
@@ -121,6 +126,7 @@ class MeanFieldSystem:
             tau_adapt: Adaptation time constant (used when g_adapt > 0).
             g_threshold: Threshold parameter for thresholding.
             use_thresholding: Whether to use thresholding.
+            threshold_readout: "weighted" or "unweighted"; see the parameter comment above.
         """
         if num_neurons <= 0:
             raise ValueError("num_neurons must be positive")
@@ -198,6 +204,9 @@ class MeanFieldSystem:
         self.tau_adapt = float(tau_adapt)
         self.g_threshold = float(g_threshold)
         self.use_thresholding = bool(use_thresholding)
+        self.threshold_readout = str(threshold_readout)
+        if self.threshold_readout not in {"weighted", "unweighted"}:
+            raise ValueError("threshold_readout must be 'weighted' or 'unweighted'")
         self.scaling_mode = str(scaling_mode)
         # Readout order parameters, refreshed every compute_dynamics() call.
         self.last_magnitude = 0.0
@@ -566,11 +575,16 @@ class MeanFieldSystem:
         if not self.use_thresholding:
             bump_positions = np.array([compute_center_of_mass(z_t, self.theta) for z_t in z_traj])
         else:
-            readout = np.array([circular_readout(z_t, self.theta, threshold=self.g_threshold) for z_t in z_traj])
+            readout = np.array([
+                circular_readout(z_t, self.theta, threshold=self.g_threshold,
+                                 weighting=self.threshold_readout)
+                for z_t in z_traj
+            ])
             bump_positions = readout[:, 0]
 
         _, final_magnitude, final_concentration = circular_readout(
-            z_traj[-1], self.theta, threshold=self.g_threshold
+            z_traj[-1], self.theta, threshold=self.g_threshold,
+            weighting=self.threshold_readout,
         )
         self.last_magnitude = float(final_magnitude)
         self.last_concentration = float(final_concentration)

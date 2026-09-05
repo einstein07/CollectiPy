@@ -84,6 +84,21 @@ class MeanFieldMovementModel(TargetModel):
             gradient_threshold=float(bif_cfg.get("gradient_threshold", 0.005)),
         )
         self.use_thresholding = bool(self.params.get("use_thresholding", True))
+        # How units above g_threshold enter the heading readout (use_thresholding only):
+        #   "weighted" (default) -> weighted by z_i, the legacy thresholded readout.
+        #   "unweighted"         -> plain circular mean of the preferred directions of
+        #                           the units with z_i > g_threshold. Pair with
+        #                           scale_velocity=False for a constant-speed agent whose
+        #                           heading is set only by WHICH units are active.
+        self.threshold_readout = str(self.params.get("threshold_readout", "weighted")).strip().lower()
+        if self.threshold_readout not in {"weighted", "unweighted"}:
+            raise ValueError("threshold_readout must be 'weighted' or 'unweighted'")
+        if self.threshold_readout == "unweighted" and not self.use_thresholding:
+            logger.warning(
+                "%s: threshold_readout 'unweighted' has no effect with use_thresholding=false "
+                "(the heading is the raw circular mean of the whole ring).",
+                agent.get_name(),
+            )
         # Which readout order parameter gates the forward speed:
         #   "concentration" -> angular coherence, bounded in [0, 1]; an undecided agent
         #                      physically slows down.
@@ -151,6 +166,7 @@ class MeanFieldMovementModel(TargetModel):
             tau_adapt=self.tau_adapt,
             g_threshold=float(self.params.get("g_threshold", 0.6)),
             use_thresholding=self.use_thresholding,
+            threshold_readout=self.threshold_readout,
             scaling_mode=self.scaling_mode,
         )
         if hasattr(self, 'bifurcation_detector'):
