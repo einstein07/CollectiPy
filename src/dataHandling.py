@@ -738,6 +738,8 @@ class SpaceDataHandling(DataHandling):
             # table was solved on. Appended last so positional readers are unaffected.
             ("bellman_variant", spin_values.get("pure_ddm_bellman_variant")),
             ("bellman_Delta_t", spin_values.get("pure_ddm_bellman_Delta_t")),
+            # the noise scale the policy assumed (c_expected, else the physical c)
+            ("c_assumed", spin_values.get("pure_ddm_c_assumed")),
         ]
         if not ddm_entry["header_written"]:
             ddm_entry["writer"].writerow([name for name, _ in columns])

@@ -529,8 +529,20 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             A_expected_deferred=(
                 params.get("A_expected") is None and self.A_source == "ensemble"
             ),
+            # Noise-side counterpart of A_expected: the noise scale the POLICY assumes.
+            # The physical noise (legacy eta_rate or the shared stream's white_rate) is
+            # untouched; only the boundary, the information rate and the agent's
+            # posterior are computed with this c. None = the true scale (historical).
+            c_expected=params.get("c_expected"),
             rng=self._make_rng("ddm"),
         )
+        if self.ddm.c_expected is not None:
+            logger.info(
+                "%s: the policy ASSUMES noise scale c = %.4g while the evidence carries "
+                "c = %.4g (c_expected / c = %.3f): a deliberately misspecified policy.",
+                self.agent.get_name(), self.ddm.c_expected, self.ddm.c,
+                self.ddm.c_expected / self.ddm.c if self.ddm.c > 0 else float("nan"),
+            )
         self.ddm.flag_policy_incoherent(self.boundary_policy_incoherent)
         # collapse_form 'geometric' IS the per-tick re-evaluation of rho from the current
         # angular separation — with the threshold frozen at onset there is nothing to
@@ -1015,7 +1027,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         # The A entering rho and z* is the agent's ESTIMATE (A_source), not the true
         # percept difference: the agent does not know the true drift.
         A = abs(float(self.ddm.A_hat))
-        c = self.ddm.c
+        c = self.ddm.c_assumed          # the agent's model of the noise, not necessarily the true c
         policy = self.threshold_policy
 
         # Perfectly symmetric targets give A = 0, where every drift-dependent optimal
@@ -1513,7 +1525,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         self._bellman_T_max = float(T_max)
         self._bellman_z_halt = float(z_halt)
         A = abs(float(self.ddm.A_hat))
-        k = 2.0 * A / float(self.ddm.c) ** 2
+        k = 2.0 * A / float(self.ddm.c_assumed) ** 2
         if mean_exit is not None and math.isfinite(float(mean_exit)) and float(mean_exit) > 0.0:
             self._halt_mean_exit = float(mean_exit)
         else:
@@ -1851,6 +1863,7 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 float(self.ddm.A_hat / self.ddm.A_true) if self.ddm.A_true > 0 else None
             ),
             "pure_ddm_c": float(self.ddm.c),
+            "pure_ddm_c_assumed": float(self.ddm.c_assumed),
             "pure_ddm_p1": float(self._last_weights[0]),
             "pure_ddm_q": self._last_q.copy(),
             "pure_ddm_q_hat": self.ddm.last_q_hat.copy(),

@@ -179,6 +179,8 @@
                     "_comment_bisector_eps": "Hold the previous heading when |sum of unit bearing vectors|/2 falls below this (Delta -> pi, where the vectors cancel and atan2(0,0) is undefined). A guard that fires repeatedly means the agent is parked between the targets \u2014 a result, not an error; it is logged per tick as bisector_guard_fired.",
                     "allow_changes_of_mind": false,
                     "A_expected": 1.0,
+                    "c_expected": null,
+                    "_comment_c_expected": "Noise-side counterpart of A_expected: the noise scale c the POLICY assumes, in evidence units (c^2 = sum of the per-target noise rates squared, so for two equal channels c = sqrt(2) * eta). null (default) = the true scale. A value != the true c is a deliberately MISSPECIFIED policy: the boundary, information rate and posterior are computed as if the sensor had that noise, while the evidence keeps its real noise (legacy eta_rate or the shared stream's white_rate). A wrong-noise-model sweep sets c_expected = f * c_true.",
                     "bifurcation": {
                         "mode": "behavioral",
                         "_comment_mode": "behavioral for ALL three models so switch counts and alignment events are measured by identical code.",

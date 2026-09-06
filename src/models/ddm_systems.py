@@ -139,6 +139,7 @@ class DriftDiffusionSystem:
         post_commit_accumulation: str = "unbounded",
         A_expected: Optional[float] = None,
         A_expected_deferred: bool = False,
+        c_expected: Optional[float] = None,
         rng: np.random.Generator | None = None,
     ):
         eta = np.asarray(eta_rate, dtype=float).reshape(-1)
@@ -376,9 +377,28 @@ class DriftDiffusionSystem:
         self.boundary_policy_incoherent = False
 
         # Derived / state.
+        # `c` is the PHYSICAL noise scale, c^2 = sum(eta_rate^2): the noise the evidence
+        # actually carries (drawn here under `legacy`, by the shared stream otherwise).
         self.c = float(math.sqrt(float(np.sum(self.eta_rate ** 2))))
+        # `c_expected` is the noise scale the POLICY assumes, the noise-side counterpart
+        # of `A_expected`: it enters every quantity the agent derives from its model of
+        # the world (the boundary in evidence units z = b/k with k = 2A/c^2, the
+        # information rate, the posterior it holds, the halt statistics) and nothing on
+        # the physical side. None = the agent knows the true scale, the historical
+        # behaviour. A wrong value is a MISSPECIFIED policy: the agent believes the
+        # sensor is noisier (c_expected > c) or cleaner (c_expected < c) than it is.
+        if c_expected is not None:
+            c_expected = float(c_expected)
+            if not math.isfinite(c_expected) or c_expected <= 0.0:
+                raise ValueError("c_expected must be a positive, finite number (or None)")
+        self.c_expected: Optional[float] = c_expected
         self._deadline_cache: dict = {}
         self.reset()
+
+    @property
+    def c_assumed(self) -> float:
+        """The noise scale the policy uses: `c_expected` if set, else the physical `c`."""
+        return self.c if self.c_expected is None else self.c_expected
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1179,10 +1199,10 @@ class DriftDiffusionSystem:
                 )
         if T is None or T <= _EPS:
             return float(self.z0)
-        key = (round(A, 6), round(self.c, 6), round(self.cost_ratio, 6), round(float(T), 4))
+        key = (round(A, 6), round(self.c_assumed, 6), round(self.cost_ratio, 6), round(float(T), 4))
         profile = self._deadline_cache.get(key)
         if profile is None:
-            profile = self.solve_deadline_boundary(A, self.c, self.cost_ratio, float(T))
+            profile = self.solve_deadline_boundary(A, self.c_assumed, self.cost_ratio, float(T))
             self._deadline_cache[key] = profile
         if profile is None:
             return float(self.z0)
@@ -1213,7 +1233,7 @@ class DriftDiffusionSystem:
         if self.readout_mode == "posterior":
             g = self.posterior_gain
             if g is None:
-                g = 2.0 * abs(self.A_hat) / (self.c ** 2) if self.c > _EPS else 0.0
+                g = 2.0 * abs(self.A_hat) / (self.c_assumed ** 2) if self.c_assumed > _EPS else 0.0
             if g > 0.0:
                 p1 = 1.0 / (1.0 + math.exp(-max(min(g * self.x, 700.0), -700.0)))
                 return np.array([p1, 1.0 - p1], dtype=float)
@@ -1441,5 +1461,6 @@ class DriftDiffusionSystem:
 
     @property
     def implied_log_odds(self) -> float:
-        """`a = 2A|x|/c^2` — the log-odds the agent currently holds (Appendix A.4)."""
-        return self.dimensionless_boundary(self.A_hat, self.c, abs(self.x))
+        """`a = 2A|x|/c^2` — the log-odds the agent currently holds (Appendix A.4), in the
+        agent's own model of the noise (`c_assumed`)."""
+        return self.dimensionless_boundary(self.A_hat, self.c_assumed, abs(self.x))
