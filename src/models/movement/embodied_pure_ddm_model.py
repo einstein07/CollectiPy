@@ -235,6 +235,30 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 "the recursion is solved for a known information rate (got "
                 f"drift_knowledge '{self.drift_knowledge}')."
             )
+        # --- which clock the boundary is read on (BRIEF_collectipy_ddm_boundary_lookup) ---
+        #   observation   - after integrating observation m the accumulator tests
+        #                   |x| against the boundary AT node m: the lookup is made at
+        #                   `t_evidence - Delta_t_obs`, where Delta_t_obs is the
+        #                   interval the table was solved on (the tick under a shared
+        #                   percept stream, dt/n_sub under legacy noise). This is the
+        #                   observe-then-move rule the discrete recursion is solved
+        #                   for, and the DEFAULT.
+        #   evidence_time - the pre-change lookup at `t_evidence`, i.e. at node m+1
+        #                   for observation m: one node too far along a non-increasing
+        #                   table, so too eager by b_m - b_{m+1} at every check and a
+        #                   terminal halt that starts one node early. Kept, bit-
+        #                   identical, so the records it produced can be reproduced.
+        # Only the `bellman` policy reads this: `geometric`, `deadline` and the
+        # collapse forms have the same off-by-one, but changing them silently would
+        # alter the campaign / qd-sweep reproducibility path, so they keep lag 0.
+        self.bellman_boundary_clock = str(
+            self.bellman_cfg.get("boundary_clock", "observation")
+        ).strip().lower()
+        if self.bellman_boundary_clock not in {"observation", "evidence_time"}:
+            raise ValueError(
+                "bellman.boundary_clock must be 'observation' or 'evidence_time'; got "
+                f"'{self.bellman_boundary_clock}'"
+            )
         # Per-run halt state; re-initialised in reset() like the solver flags above.
         self._bellman_z_halt = None
         self._bellman_T_max = None
@@ -535,6 +559,16 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             # posterior are computed with this c. None = the true scale (historical).
             c_expected=params.get("c_expected"),
             rng=self._make_rng("ddm"),
+        )
+        # The boundary clock (bellman.boundary_clock). Set here and nowhere else: the
+        # lag is a property of the observation lattice, fixed once the DDM and the
+        # percept stream exist, and it applies to every Bellman path -- the discrete
+        # table, the continuous table and the flat `static_bound` table alike.
+        self.ddm.boundary_lag = (
+            self._bellman_sampling_interval()
+            if self.threshold_policy == "bellman"
+            and self.bellman_boundary_clock == "observation"
+            else 0.0
         )
         if self.ddm.c_expected is not None:
             logger.info(
@@ -1119,7 +1153,9 @@ class EmbodiedPureDDMMovementModel(TargetModel):
 
         if self._bellman_solved:
             # Solved for the whole horizon at onset; nothing to recompute per tick.
-            return float(self.ddm.boundary(self.ddm.t_evidence))
+            # Read on the same clock as `step()` does, so the logged z matches the
+            # z the observation was actually tested against.
+            return float(self.ddm.boundary(self.ddm.decision_time))
 
         cfg = self.bellman_cfg
         delta0 = abs(_wrap_pi(float(phi[0]) - float(phi[1])))
@@ -1306,6 +1342,11 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         tick the LLR path is then monotone and the tabulated boundary non-increasing, so
         a sub-step crossing implies the end-of-tick crossing: the decisions coincide,
         only the recorded RT keeps its sub-tick resolution.
+
+        Observation m is tested against the boundary at node m (`b_m`): the accumulator
+        reads the table at `t_evidence - boundary_lag` with `boundary_lag` equal to
+        this interval (bellman.boundary_clock 'observation'), because `t_evidence` has
+        already moved on to node m+1 by the time the test is made.
         """
         dt = 1.0 / self._resolve_agent_tick_rate()
         if getattr(self.ddm, "external_percept", False):
@@ -1316,8 +1357,10 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         """Hand the lattice table to the accumulator and record the terminal data.
 
         `t_grid[n] = n Delta_t`, so the accumulator's linear interpolation is exact at
-        every node the runtime queries; past `t_N` it holds `z_N` -- `z_mid` under
-        halt_sprt, 0 under forced choice -- which is the Section 13.5 runtime rule.
+        every node the runtime queries -- the lookup is at `decision_time`, which sits
+        exactly on node m after observation m under the observation clock; past `t_N`
+        it holds `z_N` -- `z_mid` under halt_sprt, 0 under forced choice -- which is
+        the Section 13.5 runtime rule.
         """
         t_grid = np.asarray(t_grid, dtype=float)
         z_arr = np.asarray(z_arr, dtype=float)
@@ -1496,13 +1539,13 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             return None
         if self._bellman_zqs_table is not None:
             t_tab, z_tab = self._bellman_zqs_table
-            t = float(self.ddm.t_evidence)
+            t = float(self.ddm.decision_time)    # same clock as the boundary lookup
             if t >= t_tab[-1]:
                 return float(z_tab[-1])          # held past arrival, like z itself
             return float(np.interp(t, t_tab, z_tab))
         from models.bellman_boundary import myopic_z
         return myopic_z(self._bellman_A, self._bellman_c, self._bellman_c_e,
-                        self._bellman_c_tau_of_t(self.ddm.t_evidence))
+                        self._bellman_c_tau_of_t(self.ddm.decision_time))
 
     # ------------------------------------------------------------------
     # Terminal halt (BELLMAN_KNOWN_A_TERMINAL_HALT Section 4.3)
@@ -1543,7 +1586,8 @@ class EmbodiedPureDDMMovementModel(TargetModel):
 
         The commitment rule stays `|x| >= z(t)` with `z` flat at `z_halt` past arrival
         (the table's explicit final row plus the accumulator's hold-past-the-horizon
-        rule). This method OBSERVES that phase — and enforces the episode cap
+        rule), `t` being the accumulator's `decision_time`, so the halt begins on tick
+        N, the arrival node. This method OBSERVES that phase — and enforces the episode cap
         `T_max + 10 D(z_halt)`, which exists as a diagnostic, not a truncation: exit is
         a.s. finite with exponential tails, so expect zero hits.
 
@@ -1559,7 +1603,10 @@ class EmbodiedPureDDMMovementModel(TargetModel):
         ):
             return state
         if state.committed is None and not self._halt_event:
-            # First uncommitted tick at/past arrival: the halt begins.
+            # First uncommitted tick at/past arrival: the halt begins. `past_horizon`
+            # is raised by the lookup at `decision_time`, so under the observation
+            # clock this is tick N -- the agent standing at the arrival node x_N --
+            # not tick N-1 as it was under the `t_evidence` lookup.
             self._halt_event = True
             self._x_at_arrival = float(state.x)
             logger.info(
@@ -1570,7 +1617,8 @@ class EmbodiedPureDDMMovementModel(TargetModel):
             )
         if state.committed is None and self._halt_mean_exit is not None:
             cap = self._bellman_T_max + 10.0 * self._halt_mean_exit
-            if state.t_evidence > cap:
+            # Same clock as the boundary lookup: `T_max` is a table node.
+            if self.ddm.decision_time > cap:
                 self.ddm.force_commit()
                 self._halt_guard_hits += 1
                 state = self.ddm.get_state()
@@ -1951,6 +1999,13 @@ class EmbodiedPureDDMMovementModel(TargetModel):
                 self.bellman_variant if self.threshold_policy == "bellman" else None
             ),
             "pure_ddm_bellman_Delta_t": self._bellman_Delta_t,
+            # Which clock the boundary was read on (bellman.boundary_clock) and the
+            # resulting lag in seconds, so every record says which lookup produced it:
+            # 'evidence_time' / 0.0 is the pre-change node-(m+1) lookup.
+            "pure_ddm_bellman_boundary_clock": (
+                self.bellman_boundary_clock if self.threshold_policy == "bellman" else None
+            ),
+            "pure_ddm_boundary_lag": float(self.ddm.boundary_lag),
             "pure_ddm_z_halt": self._bellman_z_halt,
             "pure_ddm_bellman_T_max": self._bellman_T_max,
             "pure_ddm_halted": bool(self._halted_now),

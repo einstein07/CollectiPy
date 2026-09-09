@@ -740,6 +740,11 @@ class SpaceDataHandling(DataHandling):
             ("bellman_Delta_t", spin_values.get("pure_ddm_bellman_Delta_t")),
             # the noise scale the policy assumed (c_expected, else the physical c)
             ("c_assumed", spin_values.get("pure_ddm_c_assumed")),
+            # which clock the boundary was read on ('observation': observation m is
+            # tested against b_m at t_evidence - lag; 'evidence_time': the pre-change
+            # lookup at node m+1, lag 0) -- so old and new records are distinguishable
+            ("bellman_boundary_clock", spin_values.get("pure_ddm_bellman_boundary_clock")),
+            ("boundary_lag", spin_values.get("pure_ddm_boundary_lag")),
         ]
         if not ddm_entry["header_written"]:
             ddm_entry["writer"].writerow([name for name, _ in columns])

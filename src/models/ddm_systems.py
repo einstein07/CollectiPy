@@ -100,6 +100,7 @@ class DriftDiffusionSystem:
         x0: float = 0.0,
         # --- integration ---
         n_sub: int = 1,
+        boundary_lag: float = 0.0,
         # --- boundary ---
         boundary_mode: str = "static",
         threshold_policy: str = "bayes_risk",
@@ -178,6 +179,13 @@ class DriftDiffusionSystem:
         self.x0 = float(x0)
 
         self.n_sub = max(1, int(n_sub))
+        # Seconds subtracted from `t_evidence` when the boundary is read (see
+        # `decision_time`). Under observe-then-move the observation taken at lattice
+        # node m must be tested against the boundary AT node m, but `step()` has
+        # already advanced `t_evidence` to node m+1 by the time it looks the boundary
+        # up, so the lag is the observation interval the table was solved on. 0 keeps
+        # the pre-change lookup at `t_evidence` (one node too far along the table).
+        self.boundary_lag = float(boundary_lag)
 
         self.boundary_mode = str(boundary_mode).strip().lower()
         if self.boundary_mode not in {"static", "collapsing"}:
@@ -400,6 +408,18 @@ class DriftDiffusionSystem:
         """The noise scale the policy uses: `c_expected` if set, else the physical `c`."""
         return self.c if self.c_expected is None else self.c_expected
 
+    @property
+    def decision_time(self) -> float:
+        """The time the boundary is read at: `t_evidence - boundary_lag`.
+
+        After observation m has been integrated `t_evidence` sits at node m+1; the
+        boundary that applies to that observation is the one at node m (the agent
+        still stands at x_m when it tests). The first tick therefore reads at a
+        negative time, which the table lookup clamps to `z[0]` and the analytic forms
+        clamp to `t = 0`.
+        """
+        return self.t_evidence - self.boundary_lag
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -571,8 +591,12 @@ class DriftDiffusionSystem:
         return 1.0 / (1.0 + math.exp(min(a, 700.0)))
 
     @staticmethod
-    def decision_time(A: float, c: float, z: float) -> float:
-        """DT = (z/A) * tanh(A z / c^2)."""
+    def mean_decision_time(A: float, c: float, z: float) -> float:
+        """DT = (z/A) * tanh(A z / c^2), the closed-form mean decision time.
+
+        (Was `decision_time`; renamed so the instance property `decision_time`, the
+        clock the boundary is read at, can carry the name the runtime rule uses.)
+        """
         A = abs(float(A))
         if A <= _EPS:
             return float("inf")
@@ -1118,6 +1142,12 @@ class DriftDiffusionSystem:
         Past the horizon the table has no entry: HOLD the last value and flag it. Do not
         extrapolate -- the terminal collapse is an artefact of the horizon, not a
         prediction, and extrapolating it drives z to zero for the wrong reason.
+
+        `past_horizon` is set here, so it fires on the first lookup with `t >= t_N`.
+        `step()` looks up at `decision_time`, so with `boundary_lag` equal to the
+        observation interval the flag first fires on tick N (the agent at x_N, the
+        arrival node), not on tick N-1 as the `t_evidence` lookup did. That is the
+        intended behaviour: the terminal halt begins at arrival, not one node early.
         """
         tt = float(t)
         if tt >= self._z_table_t[-1]:
@@ -1280,7 +1310,7 @@ class DriftDiffusionSystem:
         # freeze: integration continues and the state is re-derived every sub-step.
         if not self.flexibility and self.committed is not None and not self._in_com_window():
             self.t_evidence += dt
-            self.z_current = self.boundary(self.t_evidence)
+            self.z_current = self.boundary(self.decision_time)
             return self._state(A_inst)
 
         dt_sub = dt / self.n_sub
@@ -1311,7 +1341,18 @@ class DriftDiffusionSystem:
                 self.x += delta * dt_sub
                 self.t_evidence += dt_sub
 
-            self.z_current = self.boundary(self.t_evidence)
+            # Observation m has just been integrated and `t_evidence` is at node m+1;
+            # the test is against the boundary at node m, i.e. at `decision_time`.
+            # Under a shared stream the sub-steps subdivide ONE observation linearly,
+            # so during tick n `decision_time` runs from (n-1) dt + dt/n_sub to n dt
+            # and the boundary seen at sub-step j interpolates z[n-1] -> z[n], equal
+            # to z[n] exactly at the last sub-step. |x| is convex in t within the tick
+            # and z linear there, so a sub-step crossing implies the end-of-tick
+            # crossing against z[n] on the same side: decisions coincide with a
+            # once-per-observation test and only the sub-tick RT differs. Under
+            # legacy noise every sub-step IS an observation and `decision_time`
+            # after sub-step j of tick n is exactly node n*n_sub + j.
+            self.z_current = self.boundary(self.decision_time)
             if self.flexibility:
                 if self.post_commit_accumulation == "clamp" and self.committed is not None:
                     # Hold |x| at the boundary while committed, so the reversal distance

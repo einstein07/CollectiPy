@@ -11,7 +11,9 @@ BELLMAN_KNOWN_A_DERIVATION Section 13.
 `bellman_boundary` (Variant C) solves the diffusion LIMIT of the task: a PDE in
 `(x, t)` with smooth pasting and closed forms at the midpoint. The simulator, however,
 hands the accumulator ONE Gaussian observation per sampling interval `Delta_t` and
-tests `|x| >= z` once per observation. At the intervals actually simulated the two are
+tests `|x| >= z` once per observation -- observation m, taken with the agent at node
+m, against `b_m` (the runtime reads the table at `t_evidence - Delta_t`; see
+`DriftDiffusionSystem.decision_time`). At the intervals actually simulated the two are
 not the same problem: the per-step LLR increment has sd `sqrt(2 I Delta_t)`, which is of
 order the threshold itself, so the continuous boundary over-waits at every step
 (Section 13.7). This module solves the exact posterior-predictive Bellman recursion on
