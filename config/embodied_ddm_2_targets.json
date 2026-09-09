@@ -8,8 +8,8 @@
         "collisions": false,
         "time_limit": 1000,
         "num_runs": 1,
-        "results":{ 
-            "base_path": "../data/", 
+        "results": {
+            "base_path": "../data/",
             "agent_specs": ["base", "mean_field"],
             "group_specs": [],
             "snapshots_per_second": 1
@@ -50,11 +50,11 @@
                 "color": "green",
                 "strength": [5],
                 "uncertainty": [0]
-            }    
+            }
         },
         "agents": {
             "movable_0": {
-                "position": [[0.0,0.0,0.0]],
+                "position": [[0.0, 0.0, 0.0]],
                 "orientation": [[0, 0, 0]],
                 "number": [1],
                 "shape": "cylinder",
@@ -68,33 +68,62 @@
                     "range": 5.0,
                     "acquisition_per_second": "inf"
                 },
-                "moving_behavior": "mean_field",
-                "mean_field_model": {
-                    "steps_per_tick": 1,
-                    "perception_width": 0.2,
-                    "perception_global_inhibition": 0.2,
-                    "num_neurons": 30,
-                    "tau_adapt": 0.0,
-                    "g_adapt": 0.0,
-                    "num_targets": 2,
-                    "num_guards": 0,
-                    "guard_qualities": [],
+                "moving_behavior": "embodied_ddm",
+                "_comment_timing": "The accumulator integrates ONCE per control tick, across ticks, in per-second units. This is BY DESIGN and is NOT the ring attractor's 500-steps-to-relaxation-per-tick regime (see EMBODIED_DDM_PLAN.md Section 0.3). Do not add internal relaxation steps.",
+                "embodied_ddm": {
+                    "max_targets": 8,
                     "target_ids": [
                         "static_0.s#0",
                         "static_1.s#0"
                     ],
-                    "guard_ids": [],
-                    "guard_decay_rate": 6.0,
-                    "kappa": 20,
-                    "v": 0.5,
-                    "u": 10.0,
-                    "sigma": 1.5,
-                    "beta": 1.0,
-                    "integration_time": 50,
-                    "integration_dt": 0.1,
+                    "masked_policy": "leak",
                     "reference": "egocentric",
+                    "perception_width": 0.2,
+                    "perception_global_inhibition": 0.2,
+                    "num_neurons": 30,
+
+                    "dist_mode": "none",
+                    "d_0": 1.0,
+                    "target_radius": 0.025,
+                    "loom_filter_ticks": 4,
+                    "attention_mode": "none",
+                    "kappa_a": 4.0,
+                    "saccade_rate_hz": 2.0,
+                    "normalize": "divisive",
+                    "sigma_n": 0.1,
+                    "gamma": 1.0,
+                    "sigma_s": 0.0,
+                    "target_quality_modulations": {},
+                    "sensory_time_mode": "world_time",
+
+                    "accumulator_mode": "lca",
+                    "lambda_leak": 1.0,
+                    "beta_inh": 1.0,
+                    "sigma": 0.1,
+                    "y_floor": 0.0,
+                    "n_sub": 1,
+
+                    "y_threshold": 0.0,
+                    "scaling_mode": "concentration",
                     "norm_scale": 1.0,
-                    "scaling_mode": "concentration"
+                    "commitment_mode": "soft",
+                    "R_commit": 0.9,
+                    "p_commit": 0.7,
+                    "R_release": 0.7,
+                    "hold_ticks": 5,
+                    "allow_reversal": true,
+                    "Z": 1.0,
+
+                    "guard_mode": "off",
+                    "beta_g": 1.0,
+                    "guard_decay_rate": 2.0,
+                    "guard_kappa": 20.0,
+
+                    "bifurcation": {
+                        "mode": "behavioral",
+                        "alignment_tolerance_deg": 5.0,
+                        "alignment_consecutive_ticks": 5
+                    }
                 }
             }
         }

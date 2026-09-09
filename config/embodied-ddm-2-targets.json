@@ -1,0 +1,164 @@
+{
+    "environment": {
+        "logging": {
+            "console": true,
+            "console_level": "INFO",
+            "file_level": "INFO"
+        },
+        "collisions": false,
+        "time_limit": 2000,
+        "num_runs": 1,
+        "gui": {
+            "_id": "2D",
+            "on_click": [
+                "show_spins", "detection"
+            ],
+            "view": ["detection"]
+        },
+        
+        "arenas": {
+            "arena_0": {
+                "random_seed": 0,
+                "radius": 1,
+                "_id": "square",
+                "color": "gray"
+            }
+        },
+        "objects": {
+            "static_0": {
+                "number": [1],
+                "position": [[0.433, -0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "green",
+                "strength": [5],
+                "uncertainty": [0]
+            },
+            "static_1": {
+                "number": [1],
+                "position": [[0.433, 0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "green",
+                "strength": [5],
+                "uncertainty": [0]
+            }
+        },
+        "agents": {
+            "movable_0": {
+                "position": [[0.0, 0.0, 0.0]],
+                "orientation": [[0, 0, 0]],
+                "number": [1],
+                "shape": "cylinder",
+                "linear_velocity": 0.01,
+                "angular_velocity": 10,
+                "ticks_per_second": 1,
+                "height": 0.02,
+                "diameter": 0.033,
+                "color": "blue",
+                "detection": {
+                    "type": "GPS",
+                    "range": 5.0,
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "embodied_ddm",
+                "_comment_timing": "The accumulator integrates ONCE per control tick, across ticks, in per-second units (with n_sub Euler-Maruyama sub-steps). This is BY DESIGN and is NOT the ring attractor's 500-steps-to-relaxation-per-tick regime (EMBODIED_DDM_PLAN.md Section 0.3). Do not add internal relaxation steps.",
+                "embodied_ddm": {
+
+                    "_comment_structure": "--- structure / shared perception spine (identical to mean_field) ---",
+                    "max_targets": 8,
+                    "target_ids": [
+                        "static_0.s#0",
+                        "static_1.s#0"
+                    ],
+                    "guard_ids": [],
+                    "masked_policy": "leak",
+                    "reference": "egocentric",
+                    "perception_width": 0.2,
+                    "perception_global_inhibition": 0.2,
+                    "num_neurons": 30,
+                    "steps_per_tick": 1,
+                    "pre_run_steps": 0,
+                    "task": "selection",
+                    "alpha": 0.0,
+                    "sensory_time_mode": "world_time",
+                    "sensory_dt": 0.2,
+                    "_comment_sensory_dt": "Optional. If omitted it auto-resolves to 1/(ticks_per_second*steps_per_tick) = 0.2 here. masked_policy: leak | freeze.",
+
+                    "_comment_evidence": "--- evidence construction (drift) ---",
+                    "dist_mode": "loom",
+                    "_comment_dist_mode": "none (default, matches ring attractor) | exp (x exp(-d/d_0)) | subtense (x (2/pi)arctan(r/d), bounded) | loom (x relu(alpha_dot)). Do NOT use (r/d)^2: it diverges as d->0.",
+                    "d_0": 1.0,
+                    "target_radius": 0.025,
+                    "loom_filter_ticks": 4,
+                    "attention_mode": "none",
+                    "_comment_attention_mode": "none (default) | vonmises (gate x exp(kappa_a(cos(phi)-1)), closed-loop, prone to lock-in) | saccade (exogenous fixation centre, loop-broken control). kappa_a is a primary sweep axis.",
+                    "kappa_a": 4.0,
+                    "saccade_rate_hz": 2.0,
+                    "normalize": "divisive",
+                    "_comment_normalize": "divisive (default, e/(sigma_n+sum e); keeps thresholds comparable across K) | none.",
+                    "sigma_n": 0.1,
+                    "gamma": 1.0,
+                    "sigma_s": 0.0,
+                    "_comment_sigma_s": "Frozen per-slot sensor bias std (drawn once per reset). NOT the same channel as MeanFieldSystem.sigma_s, which is per-tick noise on the target qualities. 0.0 disables.",
+                    "target_quality_modulations": {},
+                    "_comment_modulation_example": "Per-target sinusoidal quality modulation keyed by target id, shape { \"static_0.s#0\": { \"epsilon\": 0.3, \"omega\": 0.5, \"psi\": 0.0 } }. Empty {} disables. Shared clock with the ring attractor (Experiment 8).",
+
+                    "_comment_accumulator": "--- accumulator dynamics (linear; per-second units) ---",
+                    "accumulator_mode": "lca",
+                    "_comment_accumulator_mode": "lca (default, Usher & McClelland) | race (lambda=beta_inh=0) | ddm2 (K<=2, decision var x=y0-y1, validates against analytic first-passage).",
+                    "lambda_leak": 1.0,
+                    "beta_inh": 1.0,
+                    "_comment_bifurcation_point": "Linear-LCA difference modes destabilize at beta_inh == lambda_leak, independent of K. lambda1 = beta_inh - lambda_leak.",
+                    "sigma": 0.1,
+                    "y_floor": 0.0,
+                    "_comment_y_floor": "0.0 = standard LCA rectification (the only nonlinearity). Set null for -inf (fully linear; use for the analytic first-passage comparison).",
+                    "n_sub": 1,
+
+                    "_comment_readout": "--- readout / commitment ---",
+                    "y_threshold": 0.0,
+                    "scaling_mode": "concentration",
+                    "_comment_scaling_mode": "concentration (default, bounded [0,1]) | constant (no gating; speed = norm_scale) | magnitude (unbounded, legacy) | norm.",
+                    "norm_scale": 1.0,
+                    "predecision_motion": "average",
+                    "_comment_predecision_motion": "average (default; accumulator-weighted heading — existing behaviour) | midpoint (equal-weight circular mean of the seen bearings, i.e. the angular bisector for K=2, independent of the accumulator state; cuts the decision->motion arm of the embodiment loop while keeping motion->threshold) | forward | stationary (no translation and no rotation). Shared with embodied_pure_ddm.",
+                    "bisector_eps": 1.0e-6,
+                    "_comment_bisector_eps": "Hold the previous heading when the seen bearings cancel (atan2(0,0) undefined). Logged per tick as bisector_guard_fired.",
+                    "commitment_mode": "soft",
+                    "_comment_commitment_mode": "soft (default; concentration>=R_commit AND max w/sum w>=p_commit for hold_ticks) | threshold (first y_i>=Z; DDM-literature RT units).",
+                    "R_commit": 0.9,
+                    "p_commit": 0.7,
+                    "R_release": 0.7,
+                    "hold_ticks": 5,
+                    "allow_reversal": true,
+                    "Z": 1.0,
+
+                    "_comment_guards": "--- guards (spatial, not options; cannot own accumulators) ---",
+                    "guard_mode": "off",
+                    "_comment_guard_mode": "off (default) | drift (guard->target angular-kernel coupling into mu) | actuation (bend angle after readout, outside the decision model).",
+                    "beta_g": 1.0,
+                    "guard_decay_rate": 2.0,
+                    "guard_kappa": 20.0,
+
+                    "_comment_display": "--- GUI display ---",
+                    "display_kappa": 20.0,
+
+                    "bifurcation": {
+                        "mode": "behavioral",
+                        "_comment_mode": "behavioral (default; fires on heading-target alignment, model-agnostic) | analytical (lambda_threshold path; LCA uses closed-form lambda1 = beta_inh - lambda_leak).",
+                        "lambda_threshold": -0.1,
+                        "spike_min_separation": 10,
+                        "alignment_tolerance_deg": 5.0,
+                        "alignment_consecutive_ticks": 5,
+                        "gradient_window": 5,
+                        "gradient_threshold": 0.005
+                    }
+                }
+            }
+        }
+    }
+}

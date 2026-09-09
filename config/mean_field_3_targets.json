@@ -8,12 +8,7 @@
         "collisions": false,
         "time_limit": 1000,
         "num_runs": 1,
-        "termination": {
-            "type": "proximity",
-            "target_ids": ["static_0.s#0", "static_1.s#0", "static_2.s#0"],
-            "radius": 0.1,
-            "agent_ids": "any"
-        },
+        
         "gui": {
             "_id": "2D",
             "on_click": [
@@ -88,8 +83,8 @@
                     "perception_global_inhibition": 0.2,
                     "num_neurons": 30,
                     "g_threshold": 0.6,
-                    "tau_adapt": 12.8,
-                    "g_adapt": 0.0,
+                    "tau_adapt": 3.2,
+                    "g_adapt": 0.8,
                     "num_targets": 3,
                     "num_guards": 0,
                     "guard_qualities": [],
@@ -102,7 +97,7 @@
                     "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
-                    "u": 6.2,
+                    "u": 10,
                     "sigma": 1.5,
                     "sigma_s": 1.0,
                     "beta": 1.0,

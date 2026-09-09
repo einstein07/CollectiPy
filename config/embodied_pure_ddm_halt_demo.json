@@ -1,0 +1,137 @@
+{
+    "_comment_scope": "TERMINAL-HALT DEMO (BELLMAN_KNOWN_A_TERMINAL_HALT_DESIGN.md). A copy of embodied_pure_ddm_bellman.json tuned so the agent USUALLY reaches arrival undecided, visibly parks at the midpoint, and only then commits. Tuned by simulation against the solved boundary: A = 0.04, c = 0.354, c_e = 100, v = 0.15 gives T_max = 2.89 s, z_halt = 0.97, P(halt) ~ 0.82, median parking ~4-6 s (p90 ~ 14 s), then a ~90-degree turn and ~1.7 s travel to the chosen target. WHAT TO WATCH: the agent drives to the bisector foot, stops dead (v = 0, no rotation) while still undecided, sits there for seconds, then turns and drives off. Click the agent to open the Activity Inspector: the pure-DDM panel shows x(t) inside the collapsing +/-z(t), the dotted 'arrival' line, the +/-z_halt plateau past it, and the title switches to 'HALTED at midpoint' while parked.",
+    "environment": {
+        "logging": {
+            "console": true,
+            "console_level": "INFO",
+            "file_level": "INFO"
+        },
+        "collisions": false,
+        "time_limit": 60,
+        "_comment_time_limit": "Halt durations are exponential-tailed (mean D(z_halt) - D(x_arrival) ~ 6 s from the midpoint); p99 of approach + halt + travel is ~35 s, so 60 s censors almost nothing. The runaway guard cap T_max + 10 D(z_halt) = 75.6 s sits above this limit, so an absurdly long halt is censored by the arena, not force-committed.",
+        "num_runs": 1,
+        "ticks_per_second": 10,
+        "termination": {
+            "type": "proximity",
+            "target_ids": [
+                "static_0.s#0",
+                "static_1.s#0"
+            ],
+            "radius": 0.05,
+            "agent_ids": "any",
+            "_comment": "Proximity to a TARGET only: the midpoint is 0.25 m from either target, so the halt phase is never cut short by termination."
+        },
+        "arenas": {
+            "arena_0": {
+                "random_seed": 0,
+                "radius": 1,
+                "_id": "square",
+                "color": "white"
+            }
+        },
+        "gui": {
+            "_id": "2D",
+            "on_click": [
+                "show_spins",
+                "detection"
+            ],
+            "view": [
+                "detection"
+            ]
+        },
+        "_comment_quality": "A = |5.0 - 4.96| = 0.04, DELIBERATELY weak: over the short 2.89 s approach the evidence rarely resolves (drift * T_max = 0.12 against noise sd c*sqrt(T_max) = 0.60 and a boundary that starts at ~4), so ~82% of runs arrive undecided. The same weak drift is what makes the halt LAST: mean exit time D(z_halt) = (z_halt/A) tanh(k z_halt / 2) ~ 7.3 s from a central start.",
+        "_comment_geometry": "Same 60-degree, 0.5 m layout as the bellman config: r0 = 0.433 m, half_L = 0.25 m. The faster v = 0.15 m/s is what shortens the approach to T_max = 2.89 s -- less time to decide en route is the main lever behind the high halt probability.",
+        "objects": {
+            "static_0": {
+                "number": [1],
+                "position": [[0.433, -0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "red",
+                "strength": [5.0],
+                "uncertainty": [0]
+            },
+            "static_1": {
+                "number": [1],
+                "position": [[0.433, 0.25, 0]],
+                "_id": "idle",
+                "shape": "cylinder",
+                "height": 0.2,
+                "diameter": 0.05,
+                "color": "green",
+                "strength": [4.96],
+                "uncertainty": [0]
+            }
+        },
+        "agents": {
+            "movable_0": {
+                "position": [[0.0, 0.0, 0.0]],
+                "orientation": [[0, 0, 0]],
+                "number": [1],
+                "shape": "cylinder",
+                "linear_velocity": 0.15,
+                "angular_velocity": 360,
+                "_comment_angular_velocity": "deg/s. The commit happens AT the midpoint, where the chosen target sits ~90 degrees off the bisector heading; the minimum turn radius is v/omega and must be well under the 0.05 m termination radius or the agent orbits the target forever (the campaign config documents the measured orbit at 10 deg/s). 360 deg/s gives a 0.024 m radius.",
+                "ticks_per_second": 10,
+                "height": 0.02,
+                "diameter": 0.033,
+                "color": "blue",
+                "detection": {
+                    "type": "GPS",
+                    "range": 5.0,
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "embodied_pure_ddm",
+                "embodied_pure_ddm": {
+                    "target_ids": [
+                        "static_0.s#0",
+                        "static_1.s#0"
+                    ],
+                    "reference": "egocentric",
+                    "perception_width": 0.2,
+                    "perception_global_inhibition": 0.2,
+                    "task": "selection",
+                    "sensory_time_mode": "world_time",
+                    "eta_rate": [0.25, 0.25],
+                    "n_sub": 10,
+                    "_comment_n_sub": "Sub-steps per 0.1 s tick: keeps the integration step c*sqrt(dt/n_sub) = 0.035 well under z_halt = 0.97, so the Inspector's x(t) trace is smooth and the crossing overshoot at commitment stays small.",
+                    "threshold_policy": "bellman",
+                    "drift_knowledge": "known_magnitude",
+                    "A_source": "ensemble",
+                    "cost_ratio": 100.0,
+                    "_comment_cost_ratio": "c_e = 100 is what makes halting worthwhile: z_halt solves sinh(a)+a = (A/c)^2 c_e = 1.28, giving z_halt = 0.97 and a halt-commit accuracy of ~67% -- far better than the near-chance guess forced_choice would take at arrival with the same undecided x.",
+                    "delta_min": 0.001,
+                    "z_min": 0.05,
+                    "predecision_motion": "midpoint",
+                    "scaling_mode": "constant",
+                    "norm_scale": 1.0,
+                    "bellman": {
+                        "T_max": null,
+                        "_comment_T_max": "null = r0/v = 2.89 s from the onset geometry.",
+                        "T_max_check_factor": null,
+                        "_comment_T_max_check_factor": "The horizon check is a forced_choice diagnostic; under halt_sprt T_max is the physical arrival time and the check is recorded as skipped anyway (design doc Section 5, B3 note).",
+                        "N_x": 1601,
+                        "N_t": 2887,
+                        "_comment_N_t": "dt = 1 ms over the 2.89 s horizon (the free boundary converges as O(sqrt(dt))).",
+                        "X_max_factor": 4.0,
+                        "scheme": "crank_nicolson",
+                        "terminal": "halt_sprt",
+                        "_comment_terminal": "THE POINT OF THIS CONFIG: at arrival the agent halts at the midpoint (v = 0) and keeps integrating against the flat z_halt instead of force-committing. z(T_max) = z_halt = 0.97; watch pure_ddm_halted / halt_duration in the logs.",
+                        "halt_cost_rate": 1.0
+                    }
+                }
+            }
+        },
+        "results": {
+            "base_path": "./data/halt_demo/",
+            "agent_specs": [
+                "base",
+                "mean_field"
+            ],
+            "group_specs": [],
+            "snapshots_per_second": 10
+        }
+    }
+}

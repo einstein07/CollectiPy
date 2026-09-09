@@ -248,7 +248,7 @@
                     "guard_qualities": [],
                     "target_ids": ["static_0.s#0"],
                     "guard_ids": ["static_1.s#0", "static_2.s#0", "static_3.s#0", "static_4.s#0", "static_5.s#0", "static_6.s#0", "static_7.s#0", "static_8.s#0", "static_9.s#0", "static_10.s#0", "static_11.s#0", "static_12.s#0", "static_13.s#0", "static_14.s#0", "static_15.s#0", "static_16.s#0"],
-                    "guard_decay_rate": 15.0,
+                    "guard_decay_rate": 6.0,
                     "kappa": 20,
                     "v": 0.5,
                     "u": 10.0,

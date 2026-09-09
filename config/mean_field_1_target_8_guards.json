@@ -8,11 +8,12 @@
         "collisions": false,
         "time_limit": 1000,
         "num_runs": 1,
-        "results":{ 
-            "base_path": "../data/", 
-            "agent_specs": ["base", "mean_field"],
-            "group_specs": [],
-            "snapshots_per_second": 1
+        "gui": {
+            "_id": "2D",
+            "on_click": [
+                "show_spins", "detection"
+            ],
+            "view": ["detection"]
         },
         "termination": {
             "type": "proximity",
