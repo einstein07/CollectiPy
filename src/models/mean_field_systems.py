@@ -42,6 +42,129 @@ logger.setLevel(logging.DEBUG)
 # compute_sensory_map call of a trial always draws fresh sensory noise.
 _NO_TICK = object()
 
+# ====================== Sensory map reduction over targets ======================
+# How the per-target von Mises bumps are combined into the ring's input b(theta_i)
+# (max-sensory-map-spec.md). With vM(x) = exp(kappa (cos x - 1)) and targets at
+# bearings phi_j with qualities q_j:
+#
+#   "sum"    b_i = sum_j q_j vM(theta_i - phi_j)      the historical map, the default:
+#                                                    "target mass in direction theta"
+#   "max"    b_i = max_j q_j vM(theta_i - phi_j)      "quality of the best target in
+#                                                    direction theta": peaks never merge
+#                                                    (a cusp at the crossover instead),
+#                                                    and b_i <= max_j q_j everywhere
+#   "pnorm"  b_i = (sum_j (q_j vM)^p)^(1/p)           smooth interpolant; p = 1 is sum,
+#                                                    p -> inf is max
+#
+# Two equal targets closer than Delta* (kappa sin^2(Delta/2) < cos(Delta/2); ~25.5
+# degrees at kappa = 20) sum into ONE bump at their mean bearing with amplitude
+# approaching 2q, i.e. a fictitious super-target; max keeps both peaks. The von Mises
+# normalisation and everything else in the pipeline (noise injection, the 1/sqrt(n)
+# scaling, the additive guard term) are untouched by the choice.
+#
+# Contributions are assumed NON-NEGATIVE (q_j >= 0): the max and pnorm semantics only
+# make sense for non-negative bumps. A perceived quality can go negative only through
+# a sigma_s / white-noise draw many standard deviations below the mean; the sum and max
+# paths stay well defined there, and the pnorm path clips such a contribution to zero
+# because a fractional power of a negative number is not.
+SENSORY_MAP_REDUCTIONS = ("sum", "max", "pnorm")
+DEFAULT_SENSORY_MAP_REDUCTION = "sum"
+DEFAULT_SENSORY_MAP_P = 8.0
+
+
+def normalize_sensory_map_config(block) -> tuple[str, float]:
+    """Validate a `sensory_map` config block and return `(reduction, p)`.
+
+    An absent or empty block means the historical map: `("sum", 8.0)`. `reduction`
+    must be one of `SENSORY_MAP_REDUCTIONS` (case-insensitive). `p` is only READ when
+    the reduction is `"pnorm"`, where it must be a finite number >= 1; under any other
+    reduction it is ignored and reported as the default.
+    """
+    if block is None:
+        return DEFAULT_SENSORY_MAP_REDUCTION, DEFAULT_SENSORY_MAP_P
+    if not isinstance(block, Mapping):
+        raise ValueError(
+            "sensory_map must be a mapping such as "
+            '{"reduction": "sum", "p": 8.0}; got %r' % (block,)
+        )
+    raw_reduction = block.get("reduction", DEFAULT_SENSORY_MAP_REDUCTION)
+    reduction = str(raw_reduction).strip().lower()
+    if reduction not in SENSORY_MAP_REDUCTIONS:
+        raise ValueError(
+            f"sensory_map.reduction must be one of {SENSORY_MAP_REDUCTIONS}, "
+            f"got {raw_reduction!r}"
+        )
+    p = DEFAULT_SENSORY_MAP_P
+    if reduction == "pnorm":
+        raw_p = block.get("p", DEFAULT_SENSORY_MAP_P)
+        try:
+            p = float(raw_p)
+        except (TypeError, ValueError):
+            raise ValueError(f"sensory_map.p must be a number >= 1, got {raw_p!r}") from None
+        if not math.isfinite(p) or p < 1.0:
+            raise ValueError(f"sensory_map.p must be a finite number >= 1, got {raw_p!r}")
+    return reduction, p
+
+
+def reduce_contributions(contrib, reduction: str = DEFAULT_SENSORY_MAP_REDUCTION,
+                         p: float = DEFAULT_SENSORY_MAP_P) -> np.ndarray:
+    """Reduce per-target contributions over the target axis.
+
+    `contrib[j, i] = q_j vM(theta_i - phi_j)`, shape `(num_targets, num_neurons)`; the
+    result has shape `(num_neurons,)`. Plain numpy (the map builder is not a numba
+    kernel), so the `axis` reductions are available.
+    """
+    contrib = np.asarray(contrib, dtype=float)
+    if contrib.ndim != 2:
+        raise ValueError("contrib must have shape (num_targets, num_neurons)")
+    if reduction == "sum":
+        return contrib.sum(axis=0)
+    if contrib.shape[0] == 0:
+        return np.zeros(contrib.shape[1], dtype=float)
+    if reduction == "max":
+        return contrib.max(axis=0)
+    if reduction == "pnorm":
+        p = float(p)
+        if not math.isfinite(p) or p < 1.0:
+            raise ValueError(f"pnorm requires a finite p >= 1, got {p!r}")
+        clipped = np.clip(contrib, 0.0, None)
+        # Factor out the per-neuron maximum so a large p cannot overflow: the sum of
+        # the scaled powers is then in [1, num_targets].
+        scale = clipped.max(axis=0)
+        safe = np.where(scale > 0.0, scale, 1.0)
+        reduced = safe * ((clipped / safe) ** p).sum(axis=0) ** (1.0 / p)
+        return np.where(scale > 0.0, reduced, 0.0)
+    raise ValueError(f"unknown reduction mode {reduction!r}")
+
+
+def von_mises_contributions(theta, phi, q, kappa: float) -> np.ndarray:
+    """`contrib[j, i] = q_j exp(kappa (cos(theta_i - phi_j) - 1))`, shape `(m, n)`.
+
+    The same kernel and normalisation `compute_sensory_map` uses; angle differences go
+    through `_delta_angle`, so the map is wrap-safe.
+    """
+    theta = np.asarray(theta, dtype=float).reshape(-1)
+    phi = np.asarray(phi, dtype=float).reshape(-1)
+    q = np.asarray(q, dtype=float).reshape(-1)
+    if phi.shape != q.shape:
+        raise ValueError(
+            f"phi and q must have the same length: {phi.shape[0]} vs {q.shape[0]}"
+        )
+    delta = _delta_angle(phi[:, None], theta[None, :])
+    return q[:, None] * np.exp(float(kappa) * (np.cos(delta) - 1.0))
+
+
+def sensory_map(theta, phi, q, kappa: float, reduction: str = DEFAULT_SENSORY_MAP_REDUCTION,
+                p: float = DEFAULT_SENSORY_MAP_P) -> np.ndarray:
+    """The Section 3 reference map, un-normalised (no 1/sqrt(n) factor).
+
+    `compute_sensory_map` with noise off equals this divided by sqrt(num_neurons); the
+    `sum` path there keeps its original `vm @ q` expression, so the two agree to
+    rounding rather than bit-for-bit.
+    """
+    return reduce_contributions(von_mises_contributions(theta, phi, q, kappa), reduction, p)
+
+
 class MeanFieldSystem:
     """
     Phenomenological spiking ring attractor (mean-field version).
@@ -88,6 +211,11 @@ class MeanFieldSystem:
         #   "magnitude"               -> raw readout magnitude (legacy use_thresholding=True).
         #   "norm"                    -> L2 norm of z (legacy use_thresholding=False).
         scaling_mode: str = "concentration",
+        # How the per-target von Mises bumps are combined into b: "sum" (default, the
+        # historical map), "max", or "pnorm" with exponent sensory_map_p. See the
+        # module-level note above `normalize_sensory_map_config`.
+        sensory_map_reduction: str = DEFAULT_SENSORY_MAP_REDUCTION,
+        sensory_map_p: float = DEFAULT_SENSORY_MAP_P,
     ):
         """
         Initialize the mean-field system.
@@ -127,6 +255,10 @@ class MeanFieldSystem:
             g_threshold: Threshold parameter for thresholding.
             use_thresholding: Whether to use thresholding.
             threshold_readout: "weighted" or "unweighted"; see the parameter comment above.
+            sensory_map_reduction: "sum" | "max" | "pnorm" — reduction over targets
+                when the von Mises bumps are combined into b. "sum" is the historical
+                construction and the default; the sum path is unchanged code.
+            sensory_map_p: exponent of the "pnorm" reduction (>= 1); ignored otherwise.
         """
         if num_neurons <= 0:
             raise ValueError("num_neurons must be positive")
@@ -208,6 +340,9 @@ class MeanFieldSystem:
         if self.threshold_readout not in {"weighted", "unweighted"}:
             raise ValueError("threshold_readout must be 'weighted' or 'unweighted'")
         self.scaling_mode = str(scaling_mode)
+        self.sensory_map_reduction, self.sensory_map_p = normalize_sensory_map_config(
+            {"reduction": sensory_map_reduction, "p": sensory_map_p}
+        )
         # Readout order parameters, refreshed every compute_dynamics() call.
         self.last_magnitude = 0.0
         self.last_concentration = 0.0
@@ -342,6 +477,12 @@ class MeanFieldSystem:
         """
         Compute sensory input b using von Mises bumps for targets and optional guard inhibition.
 
+        The per-target bumps are combined by `self.sensory_map_reduction` ("sum", the
+        historical map and the default; "max"; or "pnorm"), see the module-level note.
+        The reduction replaces the sum at exactly this point: the sensory noise on the
+        qualities is applied before it, the guard term is added after it, and the
+        1/sqrt(n) scaling closes the function as before.
+
         `tick` is the ARENA tick index and is what the sigma_s sensory noise is keyed to:
         the draw is reused for every call carrying the same tick, so a model running
         `steps_per_tick > 1` integrates one realisation rather than a fresh one per inner
@@ -375,7 +516,19 @@ class MeanFieldSystem:
             self.last_noisy_target_qualities = noisy_target_qualities.copy()
             delta_targets = _delta_angle(self.theta[:, None], target_angles)
             vm_targets = np.exp(self.kappa * (np.cos(delta_targets) - 1.0))
-            b = vm_targets @ noisy_target_qualities
+            if self.sensory_map_reduction == "sum":
+                # The historical construction on its ORIGINAL code path: the Section
+                # 5.1 regression fixture was generated from exactly this expression,
+                # so it must not be rewritten as a reduction of the matrix below.
+                b = vm_targets @ noisy_target_qualities
+            else:
+                # (num_targets, num_neurons) per-target contributions, reduced over
+                # the target axis. Everything downstream (guards, 1/sqrt(n)) is shared.
+                b = reduce_contributions(
+                    (vm_targets * noisy_target_qualities[None, :]).T,
+                    self.sensory_map_reduction,
+                    self.sensory_map_p,
+                )
             logger.debug(
                     "Target angles: %s",
                     np.array2string(

@@ -1,0 +1,1672 @@
+{
+  "sweep": "map_reduction",
+  "spec": "max-sensory-map-spec.md",
+  "git_sha": "cb4a50dbb31496fd7f3dca0df3ebf21787290581-dirty",
+  "base_config": "config/qd_sweep_ra_template.json",
+  "reductions": [
+    "sum",
+    "max"
+  ],
+  "delta_close_deg": [
+    12,
+    15,
+    20,
+    25,
+    30,
+    40,
+    60
+  ],
+  "q_c_rel": [
+    1.0,
+    1.01,
+    1.02
+  ],
+  "quality_scale": 5.0,
+  "target_range": 0.5,
+  "merge_threshold_deg": 25.51550425410848,
+  "n_cells": 42,
+  "n_trials": 200,
+  "base_seed": 20260911,
+  "t_max_ticks": 100,
+  "alignment_tol_deg": 5.0,
+  "target_ids": {
+    "A": "static_0.s#0",
+    "B": "static_1.s#0",
+    "C": "static_2.s#0"
+  },
+  "locked": {
+    "num_neurons": 30,
+    "u": 6.0,
+    "v": 0.5,
+    "beta": 1.0,
+    "kappa": 20,
+    "sigma": 0.1,
+    "sigma_s": 0.0,
+    "integration_time": 50,
+    "integration_dt": 0.1,
+    "use_thresholding": false,
+    "scale_velocity": false,
+    "linear_velocity": 0.05,
+    "angular_velocity": 120.0,
+    "time_limit": 100,
+    "ticks_per_second": 1,
+    "arrival_radius": 0.05,
+    "arena": {
+      "_id": "square",
+      "color": "gray",
+      "side": 2.0
+    },
+    "sensory_stream": {
+      "mode": "shared",
+      "frozen_sd": 0.0,
+      "white_rate": 0.07071068
+    },
+    "bifurcation": {
+      "mode": "behavioral",
+      "lambda_threshold": -0.1,
+      "spike_min_separation": 10,
+      "alignment_tolerance_deg": 5.0,
+      "alignment_consecutive_ticks": 1,
+      "gradient_window": 5,
+      "gradient_threshold": 0.005
+    }
+  },
+  "cells": [
+    {
+      "cell_id": 0,
+      "reduction": "sum",
+      "delta_close_deg": 12,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 12.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.489074,
+          -0.103956,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "805de1b8f53a",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 1,
+      "reduction": "sum",
+      "delta_close_deg": 12,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 12.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.489074,
+          -0.103956,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "34517334249a",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 2,
+      "reduction": "sum",
+      "delta_close_deg": 12,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 12.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.489074,
+          -0.103956,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "c7e130ab7535",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 3,
+      "reduction": "sum",
+      "delta_close_deg": 15,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 15.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.482963,
+          -0.12941,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "e7b74c115d69",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 4,
+      "reduction": "sum",
+      "delta_close_deg": 15,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 15.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.482963,
+          -0.12941,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "33055f0b41da",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 5,
+      "reduction": "sum",
+      "delta_close_deg": 15,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 15.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.482963,
+          -0.12941,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "a1eeda91c388",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 6,
+      "reduction": "sum",
+      "delta_close_deg": 20,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 20.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.469846,
+          -0.17101,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "3db18a2301aa",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 7,
+      "reduction": "sum",
+      "delta_close_deg": 20,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 20.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.469846,
+          -0.17101,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "67ae784c0972",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 8,
+      "reduction": "sum",
+      "delta_close_deg": 20,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 20.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.469846,
+          -0.17101,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "56f415de5b50",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 9,
+      "reduction": "sum",
+      "delta_close_deg": 25,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 25.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.453154,
+          -0.211309,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "6c93cfbd75e5",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 10,
+      "reduction": "sum",
+      "delta_close_deg": 25,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 25.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.453154,
+          -0.211309,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "febb4d8eaf26",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 11,
+      "reduction": "sum",
+      "delta_close_deg": 25,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 25.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.453154,
+          -0.211309,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "40ec5222117e",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 12,
+      "reduction": "sum",
+      "delta_close_deg": 30,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 30.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.433013,
+          -0.25,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "960ed3b38ae0",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 13,
+      "reduction": "sum",
+      "delta_close_deg": 30,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 30.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.433013,
+          -0.25,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "f23478b4b438",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 14,
+      "reduction": "sum",
+      "delta_close_deg": 30,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 30.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.433013,
+          -0.25,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "2a67d66f009a",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 15,
+      "reduction": "sum",
+      "delta_close_deg": 40,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 40.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.383022,
+          -0.321394,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "10cd6c7b9d58",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 16,
+      "reduction": "sum",
+      "delta_close_deg": 40,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 40.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.383022,
+          -0.321394,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "4ca10ca0f8b2",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 17,
+      "reduction": "sum",
+      "delta_close_deg": 40,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 40.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.383022,
+          -0.321394,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "219f27ae4c38",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 18,
+      "reduction": "sum",
+      "delta_close_deg": 60,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 60.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.25,
+          -0.433013,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "a4301fc2fb16",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 19,
+      "reduction": "sum",
+      "delta_close_deg": 60,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 60.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.25,
+          -0.433013,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "331354fce0ea",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 20,
+      "reduction": "sum",
+      "delta_close_deg": 60,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 60.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.25,
+          -0.433013,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "cc6d44d66fbe",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 21,
+      "reduction": "max",
+      "delta_close_deg": 12,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 12.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.489074,
+          -0.103956,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "1b2059da5961",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 22,
+      "reduction": "max",
+      "delta_close_deg": 12,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 12.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.489074,
+          -0.103956,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "bff481d74b3f",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 23,
+      "reduction": "max",
+      "delta_close_deg": 12,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 12.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.489074,
+          -0.103956,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "3dfc41539c0b",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 24,
+      "reduction": "max",
+      "delta_close_deg": 15,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 15.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.482963,
+          -0.12941,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "64ce441c0e51",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 25,
+      "reduction": "max",
+      "delta_close_deg": 15,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 15.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.482963,
+          -0.12941,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "f29e566e61f3",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 26,
+      "reduction": "max",
+      "delta_close_deg": 15,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 15.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.482963,
+          -0.12941,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "09ed366faf96",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 27,
+      "reduction": "max",
+      "delta_close_deg": 20,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 20.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.469846,
+          -0.17101,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "828b8a4d329d",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 28,
+      "reduction": "max",
+      "delta_close_deg": 20,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 20.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.469846,
+          -0.17101,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "98272b29566c",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 29,
+      "reduction": "max",
+      "delta_close_deg": 20,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 20.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.469846,
+          -0.17101,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "8f62b775f437",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 30,
+      "reduction": "max",
+      "delta_close_deg": 25,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 25.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.453154,
+          -0.211309,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "808fb82f779f",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 31,
+      "reduction": "max",
+      "delta_close_deg": 25,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 25.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.453154,
+          -0.211309,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "7e8e1bcb5764",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 32,
+      "reduction": "max",
+      "delta_close_deg": 25,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 25.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.453154,
+          -0.211309,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "34e702c8b869",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 33,
+      "reduction": "max",
+      "delta_close_deg": 30,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 30.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.433013,
+          -0.25,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "49a30b6d7db9",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 34,
+      "reduction": "max",
+      "delta_close_deg": 30,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 30.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.433013,
+          -0.25,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "a9e80b04cef4",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 35,
+      "reduction": "max",
+      "delta_close_deg": 30,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 30.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.433013,
+          -0.25,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "bddb101a8c00",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 36,
+      "reduction": "max",
+      "delta_close_deg": 40,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 40.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.383022,
+          -0.321394,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "0dc9960b5c79",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 37,
+      "reduction": "max",
+      "delta_close_deg": 40,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 40.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.383022,
+          -0.321394,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "7b32441e7978",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 38,
+      "reduction": "max",
+      "delta_close_deg": 40,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 40.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.383022,
+          -0.321394,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "2c6280d76ecc",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 39,
+      "reduction": "max",
+      "delta_close_deg": 60,
+      "q_c_rel": 1.0,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 60.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.25,
+          -0.433013,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.0
+      },
+      "config_hash": "af30ab1edf0e",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 40,
+      "reduction": "max",
+      "delta_close_deg": 60,
+      "q_c_rel": 1.01,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 60.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.25,
+          -0.433013,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.05
+      },
+      "config_hash": "693421e6c481",
+      "excluded": false,
+      "excluded_reason": ""
+    },
+    {
+      "cell_id": 41,
+      "reduction": "max",
+      "delta_close_deg": 60,
+      "q_c_rel": 1.02,
+      "n_trials": 200,
+      "base_seed": 20260911,
+      "bearings_deg": {
+        "A": 0.0,
+        "B": 60.0,
+        "C": -120.0
+      },
+      "positions": {
+        "A": [
+          0.5,
+          -0.0,
+          0.0
+        ],
+        "B": [
+          0.25,
+          -0.433013,
+          0.0
+        ],
+        "C": [
+          -0.25,
+          0.433013,
+          0.0
+        ]
+      },
+      "strengths": {
+        "A": 5.0,
+        "B": 5.0,
+        "C": 5.1
+      },
+      "config_hash": "3dc70c315e8c",
+      "excluded": false,
+      "excluded_reason": ""
+    }
+  ]
+}

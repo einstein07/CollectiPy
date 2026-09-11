@@ -598,6 +598,11 @@ class SpaceDataHandling(DataHandling):
         `base_quality` is the strength as declared in the config, kept so a run whose
         quality modulation is switched off is still readable on its own. With
         sigma_s = 0 the three quality columns coincide and `noise` is 0.
+
+        `map_reduction` names how the per-target bumps were combined into the ring's
+        input ("sum", "max" or "pnorm"; max-sensory-map-spec.md), so a row is
+        traceable to its sensory map without the config. Appended last: older
+        readers indexing the earlier columns by name are unaffected.
         """
         if not entry:
             return
@@ -605,8 +610,9 @@ class SpaceDataHandling(DataHandling):
         if not signals:
             return
         sigma_s = spin_values.get("mean_field_sigma_s")
+        map_reduction = spin_values.get("mean_field_sensory_map_reduction") or ""
         columns = ["tick", "target", "base_quality", "clean_quality",
-                   "noisy_quality", "noise", "sigma_s"]
+                   "noisy_quality", "noise", "sigma_s", "map_reduction"]
         if not entry["header_written"]:
             entry["writer"].writerow(columns)
             entry["header_written"] = True
@@ -629,6 +635,7 @@ class SpaceDataHandling(DataHandling):
                 "" if noisy is None else repr(float(noisy)),
                 noise,
                 "" if sigma_s is None else sigma_s,
+                map_reduction,
             ])
 
     @staticmethod

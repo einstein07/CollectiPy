@@ -1,0 +1,10 @@
+{
+  "problems": [],
+  "warnings": [],
+  "n_rows": 8400,
+  "n_cells_present": 42,
+  "n_failures": 0,
+  "trials": "/home/sindiso/Documents/PhD/ring-attractor/CollectiPy/results/map_reduction/trials.parquet",
+  "cells": "/home/sindiso/Documents/PhD/ring-attractor/CollectiPy/results/map_reduction/cells.csv",
+  "paired_contrasts": "/home/sindiso/Documents/PhD/ring-attractor/CollectiPy/results/map_reduction/paired_contrasts.csv"
+}

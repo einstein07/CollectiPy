@@ -1,0 +1,3 @@
+variant,sigma,n_pairs,d_acc_all,se_acc_all,acc_within_1se,n_both_arrived,d_median_t_arrival,se_median_t_arrival,median_within_1se,identical_choice_frac
+campaign,1.5,200,0.0,0.0,True,200,-8.486704196641881e-05,0.0005722811225969595,True,1.0
+spec,0.1,200,0.0,0.0,True,200,-8.884121993801841e-05,4.629577935616604e-05,True,1.0

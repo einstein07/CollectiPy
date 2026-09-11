@@ -19,7 +19,7 @@ import numpy as np
 
 from models.bifurcation import BifurcationDetector
 from models.egocentric_target_model import TargetModel
-from models.mean_field_systems import MeanFieldSystem
+from models.mean_field_systems import MeanFieldSystem, normalize_sensory_map_config
 from models.utils import normalize_angle
 from plugin_registry import register_movement_model
 
@@ -115,6 +115,15 @@ class MeanFieldMovementModel(TargetModel):
         # False -> constant speed (max_absolute_velocity * norm_scale); the readout
         # still governs the heading, so use_thresholding/g_threshold are unaffected.
         self.scale_velocity = bool(self.params.get("scale_velocity", True))
+        # Reduction over targets when the per-target von Mises bumps are combined into
+        # the ring's input (max-sensory-map-spec.md). Read from the `sensory_map` block
+        # of mean_field_model, e.g. {"reduction": "max"} or {"reduction": "pnorm",
+        # "p": 8.0}. Absent -> "sum", the historical map, bit-identical to before the
+        # block existed. Validated here so a bad config fails at construction, and
+        # stamped into every per-tick record so a result is traceable to its mode.
+        self.sensory_map_reduction, self.sensory_map_p = normalize_sensory_map_config(
+            self.params.get("sensory_map")
+        )
         # Sensory percept stream (FEATURE_SHARED_SENSORY_STREAM.md). `legacy` (the
         # default) is a pass-through and leaves sigma_s owned by the model; under
         # `shared` the sensory noise moves upstream into the stream, so sigma_s must be 0.
@@ -123,12 +132,15 @@ class MeanFieldMovementModel(TargetModel):
         self._init_percept_stream(sigma_s=float(self.params.get("sigma_s", 0.0)))
         self.reset()
         logger.info(
-            "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f)",
+            "%s mean-field model instantiated (neurons=%d, steps_per_tick=%d, sensory_time_mode=%s, sensory_dt=%.6f, sensory_map=%s)",
             self.agent.get_name(),
             self.num_neurons,
             self.steps_per_tick,
             self.sensory_time_mode,
             self.sensory_dt,
+            self.sensory_map_reduction
+            if self.sensory_map_reduction != "pnorm"
+            else f"pnorm(p={self.sensory_map_p:g})",
         )
 
     def reset(self) -> None:
@@ -168,6 +180,8 @@ class MeanFieldMovementModel(TargetModel):
             use_thresholding=self.use_thresholding,
             threshold_readout=self.threshold_readout,
             scaling_mode=self.scaling_mode,
+            sensory_map_reduction=self.sensory_map_reduction,
+            sensory_map_p=self.sensory_map_p,
         )
         if hasattr(self, 'bifurcation_detector'):
             self.bifurcation_detector.reset()
@@ -379,6 +393,8 @@ class MeanFieldMovementModel(TargetModel):
             "state": z.copy(),
             "perception_raw": None if self.perception is None else self.perception.copy(),
             "sensory_map": self.mean_field_system.get_sensory_map(),
+            "sensory_map_reduction": self.sensory_map_reduction,
+            "sensory_map_p": self.sensory_map_p,
             "target_metadata": target_metadata,
             "modulated_target_qualities": modulated_target_qualities,
             "noisy_target_qualities": noisy_target_qualities,
@@ -474,6 +490,10 @@ class MeanFieldMovementModel(TargetModel):
             # alongside the clean/noisy pair so a row is self-describing: with
             # sigma_s = 0 the two qualities coincide and this column says why.
             "mean_field_sigma_s": float(getattr(self.mean_field_system, "sigma_s", 0.0)),
+            # How the per-target bumps were combined into the ring's input ("sum",
+            # "max" or "pnorm"), so every logged tick names the map it was driven by.
+            "mean_field_sensory_map_reduction": self.sensory_map_reduction,
+            "mean_field_sensory_map_p": float(self.sensory_map_p),
             "mean_field_lambda1": (
                 self.bifurcation_detector.last_lambda1
                 if hasattr(self, "bifurcation_detector")
