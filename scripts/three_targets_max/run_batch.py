@@ -82,8 +82,8 @@ STRENGTH = 5.0
 TARGET_IDS = ["static_0.s#0", "static_1.s#0", "static_2.s#0"]
 #: The current campaign's RA surface (scripts/qd_sweep_fixed_noise/qd.py):
 #: absolute u only, 0 + 2..35 in steps of 1; kernel shape 0.1..1.0.
-U_GRID = [0.0] + [float(u) for u in range(2, 36)]
-V_GRID = [round(0.1 * i, 1) for i in range(1, 11)]
+U_GRID = [6.16] #+ [float(u) for u in range(2, 36)]
+V_GRID = [0.5]#[round(0.1 * i, 1) for i in range(1, 11)]
 N_RUNS = 100
 #: Arena side for the three-target geometry (config/mean_field_3_targets_no_viz.json).
 ARENA_SIDE = float(os.environ.get("ARENA_SIDE") or 2.0)
